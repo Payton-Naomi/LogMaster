@@ -4,7 +4,7 @@ import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'
 import * as echarts from 'echarts'
 import App from './App.vue'
-import router from './router'
+import router from './router/index.js'
 
 const app = createApp(App)
 // 全局挂载 echarts，所有页面都能直接用 this.$echarts
