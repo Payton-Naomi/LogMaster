@@ -11,7 +11,7 @@ import (
 	"logmaster-agent/agent/uploader"
 )
 
-// mockOllamaClient implements ai.OllamaClient for testing
+// mockOllamaClient 实现 ai.OllamaClient 接口，用于测试
 type mockOllamaClient struct {
 	response string
 }
@@ -30,22 +30,22 @@ func TestNewAgent(t *testing.T) {
 	}
 	ag := New(cfg)
 	if ag == nil {
-		t.Fatal("New() returned nil")
+		t.Fatal("New() 返回 nil")
 	}
 	if ag.cfg != cfg {
-		t.Fatal("cfg not set")
+		t.Fatal("cfg 未设置")
 	}
 	if ag.collector == nil {
-		t.Fatal("collector is nil")
+		t.Fatal("collector 为 nil")
 	}
 	if ag.engine == nil {
-		t.Fatal("engine is nil")
+		t.Fatal("engine 为 nil")
 	}
 	if ag.analyzer == nil {
-		t.Fatal("analyzer is nil")
+		t.Fatal("analyzer 为 nil")
 	}
 	if ag.uploader == nil {
-		t.Fatal("uploader is nil")
+		t.Fatal("uploader 为 nil")
 	}
 }
 
@@ -59,7 +59,7 @@ func TestProcessLineErrorMatch(t *testing.T) {
 	}
 	ag := New(cfg)
 
-	// Replace analyzer with a mock that returns a diagnosis
+	// 替换 analyzer 为返回诊断结果的 mock
 	mc := &mockOllamaClient{response: `{"anomaly_type":"crash","severity":"ERROR","root_cause":"nil pointer","suggestion":"add nil check"}`}
 	ag.analyzer = ai.NewAnalyzer(mc, "test")
 
@@ -70,23 +70,23 @@ func TestProcessLineErrorMatch(t *testing.T) {
 	}
 	output := ag.processLine(line)
 
-	// Verify rule matching
+	// 验证规则匹配
 	if output.RuleName != "crash" {
-		t.Fatalf("RuleName = %s, want crash", output.RuleName)
+		t.Fatalf("RuleName = %s, 期望 crash", output.RuleName)
 	}
 	if output.Severity != "ERROR" {
-		t.Fatalf("Severity = %s, want ERROR", output.Severity)
+		t.Fatalf("Severity = %s, 期望 ERROR", output.Severity)
 	}
 	if output.Category != "crash" {
-		t.Fatalf("Category = %s, want crash", output.Category)
+		t.Fatalf("Category = %s, 期望 crash", output.Category)
 	}
 
-	// Verify AI analysis was triggered
+	// 验证 AI 分析已被触发
 	if output.AI == nil {
-		t.Fatal("AI should not be nil for ERROR")
+		t.Fatal("ERROR 级别 AI 不应为 nil")
 	}
 	if output.AI.AnomalyType != "crash" {
-		t.Fatalf("AI AnomalyType = %s, want crash", output.AI.AnomalyType)
+		t.Fatalf("AI AnomalyType = %s, 期望 crash", output.AI.AnomalyType)
 	}
 }
 
@@ -106,13 +106,13 @@ func TestProcessLineInfoNoAI(t *testing.T) {
 	output := ag.processLine(line)
 
 	if output.AI != nil {
-		t.Fatal("AI should be nil for INFO")
+		t.Fatal("INFO 级别 AI 应为 nil")
 	}
 	if output.Severity != "INFO" {
-		t.Fatalf("Severity = %s, want INFO", output.Severity)
+		t.Fatalf("Severity = %s, 期望 INFO", output.Severity)
 	}
 	if output.Category != "unknown" {
-		t.Fatalf("Category = %s, want unknown", output.Category)
+		t.Fatalf("Category = %s, 期望 unknown", output.Category)
 	}
 }
 
@@ -137,10 +137,10 @@ func TestProcessLineWarnWithAI(t *testing.T) {
 	output := ag.processLine(line)
 
 	if output.Severity != "WARN" {
-		t.Fatalf("Severity = %s, want WARN", output.Severity)
+		t.Fatalf("Severity = %s, 期望 WARN", output.Severity)
 	}
 	if output.AI == nil {
-		t.Fatal("AI should not be nil for WARN")
+		t.Fatal("WARN 级别 AI 不应为 nil")
 	}
 }
 
@@ -162,13 +162,13 @@ func TestProcessLineNoMatch(t *testing.T) {
 	output := ag.processLine(line)
 
 	if output.RuleName != "" {
-		t.Fatal("RuleName should be empty for no match")
+		t.Fatal("无匹配时 RuleName 应为空")
 	}
 	if output.Severity != "INFO" {
-		t.Fatalf("Severity = %s, want INFO", output.Severity)
+		t.Fatalf("Severity = %s, 期望 INFO", output.Severity)
 	}
 	if output.Category != "unknown" {
-		t.Fatalf("Category = %s, want unknown", output.Category)
+		t.Fatalf("Category = %s, 期望 unknown", output.Category)
 	}
 }
 
@@ -188,13 +188,13 @@ func TestProcessLineEnqueuesToUploader(t *testing.T) {
 	output := ag.processLine(line)
 
 	if output.Device != "/dev/ttyUSB0" {
-		t.Fatalf("Device = %s, want /dev/ttyUSB0", output.Device)
+		t.Fatalf("Device = %s, 期望 /dev/ttyUSB0", output.Device)
 	}
 	if output.Content != "test log" {
-		t.Fatalf("Content = %s, want test log", output.Content)
+		t.Fatalf("Content = %s, 期望 test log", output.Content)
 	}
 }
 
-// Verify uploader and rule types are imported
+// 验证 uploader 和 rule 类型已导入
 var _ uploader.LogEntry
 var _ rule.Rule

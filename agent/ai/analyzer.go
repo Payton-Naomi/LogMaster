@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// Diagnosis holds the AI analysis result for a log line.
+// Diagnosis 保存 AI 对日志行的分析结果。
 type Diagnosis struct {
 	AnomalyType string `json:"anomaly_type"`
 	Severity    string `json:"severity"`
@@ -14,18 +14,18 @@ type Diagnosis struct {
 	Suggestion  string `json:"suggestion"`
 }
 
-// Analyzer uses Ollama to analyze anomalous log lines.
+// Analyzer 使用 Ollama 分析异常日志行。
 type Analyzer struct {
 	client OllamaClient
 	model  string
 }
 
-// NewAnalyzer creates a new Analyzer.
+// NewAnalyzer 创建一个新的 Analyzer。
 func NewAnalyzer(client OllamaClient, model string) *Analyzer {
 	return &Analyzer{client: client, model: model}
 }
 
-// Analyze sends a log line to Ollama for analysis and returns a diagnosis.
+// Analyze 将日志行发送给 Ollama 进行分析，并返回诊断结果。
 func (a *Analyzer) Analyze(logLine string) (*Diagnosis, error) {
 	prompt := buildPrompt(logLine)
 	response, err := a.client.Generate(prompt)
@@ -35,7 +35,7 @@ func (a *Analyzer) Analyze(logLine string) (*Diagnosis, error) {
 	return parseDiagnosis(response)
 }
 
-// buildPrompt creates the analysis prompt for Ollama.
+// buildPrompt 构造 Ollama 的分析提示词。
 func buildPrompt(logLine string) string {
 	return fmt.Sprintf(`You are a log analysis expert for embedded dashcam firmware. Analyze the following error log and return a JSON diagnosis.
 
@@ -47,9 +47,9 @@ Return ONLY valid JSON in this format:
 Do not include any other text.`, logLine)
 }
 
-// parseDiagnosis extracts JSON from Ollama response and parses it.
+// parseDiagnosis 从 Ollama 响应中提取 JSON 并解析为诊断结果。
 func parseDiagnosis(response string) (*Diagnosis, error) {
-	// Find JSON in response (Ollama may add extra text)
+	// 在响应中查找 JSON（Ollama 可能会附带额外文本）
 	start := strings.Index(response, "{")
 	end := strings.LastIndex(response, "}")
 	if start == -1 || end == -1 || end <= start {

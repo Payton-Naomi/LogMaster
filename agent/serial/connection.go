@@ -2,14 +2,14 @@ package serialagent
 
 import "go.bug.st/serial"
 
-// Port represents an open serial port connection.
+// Port 表示一个打开的串口连接。
 type Port interface {
 	Read(p []byte) (int, error)
 	Write(p []byte) (int, error)
 	Close() error
 }
 
-// OpenPort opens a serial port with the given name and baud rate.
+// OpenPort 使用给定的名称和波特率打开串口。
 func OpenPort(name string, baudRate int) (Port, error) {
 	mode := &serial.Mode{
 		BaudRate: baudRate,

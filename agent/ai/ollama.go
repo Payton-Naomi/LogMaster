@@ -8,32 +8,32 @@ import (
 	"time"
 )
 
-// OllamaClient defines the interface for Ollama API communication.
+// OllamaClient 定义 Ollama API 通信接口。
 type OllamaClient interface {
 	Generate(prompt string) (string, error)
 }
 
-// ollamaClient is the default HTTP implementation of OllamaClient.
+// ollamaClient 是 OllamaClient 的默认 HTTP 实现。
 type ollamaClient struct {
 	endpoint string
 	model    string
 	client   *http.Client
 }
 
-// ollamaRequest is the request body for POST /api/generate.
+// ollamaRequest 是 POST /api/generate 的请求体。
 type ollamaRequest struct {
 	Model  string `json:"model"`
 	Prompt string `json:"prompt"`
 	Stream bool   `json:"stream"`
 }
 
-// ollamaResponse is the response body from POST /api/generate.
+// ollamaResponse 是 POST /api/generate 的响应体。
 type ollamaResponse struct {
 	Response string `json:"response"`
 	Done     bool   `json:"done"`
 }
 
-// NewOllamaClient creates a new Ollama HTTP client.
+// NewOllamaClient 创建一个新的 Ollama HTTP 客户端。
 func NewOllamaClient(endpoint, model string) *ollamaClient {
 	return &ollamaClient{
 		endpoint: endpoint,
@@ -42,7 +42,7 @@ func NewOllamaClient(endpoint, model string) *ollamaClient {
 	}
 }
 
-// Generate sends a prompt to Ollama and returns the response.
+// Generate 向 Ollama 发送提示词并返回响应。
 func (c *ollamaClient) Generate(prompt string) (string, error) {
 	reqBody := ollamaRequest{
 		Model:  c.model,

@@ -6,7 +6,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config holds all configuration for the agent.
+// Config 保存 Agent 的所有配置。
 type Config struct {
 	Devices []DeviceConfig `yaml:"devices"`
 	Ollama  OllamaConfig   `yaml:"ollama"`
@@ -14,7 +14,7 @@ type Config struct {
 	Rules   []RuleConfig   `yaml:"rules"`
 }
 
-// DeviceConfig holds serial port configuration for a device.
+// DeviceConfig 保存设备的串口配置。
 type DeviceConfig struct {
 	Name     string `yaml:"name"`
 	BaudRate int    `yaml:"baud_rate"`
@@ -23,13 +23,13 @@ type DeviceConfig struct {
 	Parity   string `yaml:"parity"`
 }
 
-// OllamaConfig holds Ollama service connection settings.
+// OllamaConfig 保存 Ollama 服务的连接设置。
 type OllamaConfig struct {
 	Endpoint string `yaml:"endpoint"`
 	Model    string `yaml:"model"`
 }
 
-// RuleConfig holds a parsing rule configuration.
+// RuleConfig 保存解析规则配置。
 type RuleConfig struct {
 	Name     string   `yaml:"name"`
 	Keywords []string `yaml:"keywords"`
@@ -38,7 +38,7 @@ type RuleConfig struct {
 	Category string   `yaml:"category"`
 }
 
-// UploadConfig holds HTTP upload settings.
+// UploadConfig 保存 HTTP 上传设置。
 type UploadConfig struct {
 	Endpoint  string `yaml:"endpoint"`
 	APIKey    string `yaml:"api_key"`
@@ -46,7 +46,7 @@ type UploadConfig struct {
 	BatchSize int    `yaml:"batch_size"`
 }
 
-// Load reads and parses a YAML config file.
+// Load 读取并解析 YAML 配置文件。
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -60,7 +60,7 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// applyDefaults fills in default values for optional fields.
+// applyDefaults 为可选字段填充默认值。
 func (c *Config) applyDefaults() {
 	if c.Ollama.Endpoint == "" {
 		c.Ollama.Endpoint = "http://localhost:11434"

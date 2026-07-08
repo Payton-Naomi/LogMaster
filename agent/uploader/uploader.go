@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// LogEntry represents a single log line to upload.
+// LogEntry 表示一条待上传的日志。
 type LogEntry struct {
 	Device    string `json:"device"`
 	Timestamp string `json:"timestamp"`
@@ -18,7 +18,7 @@ type LogEntry struct {
 	RuleName  string `json:"rule_name,omitempty"`
 }
 
-// Uploader handles HTTP batch uploads to the central server.
+// Uploader 处理向中心服务器的 HTTP 批量上传。
 type Uploader struct {
 	endpoint  string
 	apiKey    string
@@ -28,7 +28,7 @@ type Uploader struct {
 	queue     []LogEntry
 }
 
-// New creates a new Uploader.
+// New 创建一个新的 Uploader。
 func New(endpoint, apiKey string, interval, batchSize int) *Uploader {
 	return &Uploader{
 		endpoint:  endpoint,
@@ -40,17 +40,17 @@ func New(endpoint, apiKey string, interval, batchSize int) *Uploader {
 	}
 }
 
-// Enqueue adds a log entry to the upload queue.
+// Enqueue 将一条日志加入上传队列。
 func (u *Uploader) Enqueue(entry LogEntry) {
 	u.queue = append(u.queue, entry)
 }
 
-// ShouldFlush returns true if the queue has reached batch size.
+// ShouldFlush 返回队列是否已达到批量大小。
 func (u *Uploader) ShouldFlush() bool {
 	return len(u.queue) >= u.batchSize
 }
 
-// Flush uploads all queued entries and clears the queue on success.
+// Flush 上传所有队列中的日志，成功后清空队列。
 func (u *Uploader) Flush() error {
 	if len(u.queue) == 0 {
 		return nil
@@ -62,7 +62,7 @@ func (u *Uploader) Flush() error {
 	return nil
 }
 
-// Upload sends a batch of log entries to the central server.
+// Upload 将一批日志发送到中心服务器。
 func (u *Uploader) Upload(batch []LogEntry) error {
 	data, err := json.Marshal(batch)
 	if err != nil {
