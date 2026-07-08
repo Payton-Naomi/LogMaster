@@ -33,3 +33,26 @@ func TestCollectorStopWithoutStart(t *testing.T) {
 	c := NewCollector()
 	c.Stop() // should not panic
 }
+
+func TestCollectorStartInvalidPort(t *testing.T) {
+	c := NewCollector()
+	err := c.Start("/dev/nonexistent_serial_xyz", 9600)
+	if err == nil {
+		t.Fatal("Start() should return error for invalid port")
+	}
+	// Ensure Stop() still works after failed start
+	c.Stop()
+}
+
+func TestCollectorStartStop(t *testing.T) {
+	c := NewCollector()
+	// Start with invalid port should fail, stop should not panic
+	c.Start("/dev/nonexistent", 9600)
+	c.Stop()
+}
+
+func TestCollectorMultipleStop(t *testing.T) {
+	c := NewCollector()
+	c.Stop()
+	c.Stop() // should not panic on double stop
+}

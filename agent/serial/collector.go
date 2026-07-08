@@ -16,10 +16,11 @@ type LogLine struct {
 
 // Collector manages multiple serial device connections and collects log lines.
 type Collector struct {
-	mu     sync.Mutex
-	lines  chan LogLine
-	stopCh chan struct{}
-	wg     sync.WaitGroup
+	mu       sync.Mutex
+	lines    chan LogLine
+	stopCh   chan struct{}
+	wg       sync.WaitGroup
+	stopOnce sync.Once
 }
 
 // NewCollector creates a new Collector.
@@ -83,7 +84,9 @@ func (c *Collector) readLoop(deviceName string, port Port, baudRate int) {
 
 // Stop stops all collection goroutines.
 func (c *Collector) Stop() {
-	close(c.stopCh)
-	c.wg.Wait()
-	close(c.lines)
+	c.stopOnce.Do(func() {
+		close(c.stopCh)
+		c.wg.Wait()
+		close(c.lines)
+	})
 }
