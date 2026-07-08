@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// mockClient implements OllamaClient for testing
+// mockClient 实现 OllamaClient 接口，用于测试
 type mockClient struct {
 	response string
 }
@@ -25,19 +25,19 @@ func TestAnalyzerAnalyze(t *testing.T) {
 		t.Fatalf("Analyze() error: %v", err)
 	}
 	if diag.AnomalyType != "crash" {
-		t.Fatalf("AnomalyType = %s, want crash", diag.AnomalyType)
+		t.Fatalf("AnomalyType = %s, 期望 crash", diag.AnomalyType)
 	}
 	if diag.Severity != "ERROR" {
-		t.Fatalf("Severity = %s, want ERROR", diag.Severity)
+		t.Fatalf("Severity = %s, 期望 ERROR", diag.Severity)
 	}
 }
 
 func TestBuildPrompt(t *testing.T) {
 	prompt := buildPrompt("panic: runtime error")
 	if !strings.Contains(prompt, "panic: runtime error") {
-		t.Fatal("prompt should contain the log line")
+		t.Fatal("prompt 应包含日志行")
 	}
 	if !strings.Contains(prompt, "JSON") {
-		t.Fatal("prompt should request JSON output")
+		t.Fatal("prompt 应要求 JSON 输出")
 	}
 }

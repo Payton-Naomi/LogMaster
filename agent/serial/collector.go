@@ -7,22 +7,23 @@ import (
 	"time"
 )
 
-// LogLine represents a single line of log from a serial device.
+// LogLine 表示来自串口设备的一条日志行。
 type LogLine struct {
 	Device    string
 	Timestamp time.Time
 	Content   string
 }
 
-// Collector manages multiple serial device connections and collects log lines.
+// Collector 管理多个串口设备连接并采集日志行。
 type Collector struct {
-	mu     sync.Mutex
-	lines  chan LogLine
-	stopCh chan struct{}
-	wg     sync.WaitGroup
+	mu       sync.Mutex
+	lines    chan LogLine
+	stopCh   chan struct{}
+	wg       sync.WaitGroup
+	stopOnce sync.Once
 }
 
-// NewCollector creates a new Collector.
+// NewCollector 创建一个新的 Collector。
 func NewCollector() *Collector {
 	return &Collector{
 		lines:  make(chan LogLine, 256),
@@ -30,12 +31,12 @@ func NewCollector() *Collector {
 	}
 }
 
-// Lines returns a read-only channel of collected log lines.
+// Lines 返回一个只读的日志行通道。
 func (c *Collector) Lines() <-chan LogLine {
 	return c.lines
 }
 
-// Start begins collecting from a device.
+// Start 开始从指定设备采集日志。
 func (c *Collector) Start(deviceName string, baudRate int) error {
 	port, err := OpenPort(deviceName, baudRate)
 	if err != nil {
@@ -61,7 +62,7 @@ func (c *Collector) readLoop(deviceName string, port Port, baudRate int) {
 
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			// Try reconnect
+			// 尝试重连
 			port.Close()
 			time.Sleep(2 * time.Second)
 			newPort, err := OpenPort(deviceName, baudRate)
@@ -81,9 +82,11 @@ func (c *Collector) readLoop(deviceName string, port Port, baudRate int) {
 	}
 }
 
-// Stop stops all collection goroutines.
+// Stop 停止所有采集协程。
 func (c *Collector) Stop() {
-	close(c.stopCh)
-	c.wg.Wait()
-	close(c.lines)
+	c.stopOnce.Do(func() {
+		close(c.stopCh)
+		c.wg.Wait()
+		close(c.lines)
+	})
 }

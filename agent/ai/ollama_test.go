@@ -12,9 +12,9 @@ func TestDiagnosisJSON(t *testing.T) {
 		Suggestion:  "check the pointer before use",
 	}
 	if d.AnomalyType != "crash" {
-		t.Fatal("AnomalyType mismatch")
+		t.Fatal("AnomalyType 不匹配")
 	}
 	if d.Severity != "ERROR" {
-		t.Fatal("Severity mismatch")
+		t.Fatal("Severity 不匹配")
 	}
 }

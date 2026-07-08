@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// Rule defines a log parsing rule.
+// Rule 定义一条日志解析规则。
 type Rule struct {
 	Name     string
 	Keywords []string
@@ -14,7 +14,7 @@ type Rule struct {
 	Category string
 }
 
-// MatchResult holds the result of matching a log line against a rule.
+// MatchResult 保存日志行与规则匹配的结果。
 type MatchResult struct {
 	Matched  bool
 	RuleName string
@@ -23,7 +23,7 @@ type MatchResult struct {
 	Tags     []string
 }
 
-// Match checks if the log line matches this rule.
+// Match 检查日志行是否匹配此规则。
 func (r *Rule) Match(line string) MatchResult {
 	for _, kw := range r.Keywords {
 		if !strings.Contains(strings.ToLower(line), strings.ToLower(kw)) {

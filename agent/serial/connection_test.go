@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// mockPort implements Port interface for testing
+// mockPort 实现 Port 接口，用于测试
 type mockPort struct {
 	closed   bool
 	readBuf  []byte
@@ -41,22 +41,22 @@ func (m *mockPort) Write(p []byte) (int, error) {
 }
 
 func TestOpenPortInvalidPort(t *testing.T) {
-	// Opening a non-existent port should return an error
+	// 打开不存在的端口应返回错误
 	_, err := OpenPort("/dev/nonexistent_serial_port_xyz", 9600)
 	if err == nil {
-		t.Fatal("OpenPort() with invalid port should return error")
+		t.Fatal("OpenPort() 使用无效端口应返回错误")
 	}
-	t.Logf("Got expected error: %v", err)
+	t.Logf("收到预期错误: %v", err)
 }
 
 func TestClosePort(t *testing.T) {
 	p := &mockPort{}
 	err := p.Close()
 	if err != nil {
-		t.Fatalf("Close() on open port should not error: %v", err)
+		t.Fatalf("关闭端口时不应出错: %v", err)
 	}
 	if !p.closed {
-		t.Fatal("Close() should mark port as closed")
+		t.Fatal("Close() 应标记端口为已关闭")
 	}
 }
 
@@ -65,7 +65,7 @@ func TestClosePortTwice(t *testing.T) {
 	p.Close()
 	err := p.Close()
 	if err == nil {
-		t.Fatal("Close() twice should return error")
+		t.Fatal("第二次 Close() 应返回错误")
 	}
 }
 
@@ -77,10 +77,10 @@ func TestReadFromPort(t *testing.T) {
 		t.Fatalf("Read() error: %v", err)
 	}
 	if n != 5 {
-		t.Fatalf("Read() got %d bytes, want 5", n)
+		t.Fatalf("Read() 读取 %d 字节, 期望 5", n)
 	}
 	if string(buf[:n]) != "hello" {
-		t.Fatalf("Read() got %q, want %q", string(buf[:n]), "hello")
+		t.Fatalf("Read() 得到 %q, 期望 %q", string(buf[:n]), "hello")
 	}
 }
 
@@ -92,27 +92,27 @@ func TestWriteToPort(t *testing.T) {
 		t.Fatalf("Write() error: %v", err)
 	}
 	if n != 5 {
-		t.Fatalf("Write() got %d bytes, want 5", n)
+		t.Fatalf("Write() 写入 %d 字节, 期望 5", n)
 	}
 	if string(m.writeBuf) != "world" {
-		t.Fatalf("Write() wrote %q, want %q", string(m.writeBuf), "world")
+		t.Fatalf("Write() 写入 %q, 期望 %q", string(m.writeBuf), "world")
 	}
 }
 
 func TestReadWritePort(t *testing.T) {
 	m := &mockPort{}
 
-	// Write data
+	// 写入数据
 	data := []byte("ping")
 	n, err := m.Write(data)
 	if err != nil {
 		t.Fatalf("Write() error: %v", err)
 	}
 	if n != 4 {
-		t.Fatalf("Write() wrote %d bytes, want 4", n)
+		t.Fatalf("Write() 写入 %d 字节, 期望 4", n)
 	}
 
-	// Read data (simulate echo by setting readBuf)
+	// 读取数据（通过设置 readBuf 模拟回显）
 	m.readBuf = []byte("pong")
 	buf := make([]byte, 10)
 	n, err = m.Read(buf)
@@ -120,6 +120,6 @@ func TestReadWritePort(t *testing.T) {
 		t.Fatalf("Read() error: %v", err)
 	}
 	if string(buf[:n]) != "pong" {
-		t.Fatalf("Read() got %q, want %q", string(buf[:n]), "pong")
+		t.Fatalf("Read() 得到 %q, 期望 %q", string(buf[:n]), "pong")
 	}
 }
