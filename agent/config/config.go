@@ -10,6 +10,7 @@ import (
 type Config struct {
 	Devices []DeviceConfig `yaml:"devices"`
 	Ollama  OllamaConfig   `yaml:"ollama"`
+	Upload  UploadConfig   `yaml:"upload"`
 	Rules   []RuleConfig   `yaml:"rules"`
 }
 
@@ -37,6 +38,14 @@ type RuleConfig struct {
 	Category string   `yaml:"category"`
 }
 
+// UploadConfig holds HTTP upload settings.
+type UploadConfig struct {
+	Endpoint  string `yaml:"endpoint"`
+	APIKey    string `yaml:"api_key"`
+	Interval  int    `yaml:"interval_sec"`
+	BatchSize int    `yaml:"batch_size"`
+}
+
 // Load reads and parses a YAML config file.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
@@ -58,6 +67,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Ollama.Model == "" {
 		c.Ollama.Model = "qwen2.5:7b"
+	}
+	if c.Upload.Interval == 0 {
+		c.Upload.Interval = 10
+	}
+	if c.Upload.BatchSize == 0 {
+		c.Upload.BatchSize = 100
 	}
 	for i := range c.Devices {
 		if c.Devices[i].BaudRate == 0 {

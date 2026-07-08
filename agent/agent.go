@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"time"
 
 	"logmaster-agent/agent/ai"
 	"logmaster-agent/agent/config"
 	"logmaster-agent/agent/rule"
 	serialagent "logmaster-agent/agent/serial"
+	"logmaster-agent/agent/uploader"
 )
 
 // OutputLine is the JSON output structure for each log line.
@@ -29,6 +31,7 @@ type Agent struct {
 	collector *serialagent.Collector
 	engine    *rule.Engine
 	analyzer  *ai.Analyzer
+	uploader  *uploader.Uploader
 }
 
 // New creates a new Agent from configuration.
@@ -51,6 +54,7 @@ func New(cfg *config.Config) *Agent {
 		collector: serialagent.NewCollector(),
 		engine:    rule.NewEngine(rules),
 		analyzer:  ai.NewAnalyzer(ollamaClient, cfg.Ollama.Model),
+		uploader:  uploader.New(cfg.Upload.Endpoint, cfg.Upload.APIKey, cfg.Upload.Interval, cfg.Upload.BatchSize),
 	}
 }
 
@@ -68,6 +72,10 @@ func (a *Agent) Run() error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt)
 
+	// Background goroutine: periodic upload flush
+	stopUpload := make(chan struct{})
+	go a.uploadLoop(stopUpload)
+
 	// Process log lines
 	go func() {
 		for line := range a.collector.Lines() {
@@ -79,8 +87,31 @@ func (a *Agent) Run() error {
 
 	<-sigCh
 	fmt.Fprintln(os.Stderr, "\nShutting down...")
+	close(stopUpload)
 	a.collector.Stop()
+
+	// Flush remaining upload queue
+	if err := a.uploader.Flush(); err != nil {
+		fmt.Fprintf(os.Stderr, "Final upload flush failed: %v\n", err)
+	}
 	return nil
+}
+
+// uploadLoop periodically flushes the upload queue.
+func (a *Agent) uploadLoop(stop <-chan struct{}) {
+	ticker := time.NewTicker(time.Duration(a.cfg.Upload.Interval) * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			if err := a.uploader.Flush(); err != nil {
+				fmt.Fprintf(os.Stderr, "Upload flush failed: %v\n", err)
+			}
+		}
+	}
 }
 
 // processLine applies rule matching and AI analysis to a log line.
@@ -104,6 +135,16 @@ func (a *Agent) processLine(line serialagent.LogLine) OutputLine {
 			output.AI = diag
 		}
 	}
+
+	// Enqueue for HTTP upload
+	a.uploader.Enqueue(uploader.LogEntry{
+		Device:    output.Device,
+		Timestamp: output.Timestamp,
+		Content:   output.Content,
+		Severity:  output.Severity,
+		Category:  output.Category,
+		RuleName:  output.RuleName,
+	})
 
 	return output
 }
