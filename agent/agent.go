@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"embed"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,11 +9,16 @@ import (
 	"time"
 
 	"logmaster-agent/agent/ai"
+	"logmaster-agent/agent/api"
 	"logmaster-agent/agent/config"
+	"logmaster-agent/agent/proxy"
 	"logmaster-agent/agent/rule"
 	serialagent "logmaster-agent/agent/serial"
 	"logmaster-agent/agent/uploader"
 )
+
+//go:embed ui/*
+var uiFS embed.FS
 
 // OutputLine 是每条日志行的 JSON 输出结构。
 type OutputLine struct {
@@ -62,7 +68,7 @@ func New(cfg *config.Config) *Agent {
 func (a *Agent) Run() error {
 	// 为每个设备启动采集器
 	for _, dev := range a.cfg.Devices {
-		if err := a.collector.Start(dev.Name, dev.BaudRate); err != nil {
+		if err := a.collector.Start(dev.Name, dev.BaudRate, dev.DataBits, dev.StopBits, dev.Parity); err != nil {
 			return fmt.Errorf("start collector for %s: %w", dev.Name, err)
 		}
 		fmt.Fprintf(os.Stderr, "Started collecting from %s at %d baud\n", dev.Name, dev.BaudRate)
@@ -95,6 +101,23 @@ func (a *Agent) Run() error {
 		fmt.Fprintf(os.Stderr, "Final upload flush failed: %v\n", err)
 	}
 	return nil
+}
+
+// ServeUI 启动 HTTP 服务，提供 REST API、WebSocket 和嵌入式串口调试 UI。
+func (a *Agent) ServeUI(port int, noBrowser bool) error {
+	p := proxy.New()
+	server := api.New(p, uiFS)
+
+	addr := fmt.Sprintf(":%d", port)
+	if !noBrowser {
+		url := fmt.Sprintf("http://localhost:%d", port)
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			api.OpenBrowser(url)
+		}()
+	}
+
+	return server.Start(addr)
 }
 
 // uploadLoop 定期刷新上传队列。

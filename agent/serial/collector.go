@@ -37,18 +37,18 @@ func (c *Collector) Lines() <-chan LogLine {
 }
 
 // Start 开始从指定设备采集日志。
-func (c *Collector) Start(deviceName string, baudRate int) error {
-	port, err := OpenPort(deviceName, baudRate)
+func (c *Collector) Start(deviceName string, baudRate, dataBits, stopBits int, parity string) error {
+	port, err := OpenPort(deviceName, baudRate, dataBits, stopBits, parity)
 	if err != nil {
 		return fmt.Errorf("open port %s: %w", deviceName, err)
 	}
 
 	c.wg.Add(1)
-	go c.readLoop(deviceName, port, baudRate)
+	go c.readLoop(deviceName, port, baudRate, dataBits, stopBits, parity)
 	return nil
 }
 
-func (c *Collector) readLoop(deviceName string, port Port, baudRate int) {
+func (c *Collector) readLoop(deviceName string, port Port, baudRate, dataBits, stopBits int, parity string) {
 	defer c.wg.Done()
 	defer port.Close()
 
@@ -65,7 +65,7 @@ func (c *Collector) readLoop(deviceName string, port Port, baudRate int) {
 			// 尝试重连
 			port.Close()
 			time.Sleep(2 * time.Second)
-			newPort, err := OpenPort(deviceName, baudRate)
+			newPort, err := OpenPort(deviceName, baudRate, dataBits, stopBits, parity)
 			if err != nil {
 				continue
 			}

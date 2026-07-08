@@ -36,7 +36,7 @@ func TestCollectorStopWithoutStart(t *testing.T) {
 
 func TestCollectorStartInvalidPort(t *testing.T) {
 	c := NewCollector()
-	err := c.Start("/dev/nonexistent_serial_xyz", 9600)
+	err := c.Start("/dev/nonexistent_serial_xyz", 9600, 8, 1, "none")
 	if err == nil {
 		t.Fatal("Start() 对无效端口应返回错误")
 	}
@@ -47,7 +47,7 @@ func TestCollectorStartInvalidPort(t *testing.T) {
 func TestCollectorStartStop(t *testing.T) {
 	c := NewCollector()
 	// 使用无效端口启动应失败，停止不应 panic
-	c.Start("/dev/nonexistent", 9600)
+	c.Start("/dev/nonexistent", 9600, 8, 1, "none")
 	c.Stop()
 }
 

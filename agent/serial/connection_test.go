@@ -42,7 +42,7 @@ func (m *mockPort) Write(p []byte) (int, error) {
 
 func TestOpenPortInvalidPort(t *testing.T) {
 	// 打开不存在的端口应返回错误
-	_, err := OpenPort("/dev/nonexistent_serial_port_xyz", 9600)
+	_, err := OpenPort("/dev/nonexistent_serial_port_xyz", 9600, 8, 1, "none")
 	if err == nil {
 		t.Fatal("OpenPort() 使用无效端口应返回错误")
 	}
