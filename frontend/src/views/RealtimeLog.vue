@@ -1,89 +1,91 @@
 <template>
     <div class="realtime-log-page">
         <!-- ====== 顶部工具栏 ====== -->
-        <div class="filter-bar">
-            <div class="filter-left">
-                <el-select v-model="selectedDevice" placeholder="筛选/高亮设备" clearable style="width:180px">
-                    <el-option label="全部" value="" />
-                    <el-option v-for="port in availablePorts" :key="port.name" :label="port.label" :value="port.name" />
-                </el-select>
-
-                <el-button type="success" plain @click="exportLogs">
-                    <el-icon>
-                        <Download />
-                    </el-icon>
-                    导出日志
-                </el-button>
-
-                <el-button type="primary" plain @click="refreshPorts">
+        <div class="toolbar">
+            <div class="toolbar-left">
+                <el-button type="primary" plain size="small" @click="refreshPorts">
                     🔄 刷新串口
                 </el-button>
+                <el-button type="success" plain size="small" @click="exportLogs">
+                    <el-icon>
+                        <Download />
+                    </el-icon> 导出日志
+                </el-button>
+                <span class="total-info">总日志: {{ totalLogs }} 条</span>
             </div>
-
-            <div class="filter-right">
-                <span class="total-logs">总日志: {{ totalLogs }} 条</span>
-                <el-button size="default" :type="isGlobalPaused ? 'warning' : 'primary'" @click="toggleGlobalPause">
+            <div class="toolbar-right">
+                <el-button size="small" :type="isGlobalPaused ? 'warning' : 'primary'" @click="toggleGlobalPause">
                     {{ isGlobalPaused ? '▶️ 恢复全部' : '⏸️ 暂停全部' }}
                 </el-button>
-                <el-button size="default" type="danger" plain @click="clearAllLogs">
+                <el-button size="small" type="danger" plain @click="clearAllLogs">
                     🗑️ 清空全部
                 </el-button>
             </div>
         </div>
 
-        <!-- ====== 4路日志窗口（2x2网格，固定大小） ====== -->
-        <div class="log-grid">
-            <div v-for="(window, idx) in windows" :key="idx" class="log-window" :class="{
-                'window-highlight': selectedDevice && window.selectedPort === selectedDevice,
-                'window-dimmed': selectedDevice && window.selectedPort && window.selectedPort !== selectedDevice
-            }">
-                <!-- ====== 窗口标题栏 ====== -->
-                <div class="window-header">
-                    <div class="header-left">
-                        <span class="status-dot"
-                            :class="window.paused ? 'offline' : (window.selectedPort ? 'online' : 'offline')"></span>
-
-                        <el-select v-model="window.selectedPort" placeholder="选择串口" size="small" style="width:100px"
-                            @change="onPortChange(idx)">
-                            <el-option v-for="port in availablePorts" :key="port.name" :label="port.label"
-                                :value="port.name" />
-                        </el-select>
-
-                        <span class="device-label">{{ getPortLabel(window.selectedPort) }}</span>
-                        <span class="log-count">{{ getLogsForWindow(idx).length }} 条</span>
-                        <span v-if="selectedDevice === window.selectedPort" class="selected-badge">📌 聚焦</span>
+        <!-- ====== 主体：左侧列表 + 右侧日志 ====== -->
+        <div class="main-body">
+            <!-- 左侧串口列表 -->
+            <div class="port-list">
+                <div class="list-header">
+                    <span>串口列表</span>
+                    <span class="port-count">{{ availablePorts.length }}</span>
+                </div>
+                <div v-for="port in availablePorts" :key="port.name" class="port-item"
+                    :class="{ active: selectedPortName === port.name }" @click="selectPort(port.name)">
+                    <div class="port-info">
+                        <span class="status-dot" :class="getPortStatus(port.name)"></span>
+                        <span class="port-name">{{ port.name }}</span>
+                        <span class="port-label">{{ port.label.replace(/^[^-]*-\s*/, '') }}</span>
                     </div>
-                    <div class="header-right">
-                        <el-button size="small" :type="window.paused ? 'warning' : 'primary'"
-                            @click="toggleWindowPause(idx)">
-                            {{ window.paused ? '▶' : '⏸' }}
-                        </el-button>
-                        <el-button size="small" type="danger" plain @click="clearWindowLogs(idx)">
-                            🗑
-                        </el-button>
+                    <div class="port-meta">
+                        <span class="log-count">{{ getPortLogs(port.name).length }} 条</span>
+                        <span v-if="selectedPortName === port.name" class="active-badge">▶</span>
                     </div>
                 </div>
-
-                <!-- ====== 窗口工具栏（关键词 + 备注） ====== -->
-                <div class="window-toolbar">
-                    <el-input v-model="window.keyword" size="small" placeholder="🔍 关键词高亮..." clearable
-                        class="keyword-input" @input="saveKeyword(idx, window.keyword)" />
-                    <el-input v-model="window.remark" size="small" placeholder="📝 设备备注..." clearable
-                        class="remark-input" @input="saveRemark(idx, window.remark)" />
+                <div v-if="availablePorts.length === 0" class="empty-list">
+                    <span>暂无可用串口</span>
                 </div>
+            </div>
 
-                <!-- ====== 日志列表 ====== -->
-                <div class="log-container" :ref="el => setContainerRef(idx, el)">
-                    <div v-for="(log, logIdx) in getLogsForWindow(idx)" :key="logIdx" class="log-line"
-                        :style="{ color: log.color }">
-                        <span class="log-time">{{ log.time }}</span>
-                        <span class="log-level" :style="{ color: log.color }">[{{ log.level }}]</span>
-                        <span class="log-content" v-html="highlightText(log.content, window.keyword)"></span>
+            <!-- 右侧日志显示区 -->
+            <div class="log-display">
+                <template v-if="selectedPort">
+                    <!-- 当前串口的工具栏 -->
+                    <div class="log-toolbar">
+                        <el-input v-model="selectedPort.keyword" size="small" placeholder="🔍 关键词高亮..." clearable
+                            style="width:180px" @input="saveKeyword(selectedPortName, selectedPort.keyword)" />
+                        <el-input v-model="selectedPort.remark" size="small" placeholder="📝 设备备注..." clearable
+                            style="width:150px" @input="saveRemark(selectedPortName, selectedPort.remark)" />
+                        <el-button size="small" :type="selectedPort.paused ? 'warning' : 'primary'"
+                            @click="togglePortPause(selectedPortName)">
+                            {{ selectedPort.paused ? '▶ 恢复' : '⏸ 暂停' }}
+                        </el-button>
+                        <el-button size="small" type="danger" plain @click="clearPortLogs(selectedPortName)">
+                            🗑 清空
+                        </el-button>
+                        <span class="port-title">{{ selectedPortName }} - {{ getPortLabel(selectedPortName) }}</span>
                     </div>
-                    <div v-if="getLogsForWindow(idx).length === 0" class="empty-tip">
-                        <span v-if="!window.selectedPort">⬅️ 请选择串口</span>
-                        <span v-else>⏳ 等待日志...</span>
+
+                    <!-- 日志列表 -->
+                    <div ref="logContainer" class="log-container">
+                        <div v-for="(log, idx) in selectedPort.logs" :key="idx" class="log-line"
+                            :style="{ color: log.color }">
+                            <span class="log-time">{{ log.time }}</span>
+                            <span class="log-level" :style="{ color: log.color }">[{{ log.level }}]</span>
+                            <span class="log-content" v-html="highlightText(log.content, selectedPort.keyword)"></span>
+                        </div>
+                        <div v-if="selectedPort.logs.length === 0" class="empty-tip">
+                            <span v-if="!selectedPortName">⬅️ 请从左侧选择一个串口</span>
+                            <span v-else>⏳ 等待日志...</span>
+                        </div>
                     </div>
+                </template>
+                <div v-else class="no-selection">
+                    <el-icon size="40">
+                        <Connection />
+                    </el-icon>
+                    <p>请从左侧选择一个串口查看实时日志</p>
                 </div>
             </div>
         </div>
@@ -91,16 +93,16 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted, nextTick, computed } from 'vue'
-import { Download } from '@element-plus/icons-vue'
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { Download, Connection } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 
 // ============================================================
-// 1. 状态定义
+// 1. 状态
 // ============================================================
-const selectedDevice = ref('')
+const selectedPortName = ref('COM1') // 当前选中的串口名
 const isGlobalPaused = ref(false)
-const containerRefs = ref({})
+const logContainer = ref(null)
 
 // 可用串口列表
 const availablePorts = ref([
@@ -112,15 +114,59 @@ const availablePorts = ref([
     { name: 'COM6', label: 'COM6 - 备用设备' }
 ])
 
-const windows = reactive([
-    { selectedPort: 'COM1', keyword: '', remark: '', logs: [], paused: false, timer: null },
-    { selectedPort: 'COM2', keyword: '', remark: '', logs: [], paused: false, timer: null },
-    { selectedPort: 'COM3', keyword: '', remark: '', logs: [], paused: false, timer: null },
-    { selectedPort: 'COM4', keyword: '', remark: '', logs: [], paused: false, timer: null }
-])
+// 每个串口的数据（日志、关键词、备注、暂停状态）
+const portDataMap = reactive({})
+
+// 初始化每个串口的数据
+function initPortData(portName) {
+    if (!portDataMap[portName]) {
+        portDataMap[portName] = {
+            logs: [],
+            keyword: '',
+            remark: '',
+            paused: false,
+            timer: null
+        }
+    }
+}
+
+// 确保所有可用串口都有数据
+availablePorts.value.forEach(p => initPortData(p.name))
 
 // ============================================================
-// 2. 日志级别颜色
+// 2. 计算属性
+// ============================================================
+const totalLogs = computed(() => {
+    let sum = 0
+    for (const key in portDataMap) {
+        sum += portDataMap[key].logs.length
+    }
+    return sum
+})
+
+const selectedPort = computed(() => {
+    if (!selectedPortName.value || !portDataMap[selectedPortName.value]) return null
+    return portDataMap[selectedPortName.value]
+})
+
+function getPortLogs(portName) {
+    return portDataMap[portName]?.logs || []
+}
+
+function getPortLabel(portName) {
+    const found = availablePorts.value.find(p => p.name === portName)
+    return found ? found.label.replace(/^[^-]*-\s*/, '') : portName
+}
+
+function getPortStatus(portName) {
+    const data = portDataMap[portName]
+    if (!data) return 'offline'
+    if (data.paused) return 'paused'
+    return 'online'
+}
+
+// ============================================================
+// 3. 日志级别颜色
 // ============================================================
 const levelColors = {
     ERROR: '#F56C6C',
@@ -130,7 +176,7 @@ const levelColors = {
 }
 
 // ============================================================
-// 3. 日志消息池
+// 4. 日志消息池
 // ============================================================
 const logMessages = {
     INFO: [
@@ -156,40 +202,7 @@ const logMessages = {
 }
 
 // ============================================================
-// 4. 计算属性
-// ============================================================
-const totalLogs = computed(() => {
-    return windows.reduce((sum, w) => sum + w.logs.length, 0)
-})
-
-function getPortLabel(portName) {
-    if (!portName) return '未选择'
-    const found = availablePorts.value.find(p => p.name === portName)
-    return found ? found.label.replace(/^[^-]*-\s*/, '') : portName
-}
-
-function getLogsForWindow(idx) {
-    const win = windows[idx]
-    if (!win.selectedPort) return []
-    return win.logs
-}
-
-// ============================================================
-// 5. DOM引用
-// ============================================================
-function setContainerRef(idx, el) {
-    if (el) containerRefs.value[idx] = el
-}
-
-function scrollToBottom(idx) {
-    const el = containerRefs.value[idx]
-    if (el) {
-        el.scrollTop = el.scrollHeight
-    }
-}
-
-// ============================================================
-// 6. 日志生成
+// 5. 日志生成
 // ============================================================
 function generateLog(portName) {
     const rand = Math.random()
@@ -213,21 +226,39 @@ function generateLog(portName) {
     }
 }
 
-function startWindowLogGenerator(idx) {
-    const win = windows[idx]
-    if (win.timer) clearInterval(win.timer)
+function startPortLogGenerator(portName) {
+    const data = portDataMap[portName]
+    if (!data) return
+    if (data.timer) clearInterval(data.timer)
 
-    win.timer = setInterval(() => {
-        if (!win.paused && !isGlobalPaused.value && win.selectedPort) {
-            const newLog = generateLog(win.selectedPort)
-            win.logs.push(newLog)
-            if (win.logs.length > 500) {
-                win.logs.splice(0, win.logs.length - 500)
+    data.timer = setInterval(() => {
+        if (!data.paused && !isGlobalPaused.value) {
+            const newLog = generateLog(portName)
+            data.logs.push(newLog)
+            if (data.logs.length > 500) {
+                data.logs.splice(0, data.logs.length - 500)
             }
-            nextTick(() => scrollToBottom(idx))
+            // 如果当前选中的是这个端口，滚动到底部
+            if (selectedPortName.value === portName) {
+                nextTick(() => scrollToBottom())
+            }
         }
     }, 800 + Math.random() * 600)
 }
+
+// ============================================================
+// 6. 滚动到底部
+// ============================================================
+function scrollToBottom() {
+    if (logContainer.value) {
+        logContainer.value.scrollTop = logContainer.value.scrollHeight
+    }
+}
+
+// 监听选中端口变化，滚动到底部
+watch(selectedPortName, () => {
+    nextTick(() => scrollToBottom())
+})
 
 // ============================================================
 // 7. 关键词高亮
@@ -243,64 +274,66 @@ function highlightText(text, keyword) {
 // ============================================================
 // 8. 持久化
 // ============================================================
-const STORAGE_KEYWORD_PREFIX = 'log_keyword_win_'
-const STORAGE_REMARK_PREFIX = 'log_remark_win_'
-const STORAGE_PORT_PREFIX = 'log_port_win_'
+const STORAGE_KEYWORD_PREFIX = 'log_keyword_'
+const STORAGE_REMARK_PREFIX = 'log_remark_'
 
 function loadPersistedData() {
-    windows.forEach((win, idx) => {
-        const savedKeyword = localStorage.getItem(STORAGE_KEYWORD_PREFIX + idx)
-        if (savedKeyword !== null) win.keyword = savedKeyword
-
-        const savedRemark = localStorage.getItem(STORAGE_REMARK_PREFIX + idx)
-        if (savedRemark !== null) win.remark = savedRemark
-
-        const savedPort = localStorage.getItem(STORAGE_PORT_PREFIX + idx)
-        if (savedPort !== null && availablePorts.value.some(p => p.name === savedPort)) {
-            win.selectedPort = savedPort
-        }
+    availablePorts.value.forEach(p => {
+        const name = p.name
+        const data = portDataMap[name]
+        if (!data) return
+        const savedKeyword = localStorage.getItem(STORAGE_KEYWORD_PREFIX + name)
+        if (savedKeyword !== null) data.keyword = savedKeyword
+        const savedRemark = localStorage.getItem(STORAGE_REMARK_PREFIX + name)
+        if (savedRemark !== null) data.remark = savedRemark
     })
 }
 
-function saveKeyword(idx, value) {
-    localStorage.setItem(STORAGE_KEYWORD_PREFIX + idx, value || '')
+function saveKeyword(portName, value) {
+    localStorage.setItem(STORAGE_KEYWORD_PREFIX + portName, value || '')
 }
 
-function saveRemark(idx, value) {
-    localStorage.setItem(STORAGE_REMARK_PREFIX + idx, value || '')
-}
-
-function savePort(idx, value) {
-    localStorage.setItem(STORAGE_PORT_PREFIX + idx, value || '')
+function saveRemark(portName, value) {
+    localStorage.setItem(STORAGE_REMARK_PREFIX + portName, value || '')
 }
 
 // ============================================================
-// 9. 控制方法
+// 9. 操作函数
 // ============================================================
+function selectPort(portName) {
+    if (selectedPortName.value === portName) return
+    // 确保该端口数据存在
+    if (!portDataMap[portName]) {
+        initPortData(portName)
+        startPortLogGenerator(portName)
+    }
+    selectedPortName.value = portName
+}
+
 function toggleGlobalPause() {
     isGlobalPaused.value = !isGlobalPaused.value
 }
 
-function toggleWindowPause(idx) {
-    windows[idx].paused = !windows[idx].paused
+function togglePortPause(portName) {
+    const data = portDataMap[portName]
+    if (data) {
+        data.paused = !data.paused
+    }
 }
 
-function clearWindowLogs(idx) {
-    windows[idx].logs = []
-    ElMessage.success(`窗口 ${idx + 1} 已清空`)
+function clearPortLogs(portName) {
+    const data = portDataMap[portName]
+    if (data) {
+        data.logs = []
+        ElMessage.success(`${portName} 日志已清空`)
+    }
 }
 
 function clearAllLogs() {
-    windows.forEach(w => w.logs = [])
-    ElMessage.success('已清空所有日志')
-}
-
-function onPortChange(idx) {
-    const win = windows[idx]
-    win.logs = []
-    savePort(idx, win.selectedPort)
-    nextTick(() => scrollToBottom(idx))
-    ElMessage.success(`${win.selectedPort} 已连接`)
+    for (const key in portDataMap) {
+        portDataMap[key].logs = []
+    }
+    ElMessage.success('所有日志已清空')
 }
 
 // ============================================================
@@ -315,16 +348,31 @@ function refreshPorts() {
         { name: 'COM5', label: 'COM5 - 传感器' },
         { name: 'COM6', label: 'COM6 - 备用设备' }
     ]
+    // 模拟随机离线
     const online = mockPorts.filter(() => Math.random() > 0.2)
     availablePorts.value = online.length > 0 ? online : mockPorts.slice(0, 2)
 
-    windows.forEach((win, idx) => {
-        if (win.selectedPort && !availablePorts.value.some(p => p.name === win.selectedPort)) {
-            win.selectedPort = ''
-            win.logs = []
-            savePort(idx, '')
+    // 清理不再存在的端口数据
+    const existingNames = new Set(availablePorts.value.map(p => p.name))
+    for (const key in portDataMap) {
+        if (!existingNames.has(key)) {
+            if (portDataMap[key].timer) clearInterval(portDataMap[key].timer)
+            delete portDataMap[key]
+        }
+    }
+
+    // 初始化新端口
+    availablePorts.value.forEach(p => {
+        if (!portDataMap[p.name]) {
+            initPortData(p.name)
+            startPortLogGenerator(p.name)
         }
     })
+
+    // 如果当前选中的端口不在列表中，选中第一个
+    if (!existingNames.has(selectedPortName.value)) {
+        selectedPortName.value = availablePorts.value.length > 0 ? availablePorts.value[0].name : ''
+    }
 
     ElMessage.success(`已刷新串口列表，当前可用 ${availablePorts.value.length} 个`)
 }
@@ -333,12 +381,18 @@ function refreshPorts() {
 // 11. 导出日志
 // ============================================================
 function exportLogs() {
-    let targetWindows = windows
-    if (selectedDevice.value) {
-        targetWindows = windows.filter(w => w.selectedPort === selectedDevice.value)
+    // 如果选中了端口，只导出该端口；否则导出全部
+    let targetNames = []
+    if (selectedPortName.value && portDataMap[selectedPortName.value]?.logs.length > 0) {
+        targetNames = [selectedPortName.value]
+    } else {
+        // 导出所有有日志的端口
+        for (const key in portDataMap) {
+            if (portDataMap[key].logs.length > 0) targetNames.push(key)
+        }
     }
 
-    if (targetWindows.length === 0 || targetWindows.every(w => w.logs.length === 0)) {
+    if (targetNames.length === 0) {
         ElMessage.warning('没有可导出的日志')
         return
     }
@@ -351,22 +405,20 @@ function exportLogs() {
     content.push('  日志导出报告')
     content.push('='.repeat(60))
     content.push(`导出时间: ${dateStr}`)
-    content.push(`筛选设备: ${selectedDevice.value || '全部'}`)
+    content.push(`导出端口: ${targetNames.join(', ')}`)
     content.push('='.repeat(60))
     content.push('')
 
-    targetWindows.forEach((win, idx) => {
-        if (win.logs.length === 0 || !win.selectedPort) return
-
-        const portLabel = getPortLabel(win.selectedPort)
-        content.push(`【窗口 ${idx + 1} - ${win.selectedPort}】`)
-        content.push(`  设备: ${portLabel}`)
-        if (win.remark) content.push(`  备注: ${win.remark}`)
-        content.push(`  日志条数: ${win.logs.length}`)
+    targetNames.forEach(name => {
+        const data = portDataMap[name]
+        if (!data || data.logs.length === 0) return
+        const label = getPortLabel(name)
+        content.push(`【${name} - ${label}】`)
+        if (data.remark) content.push(`  备注: ${data.remark}`)
+        content.push(`  日志条数: ${data.logs.length}`)
         content.push('-'.repeat(40))
-
-        const sortedLogs = [...win.logs]
-        sortedLogs.forEach(log => {
+        const sorted = [...data.logs]
+        sorted.forEach(log => {
             content.push(`  ${log.time} [${log.level}] ${log.content}`)
         })
         content.push('')
@@ -380,7 +432,7 @@ function exportLogs() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    const fileName = `日志导出_${selectedDevice.value || '全部'}_${now.toISOString().slice(0, 10)}.txt`
+    const fileName = `日志导出_${targetNames.join('_')}_${now.toISOString().slice(0, 10)}.txt`
     a.download = fileName
     document.body.appendChild(a)
     a.click()
@@ -394,161 +446,152 @@ function exportLogs() {
 // 12. 生命周期
 // ============================================================
 onMounted(() => {
-    loadPersistedData()
-    windows.forEach((_, idx) => {
-        startWindowLogGenerator(idx)
-        if (windows[idx].selectedPort) {
-            setTimeout(() => scrollToBottom(idx), 300)
-        }
+    // 初始化所有端口数据并启动生成
+    availablePorts.value.forEach(p => {
+        initPortData(p.name)
+        startPortLogGenerator(p.name)
     })
+    loadPersistedData()
+
+    // 默认选中第一个
+    if (availablePorts.value.length > 0) {
+        selectedPortName.value = availablePorts.value[0].name
+        setTimeout(scrollToBottom, 300)
+    }
 })
 
 onUnmounted(() => {
-    windows.forEach(win => {
-        if (win.timer) clearInterval(win.timer)
-    })
+    for (const key in portDataMap) {
+        if (portDataMap[key].timer) clearInterval(portDataMap[key].timer)
+    }
 })
 </script>
 
 <style scoped>
 /* ============================================================
-   页面整体布局
+   整体布局
    ============================================================ */
 .realtime-log-page {
     height: 100%;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px;
     overflow: hidden;
-    /* 防止整体溢出 */
 }
 
 /* ============================================================
    顶部工具栏
    ============================================================ */
-.filter-bar {
+.toolbar {
     display: flex;
     justify-content: space-between;
     align-items: center;
     flex-wrap: wrap;
-    gap: 10px;
+    gap: 8px;
     background: #fff;
-    padding: 12px 16px;
+    padding: 8px 16px;
     border-radius: 8px;
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
     flex-shrink: 0;
 }
 
-.filter-left {
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-    align-items: center;
-}
-
-.filter-right {
+.toolbar-left {
     display: flex;
     gap: 8px;
     align-items: center;
+    flex-wrap: wrap;
 }
 
-.total-logs {
+.toolbar-right {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.total-info {
     color: #606266;
     font-size: 13px;
-    margin-right: 4px;
+    margin-left: 4px;
 }
 
 /* ============================================================
-   2x2 网格布局 - 固定大小！
+   主体：左右布局
    ============================================================ */
-.log-grid {
+.main-body {
     flex: 1;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: 1fr 1fr;
-    /* 两行各占一半，固定比例 */
-    gap: 12px;
+    display: flex;
+    gap: 10px;
     min-height: 0;
-    /* 防止 flex 溢出 */
-    height: 0;
-    /* 配合 flex:1，让 grid 撑满但不过度 */
+    overflow: hidden;
 }
 
 /* ============================================================
-   每个日志窗口 - 高度由 grid 控制，不随内容变化
+   左侧串口列表
    ============================================================ */
-.log-window {
+.port-list {
+    width: 210px;
+    flex-shrink: 0;
     background: #1a1a2e;
     border-radius: 8px;
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    border: 2px solid #2a2a4a;
-    min-height: 0;
-    /* 防止内容撑开 */
-    height: 100%;
-    /* 完全填满 grid 单元格 */
-    transition: border-color 0.3s, box-shadow 0.3s, opacity 0.3s;
+    border: 1px solid #2a2a4a;
 }
 
-.log-window.window-highlight {
-    border-color: #F7C948;
-    box-shadow: 0 0 20px rgba(247, 201, 72, 0.4), inset 0 0 20px rgba(247, 201, 72, 0.05);
+.list-header {
+    padding: 10px 14px;
+    background: #16213e;
+    border-bottom: 1px solid #2a2a4a;
+    color: #c8d6e5;
+    font-size: 14px;
+    font-weight: 600;
+    display: flex;
+    justify-content: space-between;
+    flex-shrink: 0;
 }
 
-.log-window.window-dimmed {
-    opacity: 0.5;
-    border-color: #1a1a2e;
+.port-count {
+    background: #2a2a4a;
+    padding: 0 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    color: #8395a7;
 }
 
-/* ---- 窗口标题栏 ---- */
-.window-header {
+.port-item {
+    padding: 8px 14px;
+    cursor: pointer;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 6px 10px;
-    background: #16213e;
-    border-bottom: 1px solid #2a2a4a;
+    transition: background 0.15s;
     flex-shrink: 0;
-    gap: 6px;
-    flex-wrap: wrap;
-    min-height: 38px;
 }
 
-.header-left {
+.port-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.port-item.active {
+    background: rgba(64, 158, 255, 0.15);
+    border-left: 3px solid #409EFF;
+}
+
+.port-info {
     display: flex;
     align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    color: #c8d6e5;
-    flex-wrap: wrap;
-    flex: 1;
+    gap: 8px;
     min-width: 0;
 }
 
-.header-left .el-select {
-    flex-shrink: 0;
-}
-
-.header-right {
-    display: flex;
-    gap: 3px;
-    flex-shrink: 0;
-}
-
-.header-right .el-button {
-    padding: 2px 8px;
-    font-size: 12px;
-}
-
-/* ---- 状态点 ---- */
 .status-dot {
     display: inline-block;
-    width: 7px;
-    height: 7px;
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
     flex-shrink: 0;
-    transition: background-color 0.3s;
 }
 
 .status-dot.online {
@@ -556,109 +599,125 @@ onUnmounted(() => {
     box-shadow: 0 0 6px #00d2d3;
 }
 
+.status-dot.paused {
+    background: #feca57;
+    box-shadow: 0 0 6px #feca57;
+}
+
 .status-dot.offline {
     background: #ff6b6b;
     box-shadow: 0 0 6px #ff6b6b;
 }
 
-.device-label {
+.port-name {
+    color: #fff;
+    font-weight: 500;
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.port-label {
     color: #8395a7;
-    font-size: 11px;
+    font-size: 12px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 100px;
+    max-width: 70px;
+}
+
+.port-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
 }
 
 .log-count {
     color: #8395a7;
     font-size: 11px;
-    flex-shrink: 0;
 }
 
-.selected-badge {
-    font-size: 10px;
-    color: #F7C948;
-    background: rgba(247, 201, 72, 0.15);
-    padding: 0 6px;
-    border-radius: 4px;
-    border: 1px solid rgba(247, 201, 72, 0.3);
-    flex-shrink: 0;
+.active-badge {
+    color: #409EFF;
+    font-size: 12px;
+}
+
+.empty-list {
+    color: #576574;
+    text-align: center;
+    padding: 40px 0;
+    font-size: 13px;
 }
 
 /* ============================================================
-   窗口工具栏（关键词 + 备注）
+   右侧日志显示区
    ============================================================ */
-.window-toolbar {
-    display: flex;
-    gap: 6px;
-    padding: 4px 10px;
+.log-display {
+    flex: 1;
     background: #0f0f1a;
-    border-bottom: 1px solid #1a1a2e;
-    flex-shrink: 0;
-    flex-wrap: wrap;
-    min-height: 36px;
-}
-
-.window-toolbar .keyword-input {
-    flex: 2;
-    min-width: 70px;
-}
-
-.window-toolbar .remark-input {
-    flex: 1.5;
-    min-width: 50px;
-}
-
-.window-toolbar :deep(.el-input__wrapper) {
-    background: #1a1a2e;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
     border: 1px solid #2a2a4a;
-    box-shadow: none;
-    border-radius: 4px;
-    padding: 0 8px;
-    height: 28px;
+    min-width: 0;
 }
 
-.window-toolbar :deep(.el-input__wrapper:hover) {
-    border-color: #3a3a5e;
-}
-
-.window-toolbar :deep(.el-input__wrapper.is-focus) {
-    border-color: #409EFF;
-}
-
-.window-toolbar :deep(.el-input__inner) {
-    color: #c8d6e5;
-    font-size: 12px;
-    height: 28px;
-}
-
-.window-toolbar :deep(.el-input__inner::placeholder) {
+/* ---- 未选择状态 ---- */
+.no-selection {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
     color: #576574;
+    gap: 12px;
 }
 
-.window-toolbar :deep(.el-input__suffix) {
+.no-selection p {
+    margin: 0;
+    font-size: 16px;
+}
+
+/* ---- 日志工具栏 ---- */
+.log-toolbar {
     display: flex;
     align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    background: #1a1a2e;
+    border-bottom: 1px solid #2a2a4a;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+    min-height: 44px;
 }
 
-/* ============================================================
-   日志列表 - 占据所有剩余空间
-   ============================================================ */
+.log-toolbar .el-input {
+    flex-shrink: 0;
+}
+
+.log-toolbar .port-title {
+    color: #c8d6e5;
+    font-size: 13px;
+    font-weight: 500;
+    margin-left: auto;
+    white-space: nowrap;
+}
+
+/* ---- 日志列表 ---- */
 .log-container {
     flex: 1;
     overflow-y: auto;
-    padding: 3px 8px;
+    padding: 4px 14px;
     font-family: 'Consolas', 'Courier New', monospace;
-    font-size: 12px;
-    line-height: 1.5;
+    font-size: 13px;
+    line-height: 1.6;
     min-height: 0;
-    /* 重要：防止内容撑开 */
     background: #0f0f1a;
 }
 
 .log-container::-webkit-scrollbar {
-    width: 4px;
+    width: 5px;
 }
 
 .log-container::-webkit-scrollbar-track {
@@ -672,7 +731,7 @@ onUnmounted(() => {
 
 .log-line {
     display: flex;
-    gap: 8px;
+    gap: 12px;
     padding: 0 2px;
     white-space: nowrap;
     border-bottom: 1px solid rgba(255, 255, 255, 0.02);
@@ -685,15 +744,15 @@ onUnmounted(() => {
 .log-time {
     color: #576574;
     flex-shrink: 0;
-    min-width: 72px;
-    font-size: 11px;
+    min-width: 82px;
+    font-size: 12px;
 }
 
 .log-level {
     flex-shrink: 0;
-    min-width: 48px;
+    min-width: 58px;
     font-weight: 600;
-    font-size: 11px;
+    font-size: 12px;
 }
 
 .log-content {
@@ -701,7 +760,7 @@ onUnmounted(() => {
     overflow: hidden;
     text-overflow: ellipsis;
     color: #c8d6e5;
-    font-size: 12px;
+    font-size: 13px;
 }
 
 :deep(.highlight) {
@@ -718,71 +777,54 @@ onUnmounted(() => {
     align-items: center;
     height: 100%;
     color: #576574;
-    font-size: 13px;
+    font-size: 14px;
     font-family: 'Segoe UI', sans-serif;
-    padding: 20px 0;
+    padding: 40px 0;
 }
 
 /* ============================================================
-   响应式适配
+   响应式
    ============================================================ */
-@media (max-width: 900px) {
-    .log-grid {
-        grid-template-columns: 1fr;
-        grid-template-rows: 1fr 1fr 1fr 1fr;
+@media (max-width: 700px) {
+    .port-list {
+        width: 140px;
     }
 
-    .window-toolbar {
-        flex-direction: column;
+    .port-label {
+        max-width: 40px;
     }
 
-    .window-toolbar .keyword-input,
-    .window-toolbar .remark-input {
-        flex: 1;
-        width: 100%;
-    }
-}
-
-@media (max-width: 600px) {
-    .filter-bar {
+    .log-toolbar {
         flex-direction: column;
         align-items: stretch;
     }
 
-    .filter-left,
-    .filter-right {
-        flex-wrap: wrap;
+    .log-toolbar .el-input {
+        width: 100% !important;
     }
 
-    .header-left {
-        font-size: 11px;
-    }
-
-    .header-left .el-select {
-        width: 80px !important;
-    }
-
-    .device-label {
-        max-width: 60px;
+    .log-toolbar .port-title {
+        margin-left: 0;
+        text-align: center;
     }
 
     .log-line {
-        font-size: 11px;
-        gap: 4px;
+        font-size: 12px;
+        gap: 6px;
     }
 
     .log-time {
-        min-width: 56px;
-        font-size: 10px;
+        min-width: 60px;
+        font-size: 11px;
     }
 
     .log-level {
-        min-width: 36px;
-        font-size: 10px;
+        min-width: 40px;
+        font-size: 11px;
     }
 
     .log-content {
-        font-size: 11px;
+        font-size: 12px;
     }
 }
 </style>
