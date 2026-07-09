@@ -1,27 +1,34 @@
 package main
 
 import (
-	"flag"
+	"embed"
 	"fmt"
-	"os"
+	"io/fs"
+	"log"
+	"net/http"
 
-	"logmaster-agent/agent"
-	"logmaster-agent/agent/config"
+	"logmaster-agent/internal/auth"
+	"logmaster-agent/internal/config"
+	"logmaster-agent/internal/stream"
 )
 
+//go:embed static
+var staticFiles embed.FS
+
 func main() {
-	configPath := flag.String("config", "agent/config.yaml", "Path to config file")
-	flag.Parse()
-
-	cfg, err := config.Load(*configPath)
+	cfg := config.Load()
+	staticRoot, err := fs.Sub(staticFiles, "static")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
-		os.Exit(1)
+		log.Fatal(err)
 	}
 
-	ag := agent.New(cfg)
-	if err := ag.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Agent error: %v\n", err)
-		os.Exit(1)
-	}
+	mux := http.NewServeMux()
+	mux.Handle("/", http.FileServer(http.FS(staticRoot)))
+
+	authService := auth.NewService(cfg)
+	authService.RegisterRoutes(mux)
+	stream.RegisterRoutes(mux, authService)
+
+	fmt.Println("Server running at http://localhost:8080")
+	log.Fatal(http.ListenAndServe(":8080", mux))
 }
