@@ -80,11 +80,20 @@
             </p>
             <p v-else class="connection-status muted">尚未连接串口</p>
 
+            <div class="monitor-bar">
+                <div>
+                    <strong>实时规则监控</strong>
+                    <span v-for="rule in ruleDefinitions" :key="rule.name">{{ rule.name }}</span>
+                </div>
+                <div><b>{{ matchedCount }}</b> 次命中</div>
+            </div>
+
             <div ref="logContainer" class="log-console" aria-live="polite">
                 <div v-if="logs.length === 0" class="empty-log">连接串口后将在此显示实时日志</div>
-                <div v-for="(log, index) in logs" :key="`${log.time}-${index}`" class="log-line">
+                <div v-for="(log, index) in logs" :key="`${log.time}-${index}`" class="log-line" :class="{ matched: log.matchedRule }">
                     <span class="log-meta">[{{ log.time }} {{ log.level }}</span>
                     <span>{{ log.message }}</span>
+                    <em v-if="log.matchedRule">{{ log.matchedRule }}</em>
                 </div>
             </div>
         </section>
@@ -92,11 +101,11 @@
 </template>
 
 <script setup>
-import { nextTick, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 
 const newProjectName = ref('DR2860')
-const keywords = ref('ERROR, timeout, dropped')
+const keywords = ref('backtrace, FAT-fs, queue is full!!! drop frame')
 const projects = ref(['DR2860'])
 const ports = ref(['COM5', 'COM6', 'COM7'])
 const selectedPort = ref('COM5')
@@ -127,8 +136,22 @@ const sampleLogs = [
     ['INFO', 'Audio_Out_AACPlay-921]:read aac file, ret:3045, file_len:3045'],
     ['INFO', 'Audio_Out_AACPlay-934]:aac decoder init, sample:16000, ch:1, pcm_size:0!'],
     ['INFO', 'voice_play_loop_task-258]:[VOICE][play]voice play end = /mnt/app/voice/res/audio/public/key_tone.aac'],
-    ['INFO', 'filemng_monitor_thread-4511]:movie_mb:4219, total_mb:236131, avail_mb:231587, warning_mb:23613, total_full_threshold:23613']
+    ['INFO', 'filemng_monitor_thread-4511]:movie_mb:4219, total_mb:236131, avail_mb:231587, warning_mb:23613, total_full_threshold:23613'],
+    ['INFO', 'PowerMng]:wakeup source POWER_ID_SWRT, 2f0050080 : 00000001 00000000'],
+    ['ERROR', 'recorder]:queue is full!!! drop frame channel=0 seq=98231'],
+    ['ERROR', 'storage]:FAT-fs (mmcblk0p1): invalid access to FAT'],
+    ['WARN', 'storage]:speed monitor state cb, state = low_speed'],
+    ['ERROR', 'storage]:SD write detected frame loss for 15842ms'],
+    ['FATAL', 'signal]:Log_Signal_Data backtrace: #00 recorder_service']
 ]
+
+const ruleDefinitions = [
+    { name: '异常重启', patterns: ['POWER_ID_SWRT', '2f0050080 :'] },
+    { name: '系统崩溃', patterns: ['backtrace', 'Log_Signal_Data'] },
+    { name: '视频丢帧', patterns: ['queue is full!!! drop frame', 'SD write detected frame loss for'] },
+    { name: '存储异常', patterns: ['FAT-fs', 'STGMNG_SD_ERROR_STATE'] }
+]
+const matchedCount = computed(() => logs.value.filter((log) => log.matchedRule).length)
 
 let logTimer = null
 let sampleIndex = 0
@@ -178,7 +201,8 @@ function disconnectPort() {
 
 function appendLog() {
     const [level, message] = sampleLogs[sampleIndex % sampleLogs.length]
-    logs.value.push({ time: formatTime(new Date()), level, message })
+    const matchedRule = ruleDefinitions.find((rule) => rule.patterns.some((pattern) => message.includes(pattern)))?.name || ''
+    logs.value.push({ time: formatTime(new Date()), level, message, matchedRule })
     sampleIndex += 1
 
     if (logs.value.length > 500) logs.value.shift()
@@ -317,6 +341,30 @@ h1 {
     color: #a0a5ad;
 }
 
+.monitor-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 38px;
+    padding: 0 12px;
+    border: 1px solid #dce3ec;
+    border-bottom: 0;
+    border-radius: 4px 4px 0 0;
+    background: #f7f9fc;
+}
+
+.monitor-bar > div,
+.monitor-bar > div:first-child {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.monitor-bar strong { color: #455266; font-size: 12px; }
+.monitor-bar span { padding: 3px 7px; border-radius: 3px; background: #e9eef5; color: #667085; font-size: 10px; }
+.monitor-bar > div:last-child { color: #7a8493; font-size: 11px; }
+.monitor-bar b { color: #d95858; font-size: 14px; }
+
 .log-console {
     height: clamp(300px, 42vh, 430px);
     padding: 0 16px 14px;
@@ -324,7 +372,7 @@ h1 {
     color: #edf2fa;
     background: #121827;
     border: 1px solid #20293a;
-    border-radius: 4px;
+    border-radius: 0 0 4px 4px;
     box-sizing: border-box;
     font-family: Consolas, 'Courier New', monospace;
     font-size: 14px;
@@ -336,6 +384,9 @@ h1 {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
 }
+
+.log-line.matched { margin: 0 -16px; padding: 0 16px; background: rgba(217, 88, 88, 0.12); }
+.log-line em { margin-left: 10px; padding: 1px 5px; border-radius: 3px; background: #7f3038; color: #ffdfe2; font: 10px sans-serif; font-style: normal; }
 
 .log-meta {
     margin-right: 6px;
@@ -410,5 +461,8 @@ h1 {
         height: 360px;
         font-size: 12px;
     }
+
+    .monitor-bar { align-items: flex-start; flex-direction: column; gap: 8px; padding: 9px 10px; }
+    .monitor-bar > div:first-child { flex-wrap: wrap; }
 }
 </style>

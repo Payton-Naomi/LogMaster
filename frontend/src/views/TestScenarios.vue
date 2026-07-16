@@ -139,7 +139,7 @@ const createScenarios = () => [
         description: '识别看门狗复位、系统崩溃、内核异常等非预期重启行为',
         severity: 'critical',
         enabled: true,
-        keywords: ['watchdog reset', 'kernel panic', 'unexpected reboot']
+        keywords: ['POWER_ID_SWRT', '2f0050080 :', 'backtrace']
       },
       {
         id: 'factory-reset',
@@ -147,7 +147,7 @@ const createScenarios = () => [
         description: '检测测试过程中是否发生恢复出厂设置或用户数据被清除',
         severity: 'critical',
         enabled: true,
-        keywords: ['factory reset', 'wipe_data', 'restore default']
+        keywords: ['XA_GUIDER_SYSMODE', 'factory reset', 'restore default']
       },
       {
         id: 'slow-boot',
@@ -155,7 +155,7 @@ const createScenarios = () => [
         description: '统计启动阶段耗时，超过 60 秒时生成警告',
         severity: 'warning',
         enabled: true,
-        keywords: ['boot_completed', 'system ready']
+        keywords: ['starting', 'AccON', 'FL_BOOT_SYSMODE']
       },
       {
         id: 'shutdown-incomplete',
@@ -163,7 +163,7 @@ const createScenarios = () => [
         description: '检查关机关键服务是否按顺序退出并完成数据落盘',
         severity: 'warning',
         enabled: false,
-        keywords: ['shutdown timeout', 'sync failed']
+        keywords: ['need_power_off', 's|shutdown:', 'SYSTEMMNG_SHUTDOWN_REBOOT_E']
       }
     ]
   },
@@ -181,7 +181,7 @@ const createScenarios = () => [
         description: '检测编码帧序号不连续、写帧失败或帧率低于预期',
         severity: 'critical',
         enabled: true,
-        keywords: ['frame dropped', 'frame sequence gap', 'write frame failed']
+        keywords: ['queue is full!!! drop frame', 'SD write detected frame loss for']
       },
       {
         id: 'recording-interrupted',
@@ -189,7 +189,7 @@ const createScenarios = () => [
         description: '识别录像未正常封装、文件损坏或录制任务意外退出',
         severity: 'critical',
         enabled: true,
-        keywords: ['record stopped unexpectedly', 'muxer error', 'video corrupted']
+        keywords: ['File Start|File End', 'XA_MP4_Write failed', 'Failed to create falloc directory']
       },
       {
         id: 'sd-io-error',
@@ -197,7 +197,7 @@ const createScenarios = () => [
         description: '检测 I/O 错误、SD 卡掉卡、重新挂载和文件系统错误',
         severity: 'critical',
         enabled: true,
-        keywords: ['I/O error', 'sdcard unmounted', 'filesystem error']
+        keywords: ['sd state', 'STGMNG_SD_ERROR_STATE', 'FAT-fs']
       },
       {
         id: 'write-latency',
@@ -205,7 +205,7 @@ const createScenarios = () => [
         description: '统计视频块写入耗时，持续高延迟时生成警告',
         severity: 'warning',
         enabled: true,
-        keywords: ['write latency', 'slow storage']
+        keywords: ['speed monitor state cb, state', 'SD write detected frame loss for']
       }
     ]
   }

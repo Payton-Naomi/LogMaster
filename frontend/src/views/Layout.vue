@@ -18,6 +18,12 @@
           </el-icon>
           <span>日志上传</span>
         </el-menu-item>
+        <el-menu-item index="/log-records">
+          <el-icon>
+            <FolderOpened />
+          </el-icon>
+          <span>日志记录</span>
+        </el-menu-item>
         <el-menu-item index="/dashboard">
           <el-icon>
             <DataBoard />
@@ -29,12 +35,6 @@
             <Operation />
           </el-icon>
           <span>测试场景</span>
-        </el-menu-item>
-        <el-menu-item index="/serial-config">
-          <el-icon>
-            <Connection />
-          </el-icon>
-          <span>串口配置</span>
         </el-menu-item>
         <el-menu-item index="/tasks">
           <el-icon>
@@ -67,7 +67,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Monitor, DataBoard, Upload, Connection, List, Operation, Setting } from '@element-plus/icons-vue'
+import { Monitor, DataBoard, FolderOpened, Upload, List, Operation, Setting } from '@element-plus/icons-vue'
 import { getCurrentUser } from '@/api/auth'
 
 const router = useRouter()

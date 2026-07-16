@@ -119,6 +119,10 @@
               <el-option label="服务端应用日志" value="server" />
             </el-select>
           </el-form-item>
+          <div class="rule-preview">
+            <div><strong>{{ activeRuleProfile.name }}</strong><span>本次将检查 {{ activeRuleProfile.checks.length }} 类关键事件</span></div>
+            <div><span v-for="check in activeRuleProfile.checks" :key="check">{{ check }}</span></div>
+          </div>
           <div class="switch-row">
             <div>
               <strong>合并重复异常</strong>
@@ -239,7 +243,46 @@ const options = reactive({
   mergeDuplicates: true
 })
 
+const ruleProfiles = {
+  'device-default': {
+    name: '设备通用规则',
+    checks: ['系统崩溃', '应用崩溃', 'CPU 温度', 'SD 卡状态', '录像状态'],
+    errors: 8,
+    warnings: 23,
+    issues: [
+      { title: '系统崩溃调用栈', module: 'backtrace', lastSeen: '14:32:08', count: 2, level: 'error' },
+      { title: '应用程序异常退出', module: 'Log_Signal_Data', lastSeen: '14:31:42', count: 3, level: 'error' },
+      { title: 'CPU 温度偏高', module: 'cpu_temp', lastSeen: '14:29:17', count: 7, level: 'warning' }
+    ]
+  },
+  'power-cycle': {
+    name: '开关机测试规则',
+    checks: ['异常重启', '开机类型', '关机类型', 'ACC 状态', '文件系统异常'],
+    errors: 6,
+    warnings: 14,
+    issues: [
+      { title: '检测到看门狗异常重启', module: 'POWER_ID_SWRT', lastSeen: '14:32:08', count: 3, level: 'error' },
+      { title: 'UBIFS 文件系统异常', module: 'ubifs e', lastSeen: '14:31:42', count: 1, level: 'error' },
+      { title: '关机原因与预期不符', module: 'SYSTEMMNG_SHUTDOWN_VOL_LOW_E', lastSeen: '14:29:17', count: 2, level: 'warning' }
+    ]
+  },
+  'sd-card-aging': {
+    name: 'SD 卡挂测规则',
+    checks: ['视频丢帧', '累计丢帧', 'MP4 写入', 'SD 卡状态', '存储性能'],
+    errors: 19,
+    warnings: 38,
+    issues: [
+      { title: '视频编码队列丢帧', module: 'queue is full!!! drop frame', lastSeen: '14:32:08', count: 17, level: 'error' },
+      { title: '累计丢帧时间超过 15 秒', module: 'SD write detected frame loss for', lastSeen: '14:31:42', count: 2, level: 'error' },
+      { title: '存储卡性能不足', module: 'speed monitor state cb, state', lastSeen: '14:29:17', count: 9, level: 'warning' }
+    ]
+  },
+  android: { name: 'Android 系统日志', checks: ['ERROR', 'FATAL', 'ANR', 'Crash'], errors: 11, warnings: 26, issues: [] },
+  server: { name: '服务端应用日志', checks: ['ERROR', 'timeout', 'exception', 'failed'], errors: 9, warnings: 18, issues: [] }
+}
+
 const totalSize = computed(() => files.value.reduce((sum, file) => sum + file.size, 0))
+const activeRuleProfile = computed(() => ruleProfiles[options.rule] || ruleProfiles['device-default'])
 const currentFileName = computed(() => files.value.find((file) => file.status === 'parsing')?.name || '')
 const remainingSeconds = computed(() => Math.max(1, Math.ceil((100 - overallProgress.value) * 0.12)))
 const progressStage = computed(() => {
@@ -375,16 +418,13 @@ const finishParsing = () => {
     file.status = 'completed'
     file.progress = 100
   })
+  const profile = activeRuleProfile.value
   analysisResult.value = {
     totalLines: 184326,
-    errors: 128,
-    warnings: 486,
+    errors: profile.errors,
+    warnings: profile.warnings,
     duration: '8.4 s',
-    issues: [
-      { title: 'Camera service initialization failed', module: 'camera_service', lastSeen: '14:32:08', count: 46, level: 'error' },
-      { title: 'Network request timeout', module: 'network_manager', lastSeen: '14:31:42', count: 31, level: 'warning' },
-      { title: 'Storage space below threshold', module: 'storage_monitor', lastSeen: '14:29:17', count: 18, level: 'warning' }
-    ]
+    issues: profile.issues.length ? profile.issues : ruleProfiles['device-default'].issues
   }
   ElMessage.success('日志解析完成')
 }
@@ -635,6 +675,20 @@ onBeforeUnmount(() => {
   padding-bottom: 16px;
   border-bottom: 1px solid #edf0f3;
 }
+
+.rule-preview {
+  margin: -2px 0 15px;
+  padding: 10px 12px;
+  border: 1px solid #dce7f7;
+  border-radius: 4px;
+  background: #f7faff;
+}
+
+.rule-preview > div:first-child { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.rule-preview strong { color: #38587f; font-size: 12px; }
+.rule-preview > div:first-child span { color: #8390a0; font-size: 10px; }
+.rule-preview > div:last-child { display: flex; flex-wrap: wrap; gap: 5px; }
+.rule-preview > div:last-child span { padding: 3px 7px; border-radius: 3px; background: #e7eef8; color: #58708f; font-size: 10px; }
 
 .form-grid {
   display: grid;

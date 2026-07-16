@@ -52,8 +52,8 @@
       <section class="chart-panel">
         <div class="panel-heading">
           <div>
-            <h2>异常模块排行</h2>
-            <p>出现异常次数最多的功能模块</p>
+            <h2>关键异常排行</h2>
+            <p>根据记录仪日志关键字段聚合</p>
           </div>
         </div>
         <div ref="moduleChartRef" class="small-chart" />
@@ -187,8 +187,8 @@ const initCharts = () => {
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
     grid: { left: 12, right: 26, top: 10, bottom: 8, containLabel: true },
     xAxis: { type: 'value', splitLine: { lineStyle: { color: '#edf0f3' } }, axisLabel: { color: '#8a94a3' } },
-    yAxis: { type: 'category', data: ['UI Manager', 'Storage', 'Recorder', 'Network', 'Camera'], axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: '#596273' } },
-    series: [{ type: 'bar', data: [74, 96, 128, 167, 236], barWidth: 14, itemStyle: { color: '#d95858', borderRadius: [0, 3, 3, 0] }, label: { show: true, position: 'right', color: '#596273' } }]
+    yAxis: { type: 'category', data: ['应用崩溃', '文件系统异常', '异常重启', 'SD 卡异常', '视频丢帧'], axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: '#596273' } },
+    series: [{ type: 'bar', data: [32, 47, 68, 96, 128], barWidth: 14, itemStyle: { color: '#d95858', borderRadius: [0, 3, 3, 0] }, label: { show: true, position: 'right', color: '#596273' } }]
   })
 }
 
