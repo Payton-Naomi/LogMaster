@@ -12,18 +12,23 @@
           <span>实时日志查看</span>
         </el-menu-item>
 
-        <!-- 后续菜单项 -->
+        <el-menu-item index="/upload">
+          <el-icon>
+            <Upload />
+          </el-icon>
+          <span>日志上传</span>
+        </el-menu-item>
         <el-menu-item index="/dashboard">
           <el-icon>
             <DataBoard />
           </el-icon>
           <span>仪表板</span>
         </el-menu-item>
-        <el-menu-item index="/upload">
+        <el-menu-item index="/test-scenarios">
           <el-icon>
-            <Upload />
+            <Operation />
           </el-icon>
-          <span>日志上传</span>
+          <span>测试场景</span>
         </el-menu-item>
         <el-menu-item index="/serial-config">
           <el-icon>
@@ -62,7 +67,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Monitor, DataBoard, Upload, Connection, List, Setting } from '@element-plus/icons-vue'
+import { Monitor, DataBoard, Upload, Connection, List, Operation, Setting } from '@element-plus/icons-vue'
 import { getCurrentUser } from '@/api/auth'
 
 const router = useRouter()

@@ -35,6 +35,14 @@ const routes = [
         component: () => import('@/views/Dashboard.vue'), 
         meta: { title: '仪表板' } 
       },
+
+      // 测试场景
+      {
+        path: 'test-scenarios',
+        name: 'TestScenarios',
+        component: () => import('@/views/TestScenarios.vue'),
+        meta: { title: '测试场景' }
+      },
       
       // 日志上传
       { 
