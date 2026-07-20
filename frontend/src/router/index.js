@@ -51,13 +51,13 @@ const routes = [
         component: () => import('@/views/Upload.vue'), 
         meta: { title: '日志上传' } 
       },
-      
-      // 串口配置
-      { 
-        path: 'serial-config', 
-        name: 'SerialConfig', 
-        component: () => import('@/views/SerialConfig.vue'), 
-        meta: { title: '串口配置' } 
+
+      // 日志记录
+      {
+        path: 'log-records',
+        name: 'LogRecords',
+        component: () => import('@/views/LogRecords.vue'),
+        meta: { title: '日志记录' }
       },
       
       // 任务列表
