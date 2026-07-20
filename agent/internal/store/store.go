@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/Payton-Naomi/LogMaster/agent/internal/model"
+	"logmaster-agent/agent/internal/model"
 	_ "modernc.org/sqlite"
 )
 

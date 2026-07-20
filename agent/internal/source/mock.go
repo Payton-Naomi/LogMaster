@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Payton-Naomi/LogMaster/agent/internal/config"
+	"logmaster-agent/agent/internal/config"
 )
 
 type Mock struct{ cfg config.DeviceConfig }

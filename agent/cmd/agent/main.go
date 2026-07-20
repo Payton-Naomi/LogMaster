@@ -11,11 +11,11 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/Payton-Naomi/LogMaster/agent/internal/config"
-	"github.com/Payton-Naomi/LogMaster/agent/internal/logfile"
-	"github.com/Payton-Naomi/LogMaster/agent/internal/pipeline"
-	"github.com/Payton-Naomi/LogMaster/agent/internal/store"
-	"github.com/Payton-Naomi/LogMaster/agent/internal/upload"
+	"logmaster-agent/agent/internal/config"
+	"logmaster-agent/agent/internal/logfile"
+	"logmaster-agent/agent/internal/pipeline"
+	"logmaster-agent/agent/internal/store"
+	"logmaster-agent/agent/internal/upload"
 )
 
 func main() {

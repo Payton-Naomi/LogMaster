@@ -8,12 +8,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Payton-Naomi/LogMaster/agent/internal/config"
-	"github.com/Payton-Naomi/LogMaster/agent/internal/logfile"
-	"github.com/Payton-Naomi/LogMaster/agent/internal/model"
-	"github.com/Payton-Naomi/LogMaster/agent/internal/source"
-	"github.com/Payton-Naomi/LogMaster/agent/internal/store"
-	"github.com/Payton-Naomi/LogMaster/agent/internal/upload"
+	"logmaster-agent/agent/internal/config"
+	"logmaster-agent/agent/internal/logfile"
+	"logmaster-agent/agent/internal/model"
+	"logmaster-agent/agent/internal/source"
+	"logmaster-agent/agent/internal/store"
+	"logmaster-agent/agent/internal/upload"
 )
 
 type App struct {

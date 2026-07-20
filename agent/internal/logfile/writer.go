@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Payton-Naomi/LogMaster/agent/internal/model"
+	"logmaster-agent/agent/internal/model"
 )
 
 var unsafeName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)

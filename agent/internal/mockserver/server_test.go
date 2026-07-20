@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Payton-Naomi/LogMaster/agent/internal/model"
-	"github.com/Payton-Naomi/LogMaster/agent/internal/upload"
+	"logmaster-agent/agent/internal/model"
+	"logmaster-agent/agent/internal/upload"
 )
 
 func TestServerPersistsAndDeduplicatesBatch(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/Payton-Naomi/LogMaster/agent/internal/model"
+	"logmaster-agent/agent/internal/model"
 )
 
 var batchIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)

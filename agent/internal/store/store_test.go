@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Payton-Naomi/LogMaster/agent/internal/model"
+	"logmaster-agent/agent/internal/model"
 )
 
 func TestStoreRecoversClaimedBatchAndSequence(t *testing.T) {

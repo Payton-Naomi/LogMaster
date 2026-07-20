@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Payton-Naomi/LogMaster/agent/internal/model"
+	"logmaster-agent/agent/internal/model"
 )
 
 type Uploader interface {

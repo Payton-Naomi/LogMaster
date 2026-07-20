@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Payton-Naomi/LogMaster/agent/internal/config"
 	seriallib "go.bug.st/serial"
+	"logmaster-agent/agent/internal/config"
 )
 
 type Serial struct {

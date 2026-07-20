@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/Payton-Naomi/LogMaster/agent/internal/config"
+	"logmaster-agent/agent/internal/config"
 )
 
 type Source interface {

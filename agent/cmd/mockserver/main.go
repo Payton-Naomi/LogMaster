@@ -5,7 +5,7 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/Payton-Naomi/LogMaster/agent/internal/mockserver"
+	"logmaster-agent/agent/internal/mockserver"
 )
 
 func main() {
