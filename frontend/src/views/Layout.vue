@@ -68,7 +68,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Monitor, DataBoard, FolderOpened, Upload, List, Operation, Setting } from '@element-plus/icons-vue'
-import { getCurrentUser } from '@/api/auth'
+import { getCurrentUser, logout } from '@/api/auth'
 
 const router = useRouter()
 const userInfo = ref({ name: '加载中...' })
@@ -77,17 +77,14 @@ onMounted(async () => {
   try {
     const data = await getCurrentUser()
     userInfo.value = data
-    localStorage.setItem('user_info', JSON.stringify(data))
   } catch {
-    const stored = localStorage.getItem('user_info')
-    if (stored) try { userInfo.value = JSON.parse(stored) } catch { }
+    userInfo.value = { name: '未登录' }
   }
 })
 
 const handleLogout = () => {
-  ElMessageBox.confirm('确定退出吗？', '提示').then(() => {
-    localStorage.removeItem('access_token')
-    localStorage.removeItem('user_info')
+  ElMessageBox.confirm('确定退出吗？', '提示').then(async () => {
+    await logout()
     window.location.href = import.meta.env.VITE_FEISHU_LOGIN_URL
   }).catch(() => { })
 }

@@ -28,8 +28,10 @@ func NewService(cfg config.Config) *Service {
 
 func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/feishu-url", s.feishuURLHandler)
+	mux.HandleFunc("/api/auth/feishu-login", s.feishuLoginHandler)
 	mux.HandleFunc("/api/auth/callback", s.authCallbackHandler)
 	mux.HandleFunc("/api/auth/logout", s.logoutHandler)
+	mux.HandleFunc("/api/auth/me", s.userInfoHandler)
 	mux.HandleFunc("/api/user/info", s.userInfoHandler)
 }
 

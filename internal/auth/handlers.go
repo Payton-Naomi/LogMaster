@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
 
@@ -13,13 +14,34 @@ func (s *Service) feishuURLHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.config.FeishuAppID == "" || s.config.FeishuAppSecret == "" {
+	loginURL, err := s.prepareFeishuLogin(w)
+	if err != nil {
 		response.JSONStatus(w, http.StatusInternalServerError, response.APIResponse{
 			Code:    500,
-			Message: "FEISHU_APP_ID or FEISHU_APP_SECRET is not configured",
+			Message: err.Error(),
 			Data:    nil,
 		})
 		return
+	}
+	response.JSON(w, response.APIResponse{Code: 0, Message: "success", Data: map[string]string{"url": loginURL}})
+}
+
+func (s *Service) feishuLoginHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	loginURL, err := s.prepareFeishuLogin(w)
+	if err != nil {
+		response.JSONStatus(w, http.StatusInternalServerError, response.APIResponse{Code: 500, Message: err.Error(), Data: nil})
+		return
+	}
+	http.Redirect(w, r, loginURL, http.StatusFound)
+}
+
+func (s *Service) prepareFeishuLogin(w http.ResponseWriter) (string, error) {
+	if s.config.FeishuAppID == "" || s.config.FeishuAppSecret == "" {
+		return "", fmt.Errorf("FEISHU_APP_ID or FEISHU_APP_SECRET is not configured")
 	}
 
 	state := randomToken()
@@ -37,14 +59,7 @@ func (s *Service) feishuURLHandler(w http.ResponseWriter, r *http.Request) {
 	params.Set("app_id", s.config.FeishuAppID)
 	params.Set("redirect_uri", s.config.FeishuRedirectURI)
 	params.Set("state", state)
-
-	response.JSON(w, response.APIResponse{
-		Code:    0,
-		Message: "success",
-		Data: map[string]string{
-			"url": authURL + "?" + params.Encode(),
-		},
-	})
+	return authURL + "?" + params.Encode(), nil
 }
 
 func (s *Service) authCallbackHandler(w http.ResponseWriter, r *http.Request) {

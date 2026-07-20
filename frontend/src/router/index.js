@@ -1,16 +1,9 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 const FEISHU_LOGIN_URL = import.meta.env.VITE_FEISHU_LOGIN_URL
-const isDev = import.meta.env.MODE === 'development'
+let sessionVerified = false
 
 const routes = [
-  // 回调页面
-  {
-    path: '/callback',
-    name: 'Callback',
-    component: () => import('@/views/Callback.vue'),
-    meta: { requiresAuth: false }
-  },
   // 主布局
   {
     path: '/',
@@ -103,30 +96,27 @@ const router = createRouter({
 })
 
 // 路由守卫
-router.beforeEach((to, from, next) => {
-  const token = localStorage.getItem('access_token')
-
-  // 开发模式：自动注入模拟 Token
-  if (isDev && !token) {
-    localStorage.setItem('access_token', 'dev_mock_token_' + Date.now())
-    localStorage.setItem('user_info', JSON.stringify({ 
-      name: '本地开发', 
-      user_id: 'dev_user' 
-    }))
-    console.log('🔧 [开发模式] 已自动登录，跳过飞书认证')
+router.beforeEach(async (to, from, next) => {
+  if (!to.meta.requiresAuth) {
     next()
     return
   }
 
-  // 生产模式：正常权限校验
-  if (to.meta.requiresAuth) {
-    if (!token) {
-      window.location.href = FEISHU_LOGIN_URL
-    } else {
-      next()
-    }
-  } else {
+  if (sessionVerified) {
     next()
+    return
+  }
+
+  try {
+    const response = await fetch('/api/user/info', { credentials: 'same-origin' })
+    if (!response.ok) throw new Error('unauthorized')
+    const result = await response.json()
+    if (result.code !== 0) throw new Error(result.message)
+    sessionVerified = true
+    localStorage.setItem('user_info', JSON.stringify(result.data))
+    next()
+  } catch {
+    window.location.replace(FEISHU_LOGIN_URL)
   }
 })
 

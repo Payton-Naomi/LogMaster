@@ -1,5 +1,7 @@
 # LogMaster
 
+接口说明见 [docs/API接口文档.md](docs/API接口文档.md)，数据库说明见 [docs/数据库设计文档.md](docs/数据库设计文档.md)，服务器升级与部署见 [docs/服务器部署文档.md](docs/服务器部署文档.md)。
+
 软测日志分析平台 — 嵌入式行车记录仪串口日志的自动采集、集中存储、智能解析与可视化展示平台。
 
 ## 项目概述
@@ -54,22 +56,25 @@
 - Grafana Loki 3.x
 - Grafana 10.x
 
-### 后端启动
+### 单服务启动
 
-```bash
-cd backend
-cp config/config.yaml.example config/config.yaml
-# 编辑配置文件，填写数据库连接等信息
-go run main.go
+```powershell
+npm.cmd --prefix frontend install
+npm.cmd --prefix frontend run build
+$env:DATABASE_URL="postgres://logmaster:logmaster@127.0.0.1:5432/logmaster?sslmode=disable"
+go run .
 ```
 
-### 前端启动
+访问 `http://localhost:8080`，Go 会同时提供 Vue 前端和 `/api` 后端接口。
 
-```bash
+### 前端开发模式
+
+```powershell
 cd frontend
-npm install
-npm run dev
+npm.cmd run dev
 ```
+
+开发模式访问 `http://localhost:3000`，Vite 会将 `/api` 请求代理到 8080。
 
 ### Agent 部署
 
@@ -87,8 +92,7 @@ LogMaster/
 ├── agent/           # Go 串口日志采集 Agent
 ├── backend/         # Go Web 后端 (Gin)
 ├── frontend/        # Vue 3 前端
-├── docs/            # 文档
-└── docker-compose/  # 容器化部署配置
+└── docs/            # 文档
 ```
 
 ## 数据库表

@@ -1,2 +1,5 @@
 .trae/
 logmaster-agent
+data/
+.env
+.gocache/

@@ -6,18 +6,6 @@ const service = axios.create({
   timeout: 30000
 })
 
-// 请求拦截器
-service.interceptors.request.use(
-  (config) => {
-    const token = localStorage.getItem('access_token')
-    if (token) {
-      config.headers['Authorization'] = `Bearer ${token}`
-    }
-    return config
-  },
-  (error) => Promise.reject(error)
-)
-
 // 响应拦截器
 service.interceptors.response.use(
   (response) => {
@@ -33,7 +21,6 @@ service.interceptors.response.use(
       const { status } = error.response
       if (status === 401) {
         ElMessage.error('登录已过期，请重新登录')
-        localStorage.removeItem('access_token')
         // 跳转到飞书登录
         window.location.href = import.meta.env.VITE_FEISHU_LOGIN_URL
       } else {
