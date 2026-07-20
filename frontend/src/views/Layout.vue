@@ -4,21 +4,50 @@
       <div class="logo"><span>日志分析平台</span></div>
       <el-menu :default-active="$route.path" router class="menu" background-color="#001529" text-color="#fff"
         active-text-color="#409EFF">
-        <el-menu-item index="/dashboard"><el-icon>
-            <DataBoard />
-          </el-icon><span>仪表板</span></el-menu-item>
-        <el-menu-item index="/upload"><el-icon>
+        <!-- 第一个菜单项：实时日志查看 -->
+        <el-menu-item index="/realtime">
+          <el-icon>
+            <Monitor />
+          </el-icon>
+          <span>实时日志查看</span>
+        </el-menu-item>
+
+        <el-menu-item index="/upload">
+          <el-icon>
             <Upload />
-          </el-icon><span>日志上传</span></el-menu-item>
-        <el-menu-item index="/serial-config"><el-icon>
+          </el-icon>
+          <span>日志上传</span>
+        </el-menu-item>
+        <el-menu-item index="/dashboard">
+          <el-icon>
+            <DataBoard />
+          </el-icon>
+          <span>仪表板</span>
+        </el-menu-item>
+        <el-menu-item index="/test-scenarios">
+          <el-icon>
+            <Operation />
+          </el-icon>
+          <span>测试场景</span>
+        </el-menu-item>
+        <el-menu-item index="/serial-config">
+          <el-icon>
             <Connection />
-          </el-icon><span>串口配置</span></el-menu-item>
-        <el-menu-item index="/tasks"><el-icon>
+          </el-icon>
+          <span>串口配置</span>
+        </el-menu-item>
+        <el-menu-item index="/tasks">
+          <el-icon>
             <List />
-          </el-icon><span>任务列表</span></el-menu-item>
-        <el-menu-item index="/rules"><el-icon>
+          </el-icon>
+          <span>任务列表</span>
+        </el-menu-item>
+        <el-menu-item index="/rules">
+          <el-icon>
             <Setting />
-          </el-icon><span>规则配置</span></el-menu-item>
+          </el-icon>
+          <span>规则配置</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
     <el-container>
@@ -38,7 +67,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { DataBoard, Upload, Connection, List, Setting } from '@element-plus/icons-vue'
+import { Monitor, DataBoard, Upload, Connection, List, Operation, Setting } from '@element-plus/icons-vue'
 import { getCurrentUser } from '@/api/auth'
 
 const router = useRouter()
@@ -50,7 +79,6 @@ onMounted(async () => {
     userInfo.value = data
     localStorage.setItem('user_info', JSON.stringify(data))
   } catch {
-    // 若获取失败，使用缓存
     const stored = localStorage.getItem('user_info')
     if (stored) try { userInfo.value = JSON.parse(stored) } catch { }
   }
@@ -113,5 +141,8 @@ const handleLogout = () => {
 .main {
   background: #f0f2f5;
   padding: 20px;
+  height: calc(100vh - 80px);
+  /* 确保有高度 */
+  overflow: hidden;
 }
 </style>
