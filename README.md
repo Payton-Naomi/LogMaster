@@ -48,7 +48,7 @@
 
 ### 环境要求
 
-- Go 1.22+
+- Go 1.26.4
 - Node.js 20 LTS
 - PostgreSQL 15+
 - Grafana Loki 3.x
