@@ -1,3 +1,5 @@
+//go:build legacy_agent_config
+
 package config
 
 import (
@@ -20,6 +22,7 @@ type Config struct {
 
 type UploadConfig struct {
 	URL         string        `yaml:"url"`
+	Protocol    string        `yaml:"protocol"`
 	Interval    time.Duration `yaml:"-"`
 	BatchSize   int           `yaml:"batch_size"`
 	Timeout     time.Duration `yaml:"-"`
@@ -72,6 +75,10 @@ func Load(path string) (Config, error) {
 
 func (c *Config) applyDefaults() error {
 	var err error
+	c.Upload.Protocol = strings.ToLower(strings.TrimSpace(c.Upload.Protocol))
+	if c.Upload.Protocol == "" {
+		c.Upload.Protocol = "batch_json"
+	}
 	if c.Upload.RawInterval == "" {
 		c.Upload.Interval = 5 * time.Minute
 	} else if c.Upload.Interval, err = time.ParseDuration(c.Upload.RawInterval); err != nil {
@@ -137,6 +144,9 @@ func (c Config) Validate() error {
 	}
 	if c.Upload.URL == "" {
 		return errors.New("upload.url is required")
+	}
+	if c.Upload.Protocol != "batch_json" && c.Upload.Protocol != "multipart" {
+		return errors.New("upload.protocol must be batch_json or multipart")
 	}
 	if c.Upload.Interval <= 0 || c.Upload.Timeout <= 0 || c.Upload.BatchSize <= 0 {
 		return errors.New("upload interval, timeout, and batch_size must be positive")

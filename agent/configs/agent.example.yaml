@@ -1,0 +1,70 @@
+schema_version: 1
+
+agent:
+  id: "agent-local-01"
+  name: "LogMaster local Agent"
+  listen: "127.0.0.1:9000"
+  analysis_path: "/analyze"
+  analysis_token_env: "AGENT_ANALYSIS_TOKEN"
+  max_request_bytes: 5242880
+  analysis_concurrency: 2
+
+backend:
+  base_url: "http://127.0.0.1:8080/api"
+  health_path: "/health"
+  inspect_path: "/logs/inspect"
+  upload_path: "/logs/upload"
+  request_timeout: "180s"
+  project_name: "CHANGE_ME_PROJECT"
+  version: "CHANGE_ME_VERSION"
+  upload_interval: "5m"
+  inspect_before_upload: false
+
+serial:
+  discover_interval: "5s"
+  reconnect:
+    initial_delay: "1s"
+    multiplier: 2
+    max_delay: "30s"
+    jitter: 0.2
+  ports:
+    - enabled: false
+      device_sn: "CHANGE_ME_DEVICE_SN"
+      port_name: "COM3"
+      port_match:
+        vid: ""
+        pid: ""
+        usb_serial: ""
+        physical_location: ""
+      baud_rate: 115200
+      data_bits: 8
+      stop_bits: 1
+      parity: "none"
+      handshake: "none"
+      dtr: false
+      rts: false
+      read_timeout: "200ms"
+      write_timeout: "1s"
+      idle_gap: "10ms"
+      max_frame_bytes: 10240
+      encoding: "utf-8"
+      line_ending: "auto"
+      segment_max_age: "5m"
+      segment_max_bytes: 33554432
+
+spool:
+  directory: "./data/spool"
+  sqlite_path: "./data/agent.db"
+  queue_capacity: 2048
+  max_disk_bytes: 21474836480
+  uploaded_retention: "24h"
+
+ai:
+  mode: "rules"
+  timeout: "50s"
+  max_findings: 20
+  ollama_url: ""
+  ollama_model: ""
+  qwen_base_url: ""
+  qwen_api_key_env: ""
+  qwen_model: ""

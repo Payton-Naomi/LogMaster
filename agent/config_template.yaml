@@ -1,0 +1,72 @@
+schema_version: 1
+
+agent:
+  id: "CHANGE_ME_AGENT_ID"
+  name: "LogMaster four-channel collector"
+  listen: "127.0.0.1:9000"
+  analysis_path: "/analyze"
+  analysis_token_env: "AGENT_ANALYSIS_TOKEN"
+  max_request_bytes: 5242880
+  analysis_concurrency: 2
+
+backend:
+  base_url: "http://127.0.0.1:8080/api"
+  health_path: "/health"
+  inspect_path: "/logs/inspect"
+  upload_path: "/logs/upload"
+  request_timeout: "180s"
+  project_name: "CHANGE_ME_PROJECT"
+  version: "CHANGE_ME_VERSION"
+  upload_interval: "5m"
+  inspect_before_upload: false
+
+serial:
+  discover_interval: "5s"
+  reconnect: { initial_delay: "1s", multiplier: 2, max_delay: "30s", jitter: 0.2 }
+  ports:
+    # V1 acceptance channels. Replace COM names and stable USB identifiers.
+    - &channel_defaults
+      enabled: false
+      device_sn: "DUT-01"
+      port_name: "COM10"
+      port_match: { vid: "", pid: "", usb_serial: "", physical_location: "" }
+      baud_rate: 115200
+      data_bits: 8
+      stop_bits: 1
+      parity: "none"
+      handshake: "none"
+      dtr: false
+      rts: false
+      read_timeout: "200ms"
+      write_timeout: "1s"
+      idle_gap: "10ms"
+      max_frame_bytes: 10240
+      encoding: "utf-8"
+      line_ending: "auto"
+      segment_max_age: "5m"
+      segment_max_bytes: 33554432
+    - { <<: *channel_defaults, device_sn: "DUT-02", port_name: "COM12" }
+    - { <<: *channel_defaults, device_sn: "DUT-03", port_name: "COM14" }
+    - { <<: *channel_defaults, device_sn: "DUT-04", port_name: "COM16" }
+    # Reserved V1.1 channels. Keep disabled until expansion is validated.
+    - { <<: *channel_defaults, device_sn: "DUT-05-RESERVED", port_name: "COM18" }
+    - { <<: *channel_defaults, device_sn: "DUT-06-RESERVED", port_name: "COM20" }
+    - { <<: *channel_defaults, device_sn: "DUT-07-RESERVED", port_name: "COM22" }
+    - { <<: *channel_defaults, device_sn: "DUT-08-RESERVED", port_name: "COM24" }
+
+spool:
+  directory: "./data/spool"
+  sqlite_path: "./data/agent.db"
+  queue_capacity: 2048
+  max_disk_bytes: 21474836480
+  uploaded_retention: "24h"
+
+ai:
+  mode: "rules"
+  timeout: "50s"
+  max_findings: 20
+  ollama_url: ""
+  ollama_model: ""
+  qwen_base_url: ""
+  qwen_api_key_env: ""
+  qwen_model: ""

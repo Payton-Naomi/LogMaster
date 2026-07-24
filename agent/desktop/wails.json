@@ -1,0 +1,10 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "LogMasterCollector",
+  "outputfilename": "LogCollector.exe",
+  "frontend:install": "npm.cmd install",
+  "frontend:build": "npm.cmd run build",
+  "frontend:dev": "npm.cmd run dev",
+  "frontend:dir": "frontend",
+  "author": { "name": "LogMaster", "email": "" }
+}

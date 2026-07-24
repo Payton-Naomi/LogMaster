@@ -1,3 +1,5 @@
+//go:build legacy_agent_config
+
 package config
 
 import (
@@ -31,6 +33,9 @@ devices:
 	}
 	if cfg.Upload.Interval != 5*time.Minute || cfg.Upload.BatchSize != 500 {
 		t.Fatalf("unexpected upload defaults: %+v", cfg.Upload)
+	}
+	if cfg.Upload.Protocol != "batch_json" {
+		t.Fatalf("unexpected default protocol: %q", cfg.Upload.Protocol)
 	}
 	if cfg.Upload.Token != "secret" || cfg.Devices[0].MockInterval != 500*time.Millisecond {
 		t.Fatalf("unexpected config: %+v", cfg)
