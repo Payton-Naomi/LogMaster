@@ -1,0 +1,124 @@
+schema_version: 1
+
+# 关键字按“方案 -> 类别 -> 独立关键字”维护。
+# mode 通常写 contains；case_sensitive 只有严格区分大小写时才写 true。
+profiles:
+  - id: novatek-log-fields
+    name: 联咏项目日志关键字
+    groups:
+      - id: power-cycle-legacy
+        name: 开关机1
+        scope: 老项目
+        rules:
+          - { id: power-cycle-starting, name: starting, match: starting, mode: contains, case_sensitive: false }
+          - { id: power-cycle-need-power-off, name: need_power_off, match: need_power_off, mode: contains, case_sensitive: false }
+      - id: power-cycle-new
+        name: 开关机2
+        scope: 新项目，如DR2820等
+        rules:
+          - { id: power-cycle-shutdown, name: 'shutdown:', match: 'shutdown:', mode: contains, case_sensitive: false }
+      - id: acc-state
+        name: ACC状态
+        scope: 自研通用
+        rules:
+          - { id: acc-off, name: AccOff, match: AccOff, mode: contains, case_sensitive: false }
+          - { id: acc-on, name: AccON, match: AccON, mode: contains, case_sensitive: false }
+          - { id: acc-transition, name: trans to, match: trans to, mode: contains, case_sensitive: false }
+          - { id: acc-generic, name: acc, match: acc, mode: contains, case_sensitive: false }
+      - { id: lapse-mode, name: 进入缩时, scope: 自研通用, rules: [{ id: lapse-mode, name: ready to enter lapse mode, match: ready to enter lapse mode, mode: contains, case_sensitive: false }] }
+      - { id: sd-card-state-log, name: SD卡状态日志, scope: 自研通用, rules: [{ id: sd-card-state, name: sd state, match: sd state, mode: contains, case_sensitive: false }] }
+      - { id: system-crash, name: 系统崩溃, scope: 自研通用, rules: [{ id: system-crash, name: backtrace, match: backtrace, mode: contains, case_sensitive: false }] }
+      - { id: adas, name: ADAS相关, scope: 自研通用, rules: [{ id: adas, name: zdd Adas, match: zdd Adas, mode: contains, case_sensitive: false }] }
+      - { id: voice-play, name: 声音播放, scope: 自研通用, rules: [{ id: voice-play, name: voice play, match: voice play, mode: contains, case_sensitive: false }] }
+      - { id: wifi-info, name: Wi-Fi信息, scope: 自研通用, rules: [{ id: wifi-info, name: 'Wifi--------', match: 'Wifi--------', mode: contains, case_sensitive: false }] }
+      - id: video-recording
+        name: 视频录制
+        scope: 自研通用
+        rules:
+          - { id: video-file-start, name: File Start, match: File Start, mode: contains, case_sensitive: false }
+          - { id: video-file-end, name: File End, match: File End, mode: contains, case_sensitive: false }
+      - { id: rear-camera, name: 后录相关, scope: 自研通用, rules: [{ id: rear-camera-ahd, name: AHD, match: AHD, mode: contains, case_sensitive: false }] }
+      - { id: bluetooth, name: 蓝牙相关, scope: 自研通用, rules: [{ id: bluetooth, name: blemng, match: blemng, mode: contains, case_sensitive: false }] }
+      - { id: ota, name: OTA, scope: 自研通用, rules: [{ id: ota, name: OTA start, match: OTA start, mode: contains, case_sensitive: false }] }
+      - { id: gps, name: GPS, scope: 自研通用, rules: [{ id: gps, name: 'RMC:', match: 'RMC:', mode: contains, case_sensitive: false }] }
+      - { id: cpu-temperature, name: CPU温度, scope: 自研通用, rules: [{ id: cpu-temperature, name: cpu_temp, match: cpu_temp, mode: contains, case_sensitive: false }] }
+      - { id: watchdog-restart, name: 触发看门狗重启, scope: 'DR4800、DR5800', rules: [{ id: watchdog-restart, name: '2f0050080', match: '2f0050080', mode: contains, case_sensitive: false }] }
+      - { id: video-drop-frame, name: 视频丢帧, scope: 自研通用, rules: [{ id: video-drop-frame, name: 'queue is full!!! drop frame', match: 'queue is full!!! drop frame', mode: contains, case_sensitive: false }] }
+      - { id: application-crash, name: 应用程序崩溃, scope: 自研通用, rules: [{ id: application-crash, name: Log_Signal_Data, match: Log_Signal_Data, mode: contains, case_sensitive: false }] }
+      - { id: fatigue-reminder, name: 疲劳驾驶提醒, scope: 自研通用, rules: [{ id: fatigue-reminder, name: adas_driver_take_a_rest.aac, match: adas_driver_take_a_rest.aac, mode: contains, case_sensitive: false }] }
+      - id: capacitor-power-error
+        name: 开关机通断电判断是否有异常
+        scope: 自研电容项目
+        rules:
+          - { id: capacitor-ubi0, name: ubi0 e, match: ubi0 e, mode: contains, case_sensitive: false }
+          - { id: capacitor-ubi1, name: ubi1 e, match: ubi1 e, mode: contains, case_sensitive: false }
+          - { id: capacitor-ubi2, name: ubi2 e, match: ubi2 e, mode: contains, case_sensitive: false }
+          - { id: capacitor-uib3, name: uib3 e, match: uib3 e, mode: contains, case_sensitive: false }
+          - { id: capacitor-ubifs, name: ubifs e, match: ubifs e, mode: contains, case_sensitive: false }
+      - { id: format-storage-card, name: '提示：请格式化存储卡', scope: 自研通用, rules: [{ id: format-storage-card, name: 's_FacParam.sd_state = 2', match: 's_FacParam.sd_state   = 2', mode: contains, case_sensitive: false }] }
+      - { id: unrecognized-storage-files, name: '提示：卡内存在非记录仪文件', scope: 自研通用, rules: [{ id: unrecognized-storage-files, name: 's_FacParam.sd_state = 11', match: 's_FacParam.sd_state   = 11', mode: contains, case_sensitive: false }] }
+      - { id: storage-performance-low, name: '提示：性能不足建议更换', scope: 自研通用, rules: [{ id: storage-performance-low, name: 'speed monitor state cb, state', match: 'speed monitor state cb, state', mode: contains, case_sensitive: false }] }
+      - { id: mp4-write-failed, name: 写MP4文件报错, scope: 自研通用, rules: [{ id: mp4-write-failed, name: XA_MP4_Write failed, match: XA_MP4_Write failed, mode: contains, case_sensitive: false }] }
+      - { id: emergency-recording-stuck, name: 录制紧急视频卡住, scope: 自研通用, rules: [{ id: emergency-recording-stuck, name: 'Failed to create falloc directory: /mnt/sd/.tmp', match: 'Failed to create falloc directory: /mnt/sd/.tmp', mode: contains, case_sensitive: false }] }
+      - { id: filesystem-error, name: 查看系统文件是否有异常, scope: 自研通用, rules: [{ id: filesystem-error, name: FAT-fs, match: FAT-fs, mode: contains, case_sensitive: false }] }
+      - { id: frame-loss-15-seconds, name: 30秒内累计丢帧达到15秒, scope: 自研通用, rules: [{ id: frame-loss-15-seconds, name: SD write detected frame loss for, match: SD write detected frame loss for, mode: contains, case_sensitive: false }] }
+      - id: system-mode
+        name: 系统模式
+        scope: 自研通用
+        rules:
+          - { id: sysmode-log-field, name: FL_BOOT_SYSMODE, match: FL_BOOT_SYSMODE, mode: contains, case_sensitive: true }
+          - { id: sysmode-normal, name: 'XA_NORMAL_SYSMODE（正常模式）', match: XA_NORMAL_SYSMODE, mode: contains, case_sensitive: true }
+          - { id: sysmode-guider, name: 'XA_GUIDER_SYSMODE（新手引导）', match: XA_GUIDER_SYSMODE, mode: contains, case_sensitive: true }
+          - { id: sysmode-factory, name: 'XA_FAC_SYSMODE（厂测模式）', match: XA_FAC_SYSMODE, mode: contains, case_sensitive: true }
+          - { id: sysmode-factory-smt, name: 'XA_FAC_SMT_SYSMODE（厂测单板测试不带sensor）', match: XA_FAC_SMT_SYSMODE, mode: contains, case_sensitive: true }
+          - { id: sysmode-mult, name: XA_SYSMODE_MULT, match: XA_SYSMODE_MULT, mode: contains, case_sensitive: true }
+          - { id: sysmode-enum-type, name: XA_BOOT_SYSMODE_E, match: XA_BOOT_SYSMODE_E, mode: contains, case_sensitive: true }
+      - id: wake-source
+        name: 开机类型
+        scope: 自研通用
+        rules:
+          - { id: wake-psw1, name: 'POWER_ID_PSW1（电源键）', match: POWER_ID_PSW1, mode: contains, case_sensitive: true }
+          - { id: wake-psw2, name: 'POWER_ID_PSW2（ACC输入）', match: POWER_ID_PSW2, mode: contains, case_sensitive: true }
+          - { id: wake-psw3, name: 'POWER_ID_PSW3（USB输入）', match: POWER_ID_PSW3, mode: contains, case_sensitive: true }
+          - { id: wake-psw4, name: 'POWER_ID_PSW4（G-sensor）', match: POWER_ID_PSW4, mode: contains, case_sensitive: true }
+          - { id: wake-hwrt, name: 'POWER_ID_HWRT（硬件复位定时器）', match: POWER_ID_HWRT, mode: contains, case_sensitive: true }
+          - { id: wake-swrt, name: 'POWER_ID_SWRT（看门狗定时器）', match: POWER_ID_SWRT, mode: contains, case_sensitive: true }
+          - { id: wake-4g, name: 'POWER_ID_4G（4G信号唤醒）', match: POWER_ID_4G, mode: contains, case_sensitive: true }
+          - { id: wake-enum-type, name: XA_SYSTEM_WAKUP_SOURCE_E, match: XA_SYSTEM_WAKUP_SOURCE_E, mode: contains, case_sensitive: true }
+      - id: shutdown-type
+        name: 关机类型
+        scope: 自研通用
+        rules:
+          - { id: shutdown-high-temp, name: 'SYSTEMMNG_SHUTDOWN_HIGH_TEMP_E（高温）', match: SYSTEMMNG_SHUTDOWN_HIGH_TEMP_E, mode: contains, case_sensitive: true }
+          - { id: shutdown-power-plugout, name: 'SYSTEMMNG_SHUTDOWN_POWER_PLUGOUT_E（外部电源断开）', match: SYSTEMMNG_SHUTDOWN_POWER_PLUGOUT_E, mode: contains, case_sensitive: true }
+          - { id: shutdown-acc-off, name: 'SYSTEMMNG_SHUTDOWN_ACC_OFF_E（ACC OFF）', match: SYSTEMMNG_SHUTDOWN_ACC_OFF_E, mode: contains, case_sensitive: true }
+          - { id: shutdown-vol-low, name: 'SYSTEMMNG_SHUTDOWN_VOL_LOW_E（低电关机）', match: SYSTEMMNG_SHUTDOWN_VOL_LOW_E, mode: contains, case_sensitive: true }
+          - { id: shutdown-nomove, name: 'SYSTEMMNG_SHUTDOWN_NOMOVE_E（持续无移动）', match: SYSTEMMNG_SHUTDOWN_NOMOVE_E, mode: contains, case_sensitive: true }
+          - { id: shutdown-key-press, name: 'SYSTEMMNG_SHUTDOWN_KEY_PRESS_E（长按键）', match: SYSTEMMNG_SHUTDOWN_KEY_PRESS_E, mode: contains, case_sensitive: true }
+          - { id: shutdown-sd-plugout, name: 'SYSTEMMNG_SHUTDOWN_SD_PLUGOUT_E（SD卡移除）', match: SYSTEMMNG_SHUTDOWN_SD_PLUGOUT_E, mode: contains, case_sensitive: true }
+          - { id: shutdown-parking-enter, name: 'SYSTEMMNG_SHUTDOWN_PRKING_ENTER_E（进入停车监控）', match: SYSTEMMNG_SHUTDOWN_PRKING_ENTER_E, mode: contains, case_sensitive: true }
+          - { id: shutdown-parking-end, name: 'SYSTEMMNG_SHUTDOWN_PRKING_END_E（停车监控结束）', match: SYSTEMMNG_SHUTDOWN_PRKING_END_E, mode: contains, case_sensitive: true }
+          - { id: shutdown-reboot, name: 'SYSTEMMNG_SHUTDOWN_REBOOT_E（重启）', match: SYSTEMMNG_SHUTDOWN_REBOOT_E, mode: contains, case_sensitive: true }
+          - { id: shutdown-car-battery-low, name: 'SYSTEMMNG_SHUTDOWN_CAR_BATTERY_LOW_E（汽车电瓶低电）', match: SYSTEMMNG_SHUTDOWN_CAR_BATTERY_LOW_E, mode: contains, case_sensitive: true }
+          - { id: shutdown-4g, name: 'SYSTEMMNG_SHUTDOWN_4G_POWEROFF_E（4G关机）', match: SYSTEMMNG_SHUTDOWN_4G_POWEROFF_E, mode: contains, case_sensitive: true }
+          - { id: shutdown-parking-duration, name: 'SYSTEMMNG_SHUTDOWN_PARKING_MONITOR_DURATION_E（停车监控时长结束）', match: SYSTEMMNG_SHUTDOWN_PARKING_MONITOR_DURATION_E, mode: contains, case_sensitive: true }
+          - { id: shutdown-mult, name: SYSTEMMNG_SHUTDOWN_MULT, match: SYSTEMMNG_SHUTDOWN_MULT, mode: contains, case_sensitive: true }
+          - { id: shutdown-enum-type, name: XA_SYSTEMMNG_SHUTDOWN_TYPE_E, match: XA_SYSTEMMNG_SHUTDOWN_TYPE_E, mode: contains, case_sensitive: true }
+      - id: sd-state-enum
+        name: SD卡状态枚举
+        scope: 自研通用
+        rules:
+          - { id: sd-noexist, name: STGMNG_SD_NOEXSIT_STATE, match: STGMNG_SD_NOEXSIT_STATE, mode: contains, case_sensitive: true }
+          - { id: sd-insert, name: STGMNG_SD_INSERT_STATE, match: STGMNG_SD_INSERT_STATE, mode: contains, case_sensitive: true }
+          - { id: sd-need-format, name: STGMNG_SD_NEEDFORMAT_STATE, match: STGMNG_SD_NEEDFORMAT_STATE, mode: contains, case_sensitive: true }
+          - { id: sd-formatting, name: STGMNG_SD_FORMATING_STATE, match: STGMNG_SD_FORMATING_STATE, mode: contains, case_sensitive: true }
+          - { id: sd-error, name: STGMNG_SD_ERROR_STATE, match: STGMNG_SD_ERROR_STATE, mode: contains, case_sensitive: true }
+          - { id: sd-fs-ok, name: STGMNG_SD_FSOK_STATE, match: STGMNG_SD_FSOK_STATE, mode: contains, case_sensitive: true }
+          - { id: sd-low-level, name: STGMNG_SD_LOWLEVEL_STATE, match: STGMNG_SD_LOWLEVEL_STATE, mode: contains, case_sensitive: true }
+          - { id: sd-low-capacity, name: STGMNG_SD_LOWCAP_STATE, match: STGMNG_SD_LOWCAP_STATE, mode: contains, case_sensitive: true }
+          - { id: sd-plugout, name: STGMNG_SD_PLUGOUT_STATE, match: STGMNG_SD_PLUGOUT_STATE, mode: contains, case_sensitive: true }
+          - { id: sd-connecting, name: STGMNG_SD_CONNECTING_STATE, match: STGMNG_SD_CONNECTING_STATE, mode: contains, case_sensitive: true }
+          - { id: sd-checking, name: STGMNG_SD_CHECKING_STATE, match: STGMNG_SD_CHECKING_STATE, mode: contains, case_sensitive: true }
+          - { id: sd-unrecognized-files, name: STGMNG_SD_UNRECOGNIZED_FILES, match: STGMNG_SD_UNRECOGNIZED_FILES, mode: contains, case_sensitive: true }
+          - { id: sd-state-built, name: STGMNG_SD_STATE_BULT, match: STGMNG_SD_STATE_BULT, mode: contains, case_sensitive: true }
+          - { id: sd-state-enum-type, name: STGMNG_SD_STATE_E, match: STGMNG_SD_STATE_E, mode: contains, case_sensitive: true }

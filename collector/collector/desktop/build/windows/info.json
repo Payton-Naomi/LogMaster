@@ -1,0 +1,19 @@
+{
+	"fixed": {
+		"file_version": "{{.Info.ProductVersion}}",
+		"product_version": "{{.Info.ProductVersion}}"
+	},
+	"info": {
+		"0804": {
+			"FileVersion": "0.0.8",
+			"ProductVersion": "0.0.8",
+			"CompanyName": "上海七十迈数字科技有限公司",
+			"FileDescription": "LogMaster采集端",
+			"InternalName": "LogMasterCollector",
+			"LegalCopyright": "Copyright 2026 上海七十迈数字科技有限公司",
+			"OriginalFilename": "LogCollector.exe",
+			"ProductName": "LogMaster采集端",
+			"Comments": "串口日志采集、保存、检索与上传"
+		}
+	}
+}

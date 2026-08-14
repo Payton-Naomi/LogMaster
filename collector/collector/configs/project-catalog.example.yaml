@@ -1,0 +1,37 @@
+schema_version: 1
+projects:
+  - id: project-a
+    name: Project A
+    versions:
+      - V1.0.0
+      - V1.1.0
+    tasks:
+      - id: normal-aging
+        name: 普通挂测
+        type: normal
+        keyword_profiles:
+          - id: default-errors
+            name: 默认异常关键字
+            rules:
+              - id: reboot
+                name: 设备重启
+                match: reboot
+                mode: contains
+                case_sensitive: false
+              - id: timeout
+                name: 通信超时
+                match: timeout|timed out
+                mode: regex
+                case_sensitive: false
+      - id: connectivity
+        name: 连接稳定性专项
+        type: special
+        keyword_profiles:
+          - id: connectivity-events
+            name: 连接事件
+            rules:
+              - id: disconnect
+                name: 连接断开
+                match: disconnect
+                mode: contains
+                case_sensitive: false

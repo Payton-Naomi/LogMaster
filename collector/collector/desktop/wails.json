@@ -1,0 +1,17 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "LogMasterCollector",
+  "outputfilename": "LogCollector.exe",
+  "frontend:install": "npm.cmd install",
+  "frontend:build": "npm.cmd run build",
+  "frontend:dev": "npm.cmd run dev",
+  "frontend:dir": "frontend",
+  "author": { "name": "上海七十迈数字科技有限公司", "email": "" },
+  "info": {
+    "companyName": "上海七十迈数字科技有限公司",
+    "productName": "LogMaster采集端",
+    "productVersion": "0.0.10",
+    "copyright": "Copyright 2026 上海七十迈数字科技有限公司",
+    "comments": "串口日志采集、保存、检索与上传"
+  }
+}

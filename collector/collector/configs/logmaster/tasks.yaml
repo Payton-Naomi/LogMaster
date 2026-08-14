@@ -1,0 +1,18 @@
+schema_version: 1
+
+# 一行一个测试任务。普通挂测使用 normal，其余专项使用 special。
+tasks:
+  - { id: full-function, name: 全功能测试, type: special }
+  - { id: normal-aging, name: 普通挂测, type: normal }
+  - { id: automated-aging, name: 设备自动化挂测专项, type: special }
+  - { id: power-cycle, name: 开关机专项, type: special }
+  - { id: factory-mode, name: 工模专项, type: special }
+  - { id: sd-aging-voice-stress, name: 'SD卡老化/语音压测专项', type: special }
+  - { id: sd-compatibility, name: SD卡兼容专项, type: special }
+  - { id: super-capacitor, name: 超级电容专项, type: special }
+  - { id: high-low-temperature, name: 高低温专项, type: special }
+  - { id: ota-upgrade, name: OTA升级专项, type: special }
+  - { id: gps, name: GPS专项, type: special }
+  - { id: wifi-throughput, name: WiFi吞吐量专项, type: special }
+  - { id: frame-loss, name: 丢帧漏秒专项, type: special }
+  - { id: acoustics, name: 声学专项, type: special }

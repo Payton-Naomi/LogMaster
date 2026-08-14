@@ -1,0 +1,45 @@
+# env files
+.env
+.env.*
+*.env
+!*.env.example
+
+# frontend
+node_modules/
+dist/
+
+# go
+*.exe
+*.dll
+*.so
+*.test
+.gocache/
+
+# runtime data
+data/
+logs/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# test coverage / profiling
+coverage.out
+*.cover.out
+*.prof
+
+# log files
+*.log
+
+# editor temp files
+*.swp
+*~
+*.tmp
+
+# AI tools
+.trae/
+.workbuddy/

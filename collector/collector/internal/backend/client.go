@@ -1,0 +1,552 @@
+package backend
+
+import (
+	"bytes"
+	"compress/gzip"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"mime/multipart"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"time"
+	"unicode/utf8"
+
+	"logmaster-agent/agent/internal/spool"
+)
+
+const maxResponseBytes = 1 << 20
+
+type FailureKind string
+
+const (
+	Retryable FailureKind = "retryable"
+	Uncertain FailureKind = "uncertain"
+	Rejected  FailureKind = "rejected"
+	Pause     FailureKind = "pause"
+	Split     FailureKind = "split"
+)
+
+type Failure struct {
+	Kind       FailureKind
+	StatusCode int
+	RetryAfter time.Duration
+	Message    string
+	Err        error
+}
+
+func (e *Failure) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("%s: %v", e.Message, e.Err)
+	}
+	return e.Message
+}
+
+func (e *Failure) Unwrap() error { return e.Err }
+
+type Config struct {
+	BaseURL       string
+	HealthPath    string
+	InspectPath   string
+	UploadPath    string
+	Timeout       time.Duration
+	Authorization string
+	Gzip          bool
+}
+
+const BuiltinUploadToken = "logmaster-internal-collector-v1"
+
+type Client struct {
+	baseURL       string
+	healthPath    string
+	inspectPath   string
+	uploadPath    string
+	authorization string
+	gzip          bool
+	http          *http.Client
+}
+
+type APIResponse[T any] struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    T      `json:"data"`
+}
+
+type UploadAccepted struct {
+	UploadID        string `json:"upload_id"`
+	TaskID          string `json:"task_id"`
+	QueryCode       string `json:"query_code,omitempty"`
+	Status          string `json:"status"`
+	FileCount       int    `json:"file_count"`
+	ClientRequestID string `json:"client_request_id,omitempty"`
+}
+
+type UploadSessionRequest struct {
+	ClientRequestID     string   `json:"client_request_id"`
+	DeviceID            string   `json:"device_id"`
+	Name                string   `json:"name"`
+	PortName            string   `json:"port_name"`
+	BaudRate            int      `json:"baud_rate"`
+	DataBits            int      `json:"data_bits"`
+	StopBits            int      `json:"stop_bits"`
+	Parity              string   `json:"parity"`
+	Handshake           string   `json:"handshake"`
+	DTR                 bool     `json:"dtr"`
+	RTS                 bool     `json:"rts"`
+	ProjectID           string   `json:"project_id"`
+	ProjectName         string   `json:"project_name"`
+	Version             string   `json:"version"`
+	TestTaskID          string   `json:"test_task_id"`
+	TestTaskName        string   `json:"test_task_name"`
+	UploaderName        string   `json:"uploader_name"`
+	Remark              string   `json:"remark"`
+	ScenarioIDs         []string `json:"scenario_ids"`
+	KeywordProfileID    string   `json:"keyword_profile_id"`
+	KeywordRuleIDs      []string `json:"keyword_rule_ids"`
+	KeywordMatching     bool     `json:"keyword_matching_enabled"`
+	SaveEnabled         bool     `json:"save_enabled"`
+	UploadEnabled       bool     `json:"upload_enabled"`
+	NoLogTimeoutSeconds int      `json:"no_log_timeout_seconds"`
+	VID                 string   `json:"vid"`
+	PID                 string   `json:"pid"`
+	USBSerial           string   `json:"usb_serial"`
+	Location            string   `json:"location"`
+	CollectorVersion    string   `json:"collector_version"`
+	Timezone            string   `json:"timezone"`
+}
+
+type UploadSessionAccepted struct {
+	UploadSessionID string `json:"upload_session_id"`
+	QueryCode       string `json:"query_code"`
+	ClientRequestID string `json:"client_request_id"`
+	Status          string `json:"status"`
+}
+
+func New(cfg Config) *Client {
+	authorization := strings.TrimSpace(cfg.Authorization)
+	if authorization == "" {
+		authorization = BuiltinUploadToken
+	}
+	return &Client{
+		baseURL: strings.TrimRight(cfg.BaseURL, "/"), healthPath: cfg.HealthPath,
+		inspectPath: cfg.InspectPath, uploadPath: cfg.UploadPath,
+		authorization: authorization,
+		gzip:          cfg.Gzip,
+		http:          &http.Client{Timeout: cfg.Timeout},
+	}
+}
+
+func (c *Client) Health(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+c.healthPath, nil)
+	if err != nil {
+		return err
+	}
+	c.authorize(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	var envelope APIResponse[struct {
+		Status string `json:"status"`
+	}]
+	if err := decodeJSON(resp.Body, &envelope); err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK || envelope.Code != 0 || envelope.Data.Status != "ok" {
+		return fmt.Errorf("backend health rejected: HTTP %d code=%d status=%q", resp.StatusCode, envelope.Code, envelope.Data.Status)
+	}
+	return nil
+}
+
+func (c *Client) CreateUploadSession(ctx context.Context, input UploadSessionRequest) (UploadSessionAccepted, error) {
+	body, err := json.Marshal(input)
+	if err != nil {
+		return UploadSessionAccepted{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/upload-sessions", bytes.NewReader(body))
+	if err != nil {
+		return UploadSessionAccepted{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.authorize(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return UploadSessionAccepted{}, err
+	}
+	defer resp.Body.Close()
+	var envelope APIResponse[UploadSessionAccepted]
+	if err := decodeJSON(resp.Body, &envelope); err != nil {
+		return UploadSessionAccepted{}, err
+	}
+	if resp.StatusCode != http.StatusCreated || envelope.Code != 0 {
+		return UploadSessionAccepted{}, fmt.Errorf("create upload session rejected: HTTP %d code=%d: %s", resp.StatusCode, envelope.Code, envelope.Message)
+	}
+	accepted := envelope.Data
+	if strings.TrimSpace(accepted.UploadSessionID) == "" || strings.TrimSpace(accepted.QueryCode) == "" || accepted.ClientRequestID != input.ClientRequestID {
+		return UploadSessionAccepted{}, errors.New("create upload session acknowledgement is incomplete")
+	}
+	return accepted, nil
+}
+
+func (c *Client) CompleteUploadSession(ctx context.Context, uploadSessionID string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/upload-sessions/"+uploadSessionID+"/complete", nil)
+	if err != nil {
+		return err
+	}
+	c.authorize(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	var envelope APIResponse[map[string]any]
+	if err := decodeJSON(resp.Body, &envelope); err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK || envelope.Code != 0 {
+		return fmt.Errorf("close upload session rejected: HTTP %d code=%d", resp.StatusCode, envelope.Code)
+	}
+	return nil
+}
+
+func (c *Client) Inspect(ctx context.Context, file spool.File) error {
+	batch := spool.Batch{Files: []spool.File{file}}
+	reader, contentType, sent, _, writeDone := multipartBody(batch, false, c.gzip)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+c.inspectPath, reader)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", contentType)
+	if c.gzip {
+		req.Header.Set("Content-Encoding", "gzip")
+	}
+	c.authorize(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return transportFailure(err, sent.Load())
+	}
+	defer resp.Body.Close()
+	if err := <-writeDone; err != nil {
+		return &Failure{Kind: Uncertain, Message: "inspect request body failed", Err: err}
+	}
+	var envelope APIResponse[json.RawMessage]
+	if err := decodeJSON(resp.Body, &envelope); err != nil {
+		return &Failure{Kind: Uncertain, StatusCode: resp.StatusCode, Message: "inspect response invalid", Err: err}
+	}
+	if resp.StatusCode != http.StatusOK || envelope.Code != 0 {
+		return classifyResponse(resp.StatusCode, envelope.Message)
+	}
+	return nil
+}
+
+func (c *Client) Upload(ctx context.Context, batch spool.Batch) (UploadAccepted, error) {
+	return c.UploadWithProgress(ctx, batch, nil)
+}
+
+type ProgressCallback func(sentBytes, totalBytes int64)
+
+func (c *Client) UploadWithProgress(ctx context.Context, batch spool.Batch, progress ProgressCallback) (UploadAccepted, error) {
+	if strings.TrimSpace(batch.ClientRequestID) == "" {
+		batch.ClientRequestID = batch.ID
+	}
+	if err := validateUploadBatch(batch); err != nil {
+		return UploadAccepted{}, &Failure{Kind: Rejected, Message: err.Error(), Err: err}
+	}
+	reader, contentType, sent, fileSent, writeDone := multipartBody(batch, true, c.gzip)
+	var total int64
+	for _, file := range batch.Files {
+		total += file.SizeBytes
+	}
+	progressCtx, progressCancel := context.WithCancel(ctx)
+	defer progressCancel()
+	if progress != nil {
+		go func() {
+			ticker := time.NewTicker(250 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-progressCtx.Done():
+					return
+				case <-ticker.C:
+					progress(fileSent.Load(), total)
+				}
+			}
+		}()
+	}
+	stopProgress := func() {
+		progressCancel()
+		if progress != nil {
+			progress(fileSent.Load(), total)
+		}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+c.uploadPath, reader)
+	if err != nil {
+		return UploadAccepted{}, err
+	}
+	req.Header.Set("Content-Type", contentType)
+	if batch.ClientRequestID != "" {
+		req.Header.Set("Idempotency-Key", batch.ClientRequestID)
+	}
+	if c.gzip {
+		req.Header.Set("Content-Encoding", "gzip")
+	}
+	c.authorize(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		stopProgress()
+		return UploadAccepted{}, transportFailure(err, sent.Load())
+	}
+	defer resp.Body.Close()
+	if err := <-writeDone; err != nil {
+		stopProgress()
+		return UploadAccepted{}, &Failure{Kind: Uncertain, Message: "upload request body failed", Err: err}
+	}
+	var envelope APIResponse[UploadAccepted]
+	if err := decodeJSON(resp.Body, &envelope); err != nil {
+		stopProgress()
+		return UploadAccepted{}, &Failure{Kind: Uncertain, StatusCode: resp.StatusCode, Message: "upload acknowledgement invalid", Err: err}
+	}
+	if resp.StatusCode != http.StatusAccepted || envelope.Code != 0 {
+		stopProgress()
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			return UploadAccepted{}, &Failure{Kind: Uncertain, StatusCode: resp.StatusCode, Message: fmt.Sprintf("unexpected upload acknowledgement: HTTP %d code=%d", resp.StatusCode, envelope.Code)}
+		}
+		failure := classifyResponse(resp.StatusCode, envelope.Message)
+		if typed, ok := failure.(*Failure); ok && typed.StatusCode == http.StatusTooManyRequests {
+			typed.RetryAfter = RetryAfter(resp.Header.Get("Retry-After"), 0)
+		}
+		return UploadAccepted{}, failure
+	}
+	accepted := envelope.Data
+	if strings.TrimSpace(accepted.UploadID) == "" || strings.TrimSpace(accepted.TaskID) == "" || accepted.FileCount != len(batch.Files) {
+		stopProgress()
+		return UploadAccepted{}, &Failure{Kind: Uncertain, StatusCode: resp.StatusCode, Message: fmt.Sprintf("incomplete upload acknowledgement: upload_id=%q task_id=%q file_count=%d expected=%d", accepted.UploadID, accepted.TaskID, accepted.FileCount, len(batch.Files))}
+	}
+	if accepted.ClientRequestID != "" && accepted.ClientRequestID != batch.ClientRequestID {
+		stopProgress()
+		return UploadAccepted{}, &Failure{Kind: Uncertain, StatusCode: resp.StatusCode, Message: fmt.Sprintf("upload acknowledgement client_request_id mismatch: got=%q expected=%q", accepted.ClientRequestID, batch.ClientRequestID)}
+	}
+	if batch.QueryCode != "" && !strings.EqualFold(accepted.QueryCode, batch.QueryCode) {
+		stopProgress()
+		return UploadAccepted{}, &Failure{Kind: Uncertain, StatusCode: resp.StatusCode, Message: fmt.Sprintf("upload acknowledgement query_code mismatch: got=%q expected=%q", accepted.QueryCode, batch.QueryCode)}
+	}
+	stopProgress()
+	return accepted, nil
+}
+
+func (c *Client) authorize(req *http.Request) {
+	if c.authorization != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authorization)
+	}
+}
+
+type countingReader struct {
+	r io.Reader
+	n *atomic.Int64
+}
+
+func (r countingReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	r.n.Add(int64(n))
+	return n, err
+}
+
+func multipartBody(batch spool.Batch, includeFields, gzipEnabled bool) (io.Reader, string, *atomic.Int64, *atomic.Int64, <-chan error) {
+	pr, pw := io.Pipe()
+	var target io.Writer = pw
+	var zipper *gzip.Writer
+	if gzipEnabled {
+		zipper = gzip.NewWriter(pw)
+		target = zipper
+	}
+	mw := multipart.NewWriter(target)
+	var sent atomic.Int64
+	var fileSent atomic.Int64
+	done := make(chan error, 1)
+	go func() {
+		var writeErr error
+		defer func() {
+			if closeErr := mw.Close(); writeErr == nil {
+				writeErr = closeErr
+			}
+			if zipper != nil {
+				if closeErr := zipper.Close(); writeErr == nil {
+					writeErr = closeErr
+				}
+			}
+			if writeErr != nil {
+				_ = pw.CloseWithError(writeErr)
+			} else {
+				_ = pw.Close()
+			}
+			done <- writeErr
+			close(done)
+		}()
+		if includeFields {
+			fields := [][2]string{
+				{"upload_session_id", batch.UploadSessionID}, {"query_code", batch.QueryCode},
+				{"project_id", platformProjectID(batch.ProjectID)}, {"project_name", batch.ProjectName}, {"version", batch.Version},
+				{"test_task_id", batch.TestTaskID}, {"test_task_name", batch.TestTaskName},
+				{"uploader_name", batch.UploaderName}, {"remark", batch.Remark},
+				{"client_request_id", batch.ClientRequestID}, {"collector_version", batch.CollectorVersion}, {"timezone", batch.Timezone},
+				{"created_at", formatOptionalTime(batch.SourceCreatedAt)}, {"started_at", formatOptionalTime(batch.SourceStartedAt)}, {"ended_at", formatOptionalTime(batch.SourceEndedAt)},
+				{"config_snapshot", firstNonEmpty(batch.ConfigSnapshot, "{}")},
+			}
+			encoded, err := json.Marshal(batch.ScenarioIDs)
+			if err != nil {
+				writeErr = err
+				return
+			}
+			fields = append(fields, [2]string{"scenario_ids", string(encoded)})
+			for _, field := range fields {
+				if field[1] == "" {
+					continue
+				}
+				if writeErr = mw.WriteField(field[0], field[1]); writeErr != nil {
+					return
+				}
+			}
+		}
+		for _, file := range batch.Files {
+			part, err := mw.CreateFormFile("file", filepath.Base(file.Path))
+			if err != nil {
+				writeErr = err
+				return
+			}
+			source, err := os.Open(file.Path)
+			if err != nil {
+				writeErr = err
+				return
+			}
+			_, writeErr = io.Copy(part, countingReader{r: source, n: &fileSent})
+			closeErr := source.Close()
+			if writeErr == nil {
+				writeErr = closeErr
+			}
+			if writeErr != nil {
+				return
+			}
+		}
+	}()
+	return countingReader{r: pr, n: &sent}, mw.FormDataContentType(), &sent, &fileSent, done
+}
+
+func formatOptionalTime(value *time.Time) string {
+	if value == nil || value.IsZero() {
+		return ""
+	}
+	return value.Format(time.RFC3339Nano)
+}
+
+func platformProjectID(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.IndexFunc(value, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
+		return ""
+	}
+	return value
+}
+
+func validateUploadBatch(batch spool.Batch) error {
+	required := []struct{ name, value string }{{"project_name", batch.ProjectName}, {"version", batch.Version}, {"uploader_name", batch.UploaderName}}
+	for _, field := range required {
+		if strings.TrimSpace(field.value) == "" {
+			return fmt.Errorf("%s is required", field.name)
+		}
+	}
+	if strings.TrimSpace(batch.UploadSessionID) != "" && strings.TrimSpace(batch.QueryCode) == "" {
+		return errors.New("query_code is required with upload_session_id")
+	}
+	limits := []struct {
+		name  string
+		value string
+		max   int
+	}{
+		{"project_name", batch.ProjectName, 128}, {"version", batch.Version, 64},
+		{"test_task_id", batch.TestTaskID, 128}, {"test_task_name", batch.TestTaskName, 256},
+		{"uploader_name", batch.UploaderName, 128}, {"remark", batch.Remark, 4000},
+		{"client_request_id", batch.ClientRequestID, 128}, {"collector_version", batch.CollectorVersion, 64},
+	}
+	for _, field := range limits {
+		if utf8.RuneCountInString(field.value) > field.max {
+			return fmt.Errorf("%s exceeds %d characters", field.name, field.max)
+		}
+	}
+	if len(batch.ScenarioIDs) > 20 {
+		return errors.New("scenario_ids exceeds 20 items")
+	}
+	return nil
+}
+
+func firstNonEmpty(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
+}
+
+func transportFailure(err error, sentBytes int64) error {
+	kind := Retryable
+	message := "upload failed before request body was sent"
+	if sentBytes > 0 {
+		kind = Uncertain
+		message = "upload result is unknown after request body transmission"
+	}
+	return &Failure{Kind: kind, Message: message, Err: err}
+}
+
+func classifyResponse(status int, message string) error {
+	failure := &Failure{StatusCode: status, Message: strings.TrimSpace(message)}
+	if failure.Message == "" {
+		failure.Message = http.StatusText(status)
+	}
+	switch status {
+	case http.StatusBadRequest:
+		failure.Kind = Rejected
+	case http.StatusUnauthorized, http.StatusForbidden:
+		failure.Kind = Pause
+	case http.StatusRequestEntityTooLarge:
+		failure.Kind = Split
+	case http.StatusTooManyRequests:
+		failure.Kind = Retryable
+	default:
+		if status == http.StatusInternalServerError || status == http.StatusBadGateway || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout {
+			failure.Kind = Retryable
+		} else {
+			failure.Kind = Rejected
+		}
+	}
+	return failure
+}
+
+func RetryAfter(header string, fallback time.Duration) time.Duration {
+	header = strings.TrimSpace(header)
+	if seconds, err := strconv.Atoi(header); err == nil && seconds >= 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if when, err := http.ParseTime(header); err == nil {
+		if delay := time.Until(when); delay > 0 {
+			return delay
+		}
+	}
+	return fallback
+}
+
+func decodeJSON(reader io.Reader, target any) error {
+	limited := io.LimitReader(reader, maxResponseBytes+1)
+	decoder := json.NewDecoder(limited)
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return errors.New("response contains trailing data")
+	}
+	return nil
+}
