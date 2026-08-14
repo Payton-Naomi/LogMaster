@@ -17,7 +17,6 @@ dist/
 
 # runtime data
 data/
-logs/
 
 # IDE
 .vscode/
