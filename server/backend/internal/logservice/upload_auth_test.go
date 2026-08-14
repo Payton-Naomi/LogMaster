@@ -1,4 +1,4 @@
-package logs
+package logservice
 
 import (
 	"net/http/httptest"
@@ -66,7 +66,7 @@ func TestQueryCodePrefix(t *testing.T) {
 		"DR2860":         "DR2860",
 		"dr2860":         "DR2860",
 		"  DR-2860 v2  ": "DR2860V2",
-		"项目":            "",
+		"项目":             "",
 		"":               "",
 	}
 	for input, want := range cases {

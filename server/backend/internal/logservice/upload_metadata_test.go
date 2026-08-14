@@ -1,4 +1,4 @@
-package logs
+package logservice
 
 import (
 	"net/http/httptest"
