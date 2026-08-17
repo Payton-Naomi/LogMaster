@@ -17,7 +17,6 @@ dist/
 
 # runtime data
 data/
-logs/
 
 # IDE
 .vscode/
@@ -42,4 +41,4 @@ coverage.out
 
 # AI tools
 .trae/
-.workbuddy/
+.workbuddy/server/backend/start.ps1

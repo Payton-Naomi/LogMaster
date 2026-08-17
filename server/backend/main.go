@@ -10,7 +10,7 @@ import (
 	"logmaster-agent/internal/auth"
 	"logmaster-agent/internal/config"
 	"logmaster-agent/internal/database"
-	logsapi "logmaster-agent/internal/logs"
+	"logmaster-agent/internal/logservice"
 	"logmaster-agent/internal/response"
 	"logmaster-agent/internal/web"
 )
@@ -45,7 +45,7 @@ func main() {
 		return user.FeishuOpenID, ok
 	})
 	adminService.RegisterRoutes(mux)
-	logService := logsapi.NewService(cfg, logsapi.NewRepository(db))
+	logService := logservice.NewService(cfg, logservice.NewRepository(db))
 	if cfg.UploadToken != "" && cfg.UploadOwnerOpenID == "" {
 		log.Print("configured collector upload token disabled: LOGMASTER_UPLOAD_OWNER_OPEN_ID is required; built-in internal collector remains enabled")
 	}
@@ -55,7 +55,7 @@ func main() {
 		return user.FeishuOpenID, ok
 	})
 	if cfg.FeishuAppID != "" && cfg.FeishuAppSecret != "" {
-		logService.SetAnalysisNotifier(logsapi.NewFeishuNotifier(cfg.FeishuAppID, cfg.FeishuAppSecret))
+		logService.SetAnalysisNotifier(logservice.NewFeishuNotifier(cfg.FeishuAppID, cfg.FeishuAppSecret))
 	} else {
 		log.Print("Feishu analysis notifications disabled: FEISHU_APP_ID or FEISHU_APP_SECRET is empty")
 	}
