@@ -56,8 +56,10 @@
           <div class="draft-toolbar"><span>表单内容会自动保存，返回后可继续编辑。</span><el-button v-if="hasDraft" text :icon="Delete" :disabled="filesLocked" @click="clearDraft">清除草稿</el-button></div>
           <el-form-item label="项目名称" required>
             <el-select v-model="projectName" filterable placeholder="请选择项目" :disabled="filesLocked">
-              <el-option v-for="item in projectOptions" :key="item" :label="item" :value="item" />
-            </el-select>
+               <el-option v-for="item in projectOptions" :key="item" :label="item" :value="item" />
+             </el-select>
+             <p v-if="!projectOptions.length" class="project-warning">暂无可用项目，请联系管理员创建并授权后再上传。</p>
+             <p v-else-if="projectName && !projectOptions.includes(projectName)" class="project-warning">当前项目已不可用，请重新选择有效项目。</p>
           </el-form-item>
           <el-form-item label="版本标识" required>
             <el-input v-model="version" maxlength="64" placeholder="例如 V1.2.0" :disabled="filesLocked" />
@@ -305,6 +307,10 @@ async function submit() {
     ElMessage.error('无法读取当前上传限制，请稍后重试')
     return
   }
+  if (!projectName.value || !projectOptions.value.includes(projectName.value)) {
+    ElMessage.warning('请选择有效项目后再上传，用户端不能自行创建项目')
+    return
+  }
   if (files.value.length > maxFilesPerUpload.value || totalSize.value > maxUploadBytes.value) {
     ElMessage.warning(`当前单次上传限制为 ${maxFilesPerUpload.value} 个文件、${formatSize(maxUploadBytes.value)}`)
     return
@@ -448,6 +454,7 @@ onBeforeUnmount(() => {
 .file-list { margin-top: 16px; }.list-heading { display: flex; justify-content: space-between; padding: 0 2px 8px; border-bottom: 1px solid #e8ecf0; color: #7b8796; font-size: 10px; }.file-row { display: grid; grid-template-columns: 46px minmax(0,1fr) 64px 32px; align-items: center; gap: 10px; min-height: 58px; padding: 8px 2px; border-bottom: 1px solid #edf0f3; }.extension { display: grid; width: 42px; height: 34px; place-items: center; border-radius: 4px; background: #edf3fb; color: #3976bf; font-size: 9px; font-weight: 700; }.file-info { display: flex; min-width: 0; flex-direction: column; gap: 4px; }.file-info strong { overflow: hidden; color: #384555; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.file-info span { color: #8a94a3; font-size: 10px; }.file-ready { display: flex; align-items: center; gap: 4px; color: #438a70; font-size: 10px; }
 .file-empty { display: flex; min-height: 76px; align-items: center; justify-content: center; flex-direction: column; gap: 5px; color: #788595; font-size: 11px; }.file-empty small { color: #9aa3ae; }
 .upload-panel { position: sticky; top: 0; }.upload-panel .el-select { width: 100%; }.upload-panel :deep(.el-form-item__label) { color: #536174; font-size: 12px; font-weight: 600; }.upload-panel :deep(.el-form-item) { margin-bottom: 15px; }
+.project-warning { margin: -8px 0 14px; color: #b45309; font-size: 11px; line-height: 1.5; }
 .draft-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:-2px 0 14px;padding:8px 10px;border:1px solid #d8e3ee;border-radius:5px;background:#f5f8fc;color:#667789;font-size:11px}.draft-toolbar .el-button{margin:0}
 .field-pair{display:grid;grid-template-columns:1fr 1fr;gap:10px}.field-pair :deep(.el-form-item){min-width:0}
 .scenario-rule-count{float:right;margin-left:18px;color:#8a94a3;font-size:11px}.scenario-note{display:flex;width:100%;align-items:flex-start;gap:5px;margin-top:7px;color:#39785f;font-size:10px;line-height:1.5}.scenario-note .el-icon{margin-top:2px;flex:0 0 auto}
@@ -468,7 +475,7 @@ onBeforeUnmount(() => {
 .drop-zone{position:relative;min-height:224px;border:1px dashed #315478;border-radius:8px;background:#081525;transition:border-color .18s ease,background .18s ease,transform .18s ease,box-shadow .18s ease}.drop-zone:before{position:absolute;inset:10px;pointer-events:none;border:1px solid rgba(56,189,248,.08);border-radius:5px;content:''}.drop-zone:hover,.drop-zone:focus-visible,.drop-zone.dragging{border-color:#38bdf8;background:#0a1d32;box-shadow:0 0 0 3px rgba(56,189,248,.1),0 18px 36px rgba(2,132,199,.12);transform:translateY(-2px)}.drop-zone.locked{opacity:.55}.upload-icon{background:#082f49;color:#38bdf8;box-shadow:0 0 22px rgba(14,165,233,.18);animation:floatIcon 3s ease-in-out infinite}.drop-zone strong{color:#f8fafc;font-size:15px}.drop-zone>div span{color:#7f93aa}.browse-action{border:1px solid #2b5f87;background:#0b2036;color:#7dd3fc;transition:background .18s ease,border-color .18s ease}.browse-action:hover{border-color:#38bdf8;background:#0e304e}
 .file-list{margin-top:18px}.list-heading{border-bottom-color:#1e293b;color:#64748b;text-transform:uppercase;letter-spacing:.12em}.file-row{border-bottom-color:#172236;transition:background .16s ease,transform .16s ease}.file-row:hover{background:#0f1d30;transform:translateX(4px)}.extension{background:#172554;color:#93c5fd}.file-info strong{color:#e2e8f0}.file-info span{color:#64748b}.file-ready{color:#4ade80}.file-empty{color:#94a3b8}.file-empty small{color:#64748b}
 .upload-panel{top:10px}.upload-panel :deep(.el-form-item__label){color:#cbd5e1;font-size:11px;letter-spacing:.04em}.upload-panel :deep(.el-input__wrapper),.upload-panel :deep(.el-select__wrapper),.upload-panel :deep(.el-textarea__inner){box-shadow:0 0 0 1px #263449 inset;background:#0f1b2d;color:#e2e8f0;transition:box-shadow .18s ease,background .18s ease}.upload-panel :deep(.el-input__wrapper:hover),.upload-panel :deep(.el-select__wrapper:hover),.upload-panel :deep(.el-textarea__inner:hover),.upload-panel :deep(.is-focus){box-shadow:0 0 0 1px #38bdf8 inset,0 0 0 3px rgba(56,189,248,.1);background:#111f33}.upload-panel :deep(input),.upload-panel :deep(textarea),.upload-panel :deep(.el-select__selected-item){color:#e2e8f0}.upload-panel :deep(input::placeholder),.upload-panel :deep(textarea::placeholder){color:#5f748c}.field-pair{gap:12px}.scenario-note{color:#4ade80}.analysis-mode{border-color:#24527b;background:#081a2d}.analysis-mode.exclusive{border-color:#805a22;background:#261b0a}.analysis-mode-heading strong{color:#e2e8f0}.analysis-mode-heading span{color:#8298b0}.analysis-mode-status{border-top-color:#1d4668;background:#0b243b;color:#7dd3fc}.analysis-mode.exclusive .analysis-mode-status{border-top-color:#63471b;background:#35230d;color:#fbbf24}
-.upload-summary{border-color:#1e293b}.upload-summary div+div{border-top-color:#172236}.upload-summary div{color:#64748b}.upload-summary strong{color:#e2e8f0}.submit-button{position:relative;overflow:hidden;border:0;background:#2563eb;box-shadow:0 10px 24px rgba(37,99,235,.24);transition:transform .18s ease,box-shadow .18s ease}.submit-button:after{position:absolute;top:0;bottom:0;left:-45%;width:28%;background:rgba(255,255,255,.24);content:'';transform:skewX(-18deg);animation:buttonSweep 3.8s ease-in-out infinite}.submit-button:hover{background:#3b82f6;box-shadow:0 14px 30px rgba(37,99,235,.34);transform:translateY(-1px)}.submit-hint{color:#64748b}.waiting-state,.task-state{border-top-color:#1e293b}.waiting-state>span{background:#111c2f;color:#64748b}.waiting-state strong,.task-heading>div>span{color:#cbd5e1}.waiting-state p{color:#64748b}.task-state dl div{border-right-color:#1e293b}.task-state dt{color:#64748b}.task-state dd{color:#e2e8f0}.copy-task{color:#7dd3fc}.poll-warning{color:#fbbf24}
+.upload-summary{border-color:#1e293b}.upload-summary div+div{border-top-color:#172236}.upload-summary div{color:#64748b}.upload-summary strong{color:#e2e8f0}.project-warning{color:#fbbf24}.submit-button{position:relative;overflow:hidden;border:0;background:#2563eb;box-shadow:0 10px 24px rgba(37,99,235,.24);transition:transform .18s ease,box-shadow .18s ease}.submit-button:after{position:absolute;top:0;bottom:0;left:-45%;width:28%;background:rgba(255,255,255,.24);content:'';transform:skewX(-18deg);animation:buttonSweep 3.8s ease-in-out infinite}.submit-button:hover{background:#3b82f6;box-shadow:0 14px 30px rgba(37,99,235,.34);transform:translateY(-1px)}.submit-hint{color:#64748b}.waiting-state,.task-state{border-top-color:#1e293b}.waiting-state>span{background:#111c2f;color:#64748b}.waiting-state strong,.task-heading>div>span{color:#cbd5e1}.waiting-state p{color:#64748b}.task-state dl div{border-right-color:#1e293b}.task-state dt{color:#64748b}.task-state dd{color:#e2e8f0}.copy-task{color:#7dd3fc}.poll-warning{color:#fbbf24}
 @keyframes floatIcon{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}@keyframes buttonSweep{0%,60%,100%{left:-45%;opacity:0}15%{opacity:1}45%{left:120%;opacity:0}}
 @media(max-width:820px){.upload-panel{top:0}}@media(max-width:560px){.page-heading h1{font-size:23px}.panel{padding:15px}.selection-summary{align-self:flex-start}}
 </style>
@@ -481,6 +488,14 @@ html[data-log-theme="light"] .upload-page .step-indicator {
   background: rgba(255, 255, 255, .48);
   color: #46616d;
 }
+html[data-log-theme="light"] .upload-page .selection-summary {
+  border-color: rgba(47, 116, 137, .28);
+  background: rgba(255, 255, 255, .7);
+  color: #496575;
+  box-shadow: 0 4px 14px rgba(47, 116, 137, .08);
+}
+html[data-log-theme="light"] .upload-page .selection-summary strong { color: #173f52; }
+html[data-log-theme="light"] .upload-page .selection-summary i { background: rgba(47, 116, 137, .3); }
 html[data-log-theme="light"] .upload-page .browse-action {
   border-color: rgba(6, 150, 180, .38);
   background: rgba(6, 150, 180, .13);
