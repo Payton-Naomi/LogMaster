@@ -32,6 +32,23 @@
       </div>
     </section>
 
+    <section v-if="agentReady || agentLoading" class="panel ai-summary-panel">
+      <div class="panel-heading"><div><h2>AI 总结</h2><p>基于日志命中行及前后文生成的分析结论</p></div><span v-if="agentLoading">AI 正在分析，请稍候...</span><span v-else-if="agentResults.length">{{ agentResults.length }} 个文件</span><span v-else>暂无 AI 结果</span></div>
+      <el-alert v-if="agentLoading" title="AI 正在分析，通常需要几秒到几十秒，请耐心等待，页面会自动更新。" type="info" :closable="false" show-icon />
+      <el-alert v-else-if="!agentResults.length" title="AI 分析可能仍在后台处理中，请耐心等待后刷新页面；关键字分析结果不受影响。" type="info" :closable="false" show-icon />
+      <div v-for="item in agentResults" :key="`${item.log_file_id || item.file_path}-${item.updated_at || item.created_at || item.status}`" class="ai-file-result">
+        <div class="ai-file-heading"><strong>{{ item.file_path || '当前日志文件' }}</strong><el-tag :type="item.status === 'completed' ? 'success' : 'danger'" effect="plain">{{ item.status === 'completed' ? '分析完成' : '分析失败' }}</el-tag></div>
+        <p v-if="item.status === 'completed' && item.summary" class="ai-summary-copy">{{ item.summary }}</p>
+        <p v-else-if="item.status === 'failed'" class="ai-summary-error">{{ item.error_message || 'AI 分析失败，请稍后重试' }}</p>
+        <div v-if="item.findings?.length" class="ai-findings">
+          <article v-for="(finding, index) in item.findings" :key="`${finding.line_number || index}-${finding.category || 'finding'}`" class="ai-finding">
+            <div class="ai-finding-heading"><strong>{{ finding.root_cause || finding.category || '诊断结论' }}</strong><el-tag v-if="finding.confidence != null" size="small" effect="plain">置信度 {{ Math.round(finding.confidence * 100) }}%</el-tag></div>
+            <dl><div v-if="finding.evidence"><dt>证据</dt><dd>{{ finding.evidence }}</dd></div><div v-if="finding.impact"><dt>影响</dt><dd>{{ finding.impact }}</dd></div><div v-if="finding.suggestion"><dt>建议</dt><dd>{{ finding.suggestion }}</dd></div></dl>
+          </article>
+        </div>
+      </div>
+    </section>
+
     <section class="panel result-panel">
       <div class="filters">
         <el-input v-model="search" :prefix-icon="Search" clearable placeholder="搜索规则、文件或日志内容" />
@@ -79,6 +96,8 @@ const taskId = route.params.taskId
 const loading = ref(false)
 const loadError = ref('')
 const agentError = ref('')
+const agentLoading = ref(false)
+const agentReady = ref(false)
 const task = ref({})
 const results = ref([])
 const agentResults = ref([])
@@ -160,9 +179,17 @@ async function load() {
     results.value = parsedResult.value
     if (agentsResult.status === 'fulfilled') {
       agentResults.value = agentsResult.value || []
+      if (!agentResults.value.length && task.value.status === 'completed') {
+        agentLoading.value = true
+        await new Promise(resolve => window.setTimeout(resolve, 3000))
+        try { agentResults.value = await getAgentResults(taskId) || [] } catch { /* AI results are optional */ }
+        agentLoading.value = false
+      }
+      agentReady.value = true
     } else {
       agentResults.value = []
       agentError.value = `Agent 诊断结果加载失败：${errorMessage(agentsResult.reason, '请检查 agent-results 接口')}`
+      agentReady.value = true
     }
     await nextTick()
     drawTimeline()
@@ -171,6 +198,8 @@ async function load() {
     task.value = {}
     results.value = []
     agentResults.value = []
+    agentLoading.value = false
+    agentReady.value = false
   } finally {
     loading.value = false
   }
@@ -255,6 +284,18 @@ onBeforeUnmount(() => { window.removeEventListener('resize', resizeTimeline); ch
 .detail-head { justify-content: space-between; padding-bottom: 15px; border-bottom: 1px solid #edf0f3; }.detail-head > div { display: flex; align-items: center; gap: 9px; }.detail-head > span { color: #8a94a3; font-size: 11px; }.detail-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 13px 18px; margin: 16px 0 22px; }.detail-meta div { min-width: 0; }.detail-meta dt { color: #8a94a3; font-size: 11px; }.detail-meta dd { overflow: hidden; margin: 4px 0 0; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }.drawer-section { margin-top: 22px; }.section-title { justify-content: space-between; margin-bottom: 10px; }.section-title h3 { margin: 0; font-size: 14px; }.section-title span { color: #8a94a3; font-size: 11px; }.cause-row { padding: 11px 0; border-bottom: 1px solid #edf0f3; }.cause-row > div { display: flex; align-items: center; gap: 8px; }.cause-row > div span { color: #8a94a3; font-size: 10px; }.cause-row p { margin: 7px 0; color: #4a5568; font-size: 12px; }.cause-row code { display: block; overflow: hidden; color: #536174; font: 11px/1.45 Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
 .context-window { overflow: auto; max-height: 430px; padding: 7px 0; border: 1px solid #dfe3e8; border-radius: 4px; background: #101827; }.context-line { display: grid; grid-template-columns: 58px 102px minmax(0, 1fr); gap: 8px; padding: 4px 10px; color: #cbd5e1; font: 11px/1.45 Consolas, monospace; }.context-line.hit { background: rgb(207 69 69 / 28%); color: #fff; }.context-line.cause { background: rgb(201 134 27 / 16%); }.line-number { color: #7f8ea5; text-align: right; }.line-time { color: #91a8c7; }.line-content { overflow-wrap: anywhere; }.fallback-line { padding: 12px; color: #fff; font: 11px/1.5 Consolas, monospace; }
 @media (max-width: 900px) { .summary { grid-template-columns: repeat(2, 1fr); }.filters { flex-wrap: wrap; }.filters .el-input, .filters .el-select { width: 100%; }.filters > span { margin-left: 0; }.cluster-list { grid-template-columns: 1fr; }.cluster-heading > div { align-items: flex-start; flex-direction: column; gap: 3px; } }
+.ai-summary-panel { margin-bottom: 16px; }.ai-summary-panel .el-alert { margin-bottom: 12px; }.ai-file-result { padding: 14px 0; border-bottom: 1px solid #edf0f3; }.ai-file-result:last-child { border-bottom: 0; padding-bottom: 0; }.ai-file-heading,.ai-finding-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }.ai-file-heading strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }.ai-summary-copy,.ai-summary-error { margin:10px 0 0; color:#4a5568; font-size:13px; line-height:1.7; }.ai-summary-error { color:#c43e3e; }.ai-findings { display:grid; gap:9px; margin-top:12px; }.ai-finding { padding:11px 12px; border:1px solid #e5e9ef; border-radius:6px; background:#fafbfd; }.ai-finding-heading strong { font-size:12px; }.ai-finding dl { display:grid; gap:6px; margin:9px 0 0; }.ai-finding dl div { display:grid; grid-template-columns:42px minmax(0,1fr); gap:8px; }.ai-finding dt { color:#8a94a3; font-size:11px; }.ai-finding dd { margin:0; color:#536174; font-size:11px; line-height:1.55; }
+</style>
+
+<style scoped>
+.ai-summary-panel { border:1px solid rgba(255,255,255,.16)!important; background:rgba(255,255,255,.085)!important; box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 18px 52px rgba(0,0,0,.28)!important; }
+.ai-summary-panel .panel-heading p,.ai-summary-panel .panel-heading>span { color:#b7bec8; }
+.ai-summary-panel .ai-file-result { border-bottom-color:rgba(255,255,255,.12); }
+.ai-summary-panel .ai-summary-copy { color:#d5dde5; }
+.ai-summary-panel .ai-summary-error { color:#fda4af; }
+.ai-summary-panel .ai-finding { border-color:rgba(255,255,255,.13); background:rgba(0,0,0,.16); }
+.ai-summary-panel .ai-finding dt { color:#9da9b6; }
+.ai-summary-panel .ai-finding dd { color:#c9d2dc; }
 </style>
 
 <style scoped>

@@ -103,6 +103,65 @@ func (s *Service) loadUploadCapacity(ctx context.Context) (uploadCapacity, error
 	return capacity, err
 }
 
+type aiAnalysisSettings struct {
+	MaxFilesPerTask int        `json:"max_files_per_task"`
+	DailyTokenQuota int64      `json:"daily_token_quota"`
+	UpdatedAt       *time.Time `json:"updated_at,omitempty"`
+}
+
+func (s *Service) aiAnalysisSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	openID, ok := s.requirePermission(w, r, permissionCapacity)
+	if !ok {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		settings, err := s.loadAIAnalysisSettings(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "query AI analysis settings failed")
+			return
+		}
+		response.JSON(w, response.APIResponse{Code: 0, Message: "success", Data: settings})
+	case http.MethodPut:
+		var input aiAnalysisSettings
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10))
+		if err := decoder.Decode(&input); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid AI analysis settings")
+			return
+		}
+		if input.MaxFilesPerTask < 1 || input.MaxFilesPerTask > 500 || input.DailyTokenQuota < 0 {
+			writeError(w, http.StatusBadRequest, "max_files_per_task must be 1 to 500 and daily_token_quota must be non-negative")
+			return
+		}
+		var updatedAt time.Time
+		err := s.db.QueryRowContext(r.Context(), `INSERT INTO logmaster_api.ai_analysis_config
+			(singleton, max_files_per_task, daily_token_quota, updated_by_open_id, updated_at)
+			VALUES (TRUE, $1, $2, $3, NOW())
+			ON CONFLICT (singleton) DO UPDATE SET max_files_per_task = EXCLUDED.max_files_per_task,
+			daily_token_quota = EXCLUDED.daily_token_quota, updated_by_open_id = EXCLUDED.updated_by_open_id, updated_at = NOW()
+			RETURNING updated_at`, input.MaxFilesPerTask, input.DailyTokenQuota, openID).Scan(&updatedAt)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "save AI analysis settings failed")
+			return
+		}
+		input.UpdatedAt = &updatedAt
+		response.JSON(w, response.APIResponse{Code: 0, Message: "success", Data: input})
+	default:
+		methodNotAllowed(w)
+	}
+}
+
+func (s *Service) loadAIAnalysisSettings(ctx context.Context) (aiAnalysisSettings, error) {
+	settings := aiAnalysisSettings{MaxFilesPerTask: s.config.AIMaxFilesPerTask, DailyTokenQuota: s.config.AIDailyTokenQuota}
+	err := s.db.QueryRowContext(ctx, `SELECT max_files_per_task, daily_token_quota, updated_at
+		FROM logmaster_api.ai_analysis_config WHERE singleton = TRUE`).
+		Scan(&settings.MaxFilesPerTask, &settings.DailyTokenQuota, &settings.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return settings, nil
+	}
+	return settings, err
+}
+
 func (s *Service) keywordRulesHandler(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requirePermission(w, r, permissionKeywords); !ok {
 		return
