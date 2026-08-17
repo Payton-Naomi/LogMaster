@@ -90,6 +90,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/admin/project-requests", s.projectRequestsHandler)
 	mux.HandleFunc("/api/admin/project-requests/", s.projectRequestHandler)
 	mux.HandleFunc("/api/admin/upload-capacity", s.uploadCapacityHandler)
+	mux.HandleFunc("/api/admin/ai-analysis-settings", s.aiAnalysisSettingsHandler)
 	mux.HandleFunc("/api/admin/keyword-rules/import", s.keywordRulesImportHandler)
 	mux.HandleFunc("/api/admin/keyword-rules", s.keywordRulesHandler)
 	mux.HandleFunc("/api/admin/keyword-rules/", s.keywordRuleHandler)

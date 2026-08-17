@@ -1064,6 +1064,36 @@ func (r *Repository) AgentResults(ctx context.Context, taskID, ownerOpenID strin
 	return records, rows.Err()
 }
 
+type AIAnalysisSettings struct {
+	MaxFilesPerTask int   `json:"max_files_per_task"`
+	DailyTokenQuota int64 `json:"daily_token_quota"`
+}
+
+func (r *Repository) AIAnalysisSettings(ctx context.Context, fallbackMaxFiles int, fallbackQuota int64) (AIAnalysisSettings, error) {
+	settings := AIAnalysisSettings{MaxFilesPerTask: fallbackMaxFiles, DailyTokenQuota: fallbackQuota}
+	err := r.db.QueryRowContext(ctx, `SELECT max_files_per_task, daily_token_quota
+		FROM logmaster_api.ai_analysis_config WHERE singleton = TRUE`).
+		Scan(&settings.MaxFilesPerTask, &settings.DailyTokenQuota)
+	if errors.Is(err, sql.ErrNoRows) {
+		return settings, nil
+	}
+	return settings, err
+}
+
+func (r *Repository) UserDailyTokenUsage(ctx context.Context, userOpenID string) (int64, error) {
+	var total int64
+	err := r.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(prompt_tokens + completion_tokens), 0)
+		FROM logmaster_api.ai_usage WHERE user_open_id = $1 AND usage_date = CURRENT_DATE`, userOpenID).Scan(&total)
+	return total, err
+}
+
+func (r *Repository) RecordAIUsage(ctx context.Context, userOpenID, taskID string, fileID int64, promptTokens, completionTokens int) error {
+	_, err := r.db.ExecContext(ctx, `INSERT INTO logmaster_api.ai_usage
+		(user_open_id, usage_date, prompt_tokens, completion_tokens, task_id, log_file_id)
+		VALUES ($1, CURRENT_DATE, $2, $3, $4, $5)`, userOpenID, promptTokens, completionTokens, taskID, fileID)
+	return err
+}
+
 func (r *Repository) DeleteTask(ctx context.Context, taskID, ownerOpenID string) (string, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {

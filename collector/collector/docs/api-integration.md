@@ -34,7 +34,7 @@ Wails 桌面层面向 UI 提供端口扫描、设备连接/断开、配置更新
 ## 联调检查表
 
 - 后端 URL、HTTPS 证书、代理超时和上传大小限制正确。
-- multipart 字段、项目名、版本、文件名和响应状态与 `API接口文档.md` 一致。
+- multipart 字段、项目名、版本、文件名和响应状态与 [`docs/api-to-collector.md`](../../../docs/api-to-collector.md) 一致。
 - 断网时本地继续落盘，恢复后 `pending` 自动上传。
 - 丢失响应时进入 `uncertain`，不会无条件自动重传。
 - 四路文件、队列项和设备元数据互不混淆。

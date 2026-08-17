@@ -41,4 +41,4 @@ coverage.out
 
 # AI tools
 .trae/
-.workbuddy/
+.workbuddy/server/backend/start.ps1

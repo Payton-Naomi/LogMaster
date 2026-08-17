@@ -19,6 +19,12 @@ type AgentAnalyzer interface {
 	Analyze(context.Context, AgentAnalysisRequest) (AgentAnalysisResponse, error)
 }
 
+// TokenUsageReporter reports the token usage of the most recent analysis call.
+// It is implemented by LLMAnalyzer so usage can be recorded and quota enforced.
+type TokenUsageReporter interface {
+	LastUsage() (promptTokens, completionTokens int)
+}
+
 type AgentAnalysisRequest struct {
 	TaskID     string        `json:"task_id"`
 	UploadID   string        `json:"upload_id"`
@@ -33,7 +39,10 @@ type AgentFinding struct {
 	RootCause  string  `json:"root_cause"`
 	Suggestion string  `json:"suggestion"`
 	Evidence   string  `json:"evidence,omitempty"`
+	Impact     string  `json:"impact,omitempty"`
 	Confidence float64 `json:"confidence,omitempty"`
+	LineNumber int64   `json:"line_number,omitempty"`
+	FilePath   string  `json:"file_path,omitempty"`
 }
 
 type AgentAnalysisResponse struct {

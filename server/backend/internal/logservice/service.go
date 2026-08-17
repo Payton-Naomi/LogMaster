@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"logmaster-agent/internal/config"
@@ -18,6 +19,8 @@ type Service struct {
 	config              config.Config
 	repo                *Repository
 	agent               AgentAnalyzer
+	agentJobs           chan agentJob
+	agentWg             sync.WaitGroup
 	notifier            AnalysisNotifier
 	currentUserResolver func(*http.Request) (string, bool)
 	uploadToken         string
@@ -31,15 +34,91 @@ const (
 
 func NewService(cfg config.Config, repo *Repository) *Service {
 	service := &Service{config: cfg, repo: repo}
-	if cfg.AgentAnalysisURL != "" {
+	switch {
+	case cfg.LLMAPIBaseURL != "":
+		service.agent = NewLLMAnalyzer(cfg.LLMAPIBaseURL, cfg.LLMAPIKey, cfg.LLMModel, cfg.LLMTimeout, cfg.LLMMaxMatches, cfg.LLMMaxInputBytes)
+	case cfg.AgentAnalysisURL != "":
 		service.agent = NewHTTPAgentAnalyzer(cfg.AgentAnalysisURL, cfg.AgentAnalysisToken, cfg.AgentAnalysisTimeout)
+	}
+	if service.agent != nil {
+		service.startAgentWorkers()
 	}
 	service.startStaleTaskMonitor()
 	return service
 }
 
 func NewServiceWithAgent(cfg config.Config, repo *Repository, analyzer AgentAnalyzer) *Service {
-	return &Service{config: cfg, repo: repo, agent: analyzer}
+	service := &Service{config: cfg, repo: repo, agent: analyzer}
+	if service.agent != nil {
+		service.startAgentWorkers()
+	}
+	return service
+}
+
+type agentJob struct {
+	taskID      string
+	uploadID    string
+	ownerOpenID string
+	file        LogFile
+	totalLines  int64
+	matches     []ParseResult
+}
+
+func (s *Service) startAgentWorkers() {
+	s.agentJobs = make(chan agentJob, 64)
+	s.agentWg.Add(1)
+	go s.runAgentWorker()
+}
+
+func (s *Service) runAgentWorker() {
+	defer s.agentWg.Done()
+	for job := range s.agentJobs {
+		s.processAgentJob(job)
+	}
+}
+
+func (s *Service) processAgentJob(job agentJob) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	if job.ownerOpenID != "" {
+		if settings, err := s.repo.AIAnalysisSettings(ctx, s.config.AIMaxFilesPerTask, s.config.AIDailyTokenQuota); err == nil && settings.DailyTokenQuota > 0 {
+			used, usageErr := s.repo.UserDailyTokenUsage(ctx, job.ownerOpenID)
+			if usageErr == nil && used >= settings.DailyTokenQuota {
+				quotaErr := fmt.Errorf("daily AI token quota exceeded (%d/%d)", used, settings.DailyTokenQuota)
+				if err := s.repo.SaveAgentAnalysis(ctx, job.taskID, job.file.ID, s.agent.Provider(), AgentAnalysisResponse{}, quotaErr); err != nil {
+					log.Printf("save agent analysis for %s: %v", job.file.RelativePath, err)
+				}
+				return
+			}
+		}
+	}
+
+	result, agentErr := s.agent.Analyze(ctx, AgentAnalysisRequest{
+		TaskID: job.taskID, UploadID: job.uploadID, File: job.file,
+		TotalLines: job.totalLines, Matches: job.matches,
+	})
+
+	if reporter, ok := s.agent.(TokenUsageReporter); ok && agentErr == nil {
+		prompt, completion := reporter.LastUsage()
+		if prompt > 0 || completion > 0 {
+			if err := s.repo.RecordAIUsage(ctx, job.ownerOpenID, job.taskID, job.file.ID, prompt, completion); err != nil {
+				log.Printf("record AI usage for %s: %v", job.file.RelativePath, err)
+			}
+		}
+	}
+
+	if err := s.repo.SaveAgentAnalysis(ctx, job.taskID, job.file.ID, s.agent.Provider(), result, agentErr); err != nil {
+		log.Printf("save agent analysis for %s: %v", job.file.RelativePath, err)
+	}
+}
+
+func (s *Service) enqueueAgentAnalysis(job agentJob) {
+	select {
+	case s.agentJobs <- job:
+	default:
+		log.Printf("agent analysis queue full, dropping job for %s", job.file.RelativePath)
+	}
 }
 
 func (s *Service) SetAnalysisNotifier(notifier AnalysisNotifier) {
@@ -158,6 +237,13 @@ func (s *Service) processUpload(uploadID string) {
 		fail("load parsing rules", fmt.Sprintf("load parsing rules: %v", err))
 		return
 	}
+	aiSettings := AIAnalysisSettings{MaxFilesPerTask: s.config.AIMaxFilesPerTask, DailyTokenQuota: s.config.AIDailyTokenQuota}
+	if s.agent != nil {
+		if loaded, err := s.repo.AIAnalysisSettings(ctx, s.config.AIMaxFilesPerTask, s.config.AIDailyTokenQuota); err == nil {
+			aiSettings = loaded
+		}
+	}
+	aiFilesEnqueued := 0
 	var processedBytes int64
 	for _, file := range files {
 		path := filepath.Join(storagePath, filepath.FromSlash(file.RelativePath))
@@ -189,14 +275,13 @@ func (s *Service) processUpload(uploadID string) {
 		if err := s.repo.UpdateParsingProgress(ctx, taskID, processedBytes); err != nil {
 			log.Printf("finalize parsing progress %s: %v", taskID, err)
 		}
-		if s.agent != nil {
+		if s.agent != nil && aiFilesEnqueued < aiSettings.MaxFilesPerTask {
 			file.LineCount = summary.Lines
-			result, agentErr := s.agent.Analyze(ctx, AgentAnalysisRequest{
-				TaskID: taskID, UploadID: uploadID, File: file, TotalLines: summary.Lines, Matches: summary.Results,
+			s.enqueueAgentAnalysis(agentJob{
+				taskID: taskID, uploadID: uploadID, ownerOpenID: ownerOpenID, file: file,
+				totalLines: summary.Lines, matches: summary.Results,
 			})
-			if err := s.repo.SaveAgentAnalysis(ctx, taskID, file.ID, s.agent.Provider(), result, agentErr); err != nil {
-				log.Printf("save agent analysis for %s: %v", file.RelativePath, err)
-			}
+			aiFilesEnqueued++
 		}
 	}
 	if err := s.repo.CompleteParsing(ctx, uploadID); err != nil {

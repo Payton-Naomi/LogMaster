@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: logmaster
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: logmaster
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U logmaster -d logmaster"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://logmaster:${DB_PASSWORD}@postgres:5432/logmaster?sslmode=disable
+      FRONTEND_DIST_DIR: /opt/logmaster/frontend/dist
+      LOG_STORAGE_DIR: /var/lib/logmaster/logs
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      FEISHU_APP_ID: ${FEISHU_APP_ID}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET}
+      FEISHU_REDIRECT_URI: ${FEISHU_REDIRECT_URI}
+      FEISHU_SUPER_ADMIN_NAMES: ${FEISHU_SUPER_ADMIN_NAMES}
+      MAX_UPLOAD_BYTES: "2147483648"
+      MAX_EXTRACT_BYTES: "8589934592"
+      LLM_API_BASE_URL: ${LLM_API_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-qwen-plus}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-120}
+      LLM_MAX_MATCHES: ${LLM_MAX_MATCHES:-50}
+      LLM_MAX_INPUT_BYTES: ${LLM_MAX_INPUT_BYTES:-200000}
+      AI_MAX_FILES_PER_TASK: ${AI_MAX_FILES_PER_TASK:-20}
+      AI_DAILY_TOKEN_QUOTA: ${AI_DAILY_TOKEN_QUOTA:-1000000}
+    ports:
+      - "8080:8080"
+    volumes:
+      - logs:/var/lib/logmaster/logs
+
+volumes:
+  pgdata:
+  logs:
