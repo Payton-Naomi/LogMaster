@@ -59,12 +59,17 @@
 
           <el-form-item label="所需要筛查的关键词" required>
             <el-input
+              v-if="false"
               v-model="editor.keywordsText"
-              type="textarea"
-              :rows="11"
-              resize="vertical"
               placeholder="每行输入一个关键词"
             />
+            <div class="keyword-editor">
+              <div v-for="(keyword, index) in editor.keywordItems" :key="`keyword-${index}`" class="keyword-row">
+                <el-input v-model="editor.keywordItems[index]" maxlength="512" placeholder="输入关键词" />
+                <el-button text circle :icon="Delete" aria-label="删除关键词" :disabled="editor.keywordItems.length === 1" @click="removeKeyword(index)" />
+              </div>
+              <el-button class="add-keyword-button" plain :icon="Plus" @click="addKeyword">新增关键词</el-button>
+            </div>
             <div class="field-meta">
               <span>空行和重复项会自动忽略</span>
               <strong>{{ currentKeywords.length }} 个关键词</strong>
@@ -129,7 +134,7 @@ const creating = ref(false)
 let hydrating = false
 
 const keywordLines = value => [...new Set(String(value || '').split('\n').map(item => item.trim()).filter(Boolean))]
-const currentKeywords = computed(() => keywordLines(editor.value?.keywordsText))
+const currentKeywords = computed(() => keywordLines(editor.value?.keywordItems?.join('\n') || editor.value?.keywordsText))
 const totalKeywords = computed(() => scenarios.value.reduce((sum, item) => sum + item.keywords.length, 0))
 const filteredScenarios = computed(() => {
   const text = search.value.trim().toLowerCase()
@@ -156,12 +161,13 @@ function fromAPI(item) {
     updated_at: item.updated_at,
     keywords,
     keywordsText: keywords.join('\n'),
+    keywordItems: keywords.length ? [...keywords] : [''],
     projects: selectedProjects
   }
 }
 
 function toAPI(item) {
-  const keywords = keywordLines(item.keywordsText)
+  const keywords = keywordLines(item.keywordItems?.join('\n') || item.keywordsText)
   const allProjects = item.projects.includes(ALL_PROJECTS)
   const name = item.name.trim()
   return {
@@ -243,6 +249,7 @@ async function startCreate() {
     name: '',
     description: '',
     keywordsText: '',
+    keywordItems: [''],
     projects: [ALL_PROJECTS],
     updated_at: null
   }
@@ -262,6 +269,15 @@ function normalizeProjects(values) {
   editor.value.projects = values.at(-1) === ALL_PROJECTS
     ? [ALL_PROJECTS]
     : values.filter(value => value !== ALL_PROJECTS)
+}
+
+function addKeyword() {
+  if (editor.value) editor.value.keywordItems.push('')
+}
+
+function removeKeyword(index) {
+  if (!editor.value || editor.value.keywordItems.length <= 1) return
+  editor.value.keywordItems.splice(index, 1)
 }
 
 function validate() {
@@ -354,6 +370,11 @@ onMounted(async () => {
 .scene-form :deep(.el-form-item) { margin-bottom: 26px; }
 .scene-form :deep(.el-form-item__label) { padding-bottom: 9px; color: #344054; font-weight: 600; }
 .full-width { width: 100%; }
+.keyword-editor { display: flex; flex-direction: column; gap: 8px; }
+.keyword-row { display: flex; align-items: center; gap: 6px; }
+.keyword-row .el-input { min-width: 0; flex: 1; }
+.keyword-row .el-button { flex: 0 0 auto; margin: 0; }
+.add-keyword-button { align-self: flex-start; margin: 2px 0 0; }
 .field-meta { display: flex; width: 100%; justify-content: space-between; margin-top: 7px; color: #8a95a7; font-size: 12px; }
 .field-meta strong { color: #2878d0; }
 .empty-editor { display: grid; place-items: center; }

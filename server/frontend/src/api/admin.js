@@ -15,6 +15,8 @@ export const updateProjectOption = (id, option) => service.put(`/admin/project-o
 export const deleteProjectOption = (id) => service.delete(`/admin/project-options/${id}`, adminRequest)
 export const getUploadCapacity = () => service.get('/admin/upload-capacity', adminRequest)
 export const updateUploadCapacity = (capacity) => service.put('/admin/upload-capacity', capacity, adminRequest)
+export const getAIAnalysisSettings = () => service.get('/admin/ai-analysis-settings', adminRequest)
+export const updateAIAnalysisSettings = (settings) => service.put('/admin/ai-analysis-settings', settings, adminRequest)
 export const getAdminKeywordRules = () => service.get('/admin/keyword-rules', adminRequest)
 export const deleteAdminKeywordRule = (id) => service.delete(`/admin/keyword-rules/${id}`, adminRequest)
 export const getPermissionRequests = () => service.get('/admin/permission-requests', adminRequest)
