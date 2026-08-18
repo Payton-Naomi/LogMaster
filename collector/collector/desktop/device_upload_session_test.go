@@ -37,7 +37,8 @@ func TestUploadSessionFailureRetryAndRestart(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(map[string]any{"code": 0, "data": map[string]any{"upload_session_id": "0977a959-0ab5-4612-8b40-c278129833a1", "query_code": "ABC1234567", "client_request_id": request.ClientRequestID, "status": "active"}})
+		snapshot, _ := json.Marshal(request)
+		_ = json.NewEncoder(w).Encode(map[string]any{"code": 0, "data": map[string]any{"upload_session_id": "0977a959-0ab5-4612-8b40-c278129833a1", "query_code": "ABC1234567", "client_request_id": request.ClientRequestID, "status": "active", "uploader_name": "测试上传人", "uploader_email": request.UploaderEmail, "config_snapshot": json.RawMessage(snapshot)}})
 	}))
 	defer server.Close()
 	root := t.TempDir()
@@ -51,7 +52,7 @@ func TestUploadSessionFailureRetryAndRestart(t *testing.T) {
 	if len(project.Versions) > 0 {
 		version = project.Versions[0]
 	}
-	dto := normalizeDeviceConfig(DeviceConfigDTO{DeviceID: "COM24", Name: "串口 COM24", PortName: "COM24", SaveEnabled: true, UploadEnabled: true, ProjectID: project.ID, ProjectName: project.Name, Version: version, UploaderName: "测试上传人"})
+	dto := normalizeDeviceConfig(DeviceConfigDTO{DeviceID: "COM24", Name: "串口 COM24", PortName: "COM24", SaveEnabled: true, UploadEnabled: true, ProjectID: project.ID, ProjectName: project.Name, Version: version, UploaderEmail: "tester@company.com", VID: "1A86", PID: "7523", USBSerial: "ABC123"})
 	failed, err := service.SaveDeviceConfigWithResult(dto.DeviceID, dto)
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +66,7 @@ func TestUploadSessionFailureRetryAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256(content)
-	if _, err := service.store.EnqueueFileWithMetadata(context.Background(), spool.UploadMetadata{ProjectName: project.Name, Version: version, UploaderName: dto.UploaderName}, spool.File{Path: path, SHA256: hex.EncodeToString(digest[:]), SizeBytes: int64(len(content)), DeviceSN: dto.DeviceID, FirstSequence: 1, LastSequence: 1}); err != nil {
+	if _, err := service.store.EnqueueFileWithMetadata(context.Background(), spool.UploadMetadata{ProjectName: project.Name, Version: version, UploaderName: "测试上传人", UploaderEmail: dto.UploaderEmail}, spool.File{Path: path, SHA256: hex.EncodeToString(digest[:]), SizeBytes: int64(len(content)), DeviceSN: dto.DeviceID, FirstSequence: 1, LastSequence: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if batch, err := service.store.ClaimReady(context.Background(), 1); err != nil || batch != nil {
@@ -86,14 +87,16 @@ func TestUploadSessionFailureRetryAndRestart(t *testing.T) {
 	if batch.UploadSessionID == "" || batch.QueryCode != "ABC1234567" {
 		t.Fatalf("pending batch not bound to session: %+v", batch)
 	}
+	if batch.UploaderName != "测试上传人" || batch.UploaderEmail != dto.UploaderEmail || batch.ConfigSnapshot == "{}" {
+		t.Fatalf("pending batch identity was not refreshed from accepted session: %+v", batch)
+	}
 	service.shutdown()
 	restarted, err := newServiceAt(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer restarted.shutdown()
-	// 0.0.9 起通道不再保留历史配置：重启后上传会话/查询码等不应被恢复。
-	if len(restarted.configs) != 0 {
-		t.Fatalf("upload session should not persist across restart: %+v", restarted.configs)
+	if len(restarted.configs) != 1 || restarted.configs["COM24"].QueryCode != "ABC1234567" {
+		t.Fatalf("stable USB upload session should persist across restart: %+v", restarted.configs)
 	}
 }

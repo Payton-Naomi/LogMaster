@@ -105,6 +105,7 @@ type UploadSessionRequest struct {
 	TestTaskID          string   `json:"test_task_id"`
 	TestTaskName        string   `json:"test_task_name"`
 	UploaderName        string   `json:"uploader_name"`
+	UploaderEmail       string   `json:"uploader_email"`
 	Remark              string   `json:"remark"`
 	ScenarioIDs         []string `json:"scenario_ids"`
 	KeywordProfileID    string   `json:"keyword_profile_id"`
@@ -122,10 +123,41 @@ type UploadSessionRequest struct {
 }
 
 type UploadSessionAccepted struct {
-	UploadSessionID string `json:"upload_session_id"`
-	QueryCode       string `json:"query_code"`
-	ClientRequestID string `json:"client_request_id"`
-	Status          string `json:"status"`
+	UploadSessionID string          `json:"upload_session_id"`
+	QueryCode       string          `json:"query_code"`
+	ClientRequestID string          `json:"client_request_id"`
+	Status          string          `json:"status"`
+	UploaderName    string          `json:"uploader_name"`
+	UploaderEmail   string          `json:"uploader_email"`
+	ConfigSnapshot  json.RawMessage `json:"config_snapshot"`
+}
+
+type StandardKeyword struct {
+	ID          int64     `json:"id"`
+	Name        string    `json:"name"`
+	Category    string    `json:"category"`
+	Keyword     string    `json:"keyword"`
+	Scope       string    `json:"scope"`
+	Level       string    `json:"level"`
+	Description string    `json:"description"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type PublicUploadBatch struct {
+	UploadID     string    `json:"upload_id"`
+	QueryCode    string    `json:"query_code"`
+	Status       string    `json:"status"`
+	OriginalName string    `json:"original_name"`
+	ErrorType    string    `json:"error_type"`
+	ErrorMessage string    `json:"error_message"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+type PublicUploadSession struct {
+	UploadSessionID string              `json:"upload_session_id"`
+	QueryCode       string              `json:"query_code"`
+	Status          string              `json:"status"`
+	Batches         []PublicUploadBatch `json:"batches"`
 }
 
 func New(cfg Config) *Client {
@@ -214,6 +246,50 @@ func (c *Client) CompleteUploadSession(ctx context.Context, uploadSessionID stri
 		return fmt.Errorf("close upload session rejected: HTTP %d code=%d", resp.StatusCode, envelope.Code)
 	}
 	return nil
+}
+
+func (c *Client) SyncKeywords(ctx context.Context) ([]StandardKeyword, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/keywords/sync", nil)
+	if err != nil {
+		return nil, err
+	}
+	c.authorize(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var envelope APIResponse[[]StandardKeyword]
+	if err := decodeJSON(resp.Body, &envelope); err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK || envelope.Code != 0 {
+		return nil, fmt.Errorf("sync keywords rejected: HTTP %d code=%d: %s", resp.StatusCode, envelope.Code, envelope.Message)
+	}
+	if envelope.Data == nil {
+		envelope.Data = []StandardKeyword{}
+	}
+	return envelope.Data, nil
+}
+
+func (c *Client) QueryUploadSession(ctx context.Context, queryCode string) (PublicUploadSession, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/query/"+strings.TrimSpace(queryCode), nil)
+	if err != nil {
+		return PublicUploadSession{}, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return PublicUploadSession{}, err
+	}
+	defer resp.Body.Close()
+	var envelope APIResponse[PublicUploadSession]
+	if err := decodeJSON(resp.Body, &envelope); err != nil {
+		return PublicUploadSession{}, err
+	}
+	if resp.StatusCode != http.StatusOK || envelope.Code != 0 {
+		return PublicUploadSession{}, fmt.Errorf("query upload session rejected: HTTP %d code=%d: %s", resp.StatusCode, envelope.Code, envelope.Message)
+	}
+	return envelope.Data, nil
 }
 
 func (c *Client) Inspect(ctx context.Context, file spool.File) error {
@@ -394,7 +470,7 @@ func multipartBody(batch spool.Batch, includeFields, gzipEnabled bool) (io.Reade
 				{"upload_session_id", batch.UploadSessionID}, {"query_code", batch.QueryCode},
 				{"project_id", platformProjectID(batch.ProjectID)}, {"project_name", batch.ProjectName}, {"version", batch.Version},
 				{"test_task_id", batch.TestTaskID}, {"test_task_name", batch.TestTaskName},
-				{"uploader_name", batch.UploaderName}, {"remark", batch.Remark},
+				{"uploader_name", batch.UploaderName}, {"uploader_email", batch.UploaderEmail}, {"remark", batch.Remark},
 				{"client_request_id", batch.ClientRequestID}, {"collector_version", batch.CollectorVersion}, {"timezone", batch.Timezone},
 				{"created_at", formatOptionalTime(batch.SourceCreatedAt)}, {"started_at", formatOptionalTime(batch.SourceStartedAt)}, {"ended_at", formatOptionalTime(batch.SourceEndedAt)},
 				{"config_snapshot", firstNonEmpty(batch.ConfigSnapshot, "{}")},
@@ -454,7 +530,7 @@ func platformProjectID(value string) string {
 }
 
 func validateUploadBatch(batch spool.Batch) error {
-	required := []struct{ name, value string }{{"project_name", batch.ProjectName}, {"version", batch.Version}, {"uploader_name", batch.UploaderName}}
+	required := []struct{ name, value string }{{"project_name", batch.ProjectName}, {"version", batch.Version}, {"uploader_email", batch.UploaderEmail}}
 	for _, field := range required {
 		if strings.TrimSpace(field.value) == "" {
 			return fmt.Errorf("%s is required", field.name)

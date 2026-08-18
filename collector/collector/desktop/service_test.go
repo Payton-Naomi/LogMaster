@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -43,7 +42,7 @@ func TestNormalizeDeviceConfigMigratesLegacyChannelName(t *testing.T) {
 	}
 }
 
-func TestDesktopIgnoresLegacyChannelHistory(t *testing.T) {
+func TestDesktopMigratesLegacyChannelToSerialOnly(t *testing.T) {
 	root := t.TempDir()
 	settings := desktopSettings{Devices: []DeviceConfigDTO{
 		{DeviceID: "COM24", Name: "旧设备", PortName: "COM24", UploadEnabled: true, ProjectName: "旧项目", UploaderName: "旧上传人"},
@@ -62,21 +61,25 @@ func TestDesktopIgnoresLegacyChannelHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer service.shutdown()
-	if len(service.configs) != 0 {
-		t.Fatalf("legacy channel history was restored: %+v", service.configs)
+	if len(service.configs) != 1 {
+		t.Fatalf("legacy serial settings were not retained: %+v", service.configs)
 	}
-	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("legacy desktop-config.json was not removed: %v", err)
+	channel := service.configs["COM24"]
+	if channel.UploadEnabled || channel.ProjectName != "" || channel.UploaderName != "" {
+		t.Fatalf("legacy upload identity must be stripped without USB serial: %+v", channel)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("migrated desktop-config.json should remain available: %v", err)
 	}
 }
 
-func TestDesktopSettingsDoNotPersistAcrossRestart(t *testing.T) {
+func TestDesktopSerialSettingsPersistWithoutCloudIdentity(t *testing.T) {
 	root := t.TempDir()
 	service, err := newServiceAt(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	dto := normalizeDeviceConfig(DeviceConfigDTO{Name: "主设备", PortName: "COM88", UploaderName: "张三", Remark: "高温回归", UploadEnabled: true})
+	dto := normalizeDeviceConfig(DeviceConfigDTO{Name: "主设备", PortName: "COM88", BaudRate: 921600, UploaderName: "张三", UploaderEmail: "zhangsan@company.com", Remark: "高温回归", UploadEnabled: true})
 	service.mu.Lock()
 	service.configs[dto.DeviceID] = dto
 	service.mu.Unlock()
@@ -90,8 +93,11 @@ func TestDesktopSettingsDoNotPersistAcrossRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer restarted.shutdown()
-	if len(restarted.configs) != 0 {
-		t.Fatalf("channel configuration should not persist across restart: %+v", restarted.configs)
+	if len(restarted.configs) != 1 || restarted.configs["COM88"].BaudRate != 921600 {
+		t.Fatalf("serial configuration should persist across restart: %+v", restarted.configs)
+	}
+	if restarted.configs["COM88"].UploadEnabled || restarted.configs["COM88"].UploaderEmail != "" || restarted.configs["COM88"].Remark != "" {
+		t.Fatalf("cloud identity must not persist without USB serial: %+v", restarted.configs["COM88"])
 	}
 }
 

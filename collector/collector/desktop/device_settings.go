@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/mail"
 	"net/url"
 	"strings"
 	"unicode/utf8"
@@ -101,10 +102,16 @@ func (s *Service) SaveDeviceConfigWithResult(id string, dto DeviceConfigDTO) (De
 		return DeviceConfigSaveResult{Saved: true, Message: uploadSessionFailureMessage(createErr)}, nil
 	}
 	dto.UploadSessionID, dto.QueryCode, dto.UploadSetupState = accepted.UploadSessionID, accepted.QueryCode, "active"
+	dto.UploaderName, dto.UploaderEmail = accepted.UploaderName, accepted.UploaderEmail
+	if len(accepted.ConfigSnapshot) > 0 {
+		dto.ConfigSnapshot = string(accepted.ConfigSnapshot)
+	}
+	canonicalRequest := uploadSessionRequest(dto, settings.ProgramVersion)
+	dto.UploadConfigFingerprint, _, _ = uploadSessionFingerprint(canonicalRequest)
 	if err := s.persistDeviceConfig(id, dto); err != nil {
 		return DeviceConfigSaveResult{}, err
 	}
-	if err := s.store.BindPendingUploads(s.ctx, id, accepted.UploadSessionID, accepted.QueryCode); err != nil {
+	if err := s.store.BindPendingUploads(s.ctx, id, accepted.UploadSessionID, accepted.QueryCode, dto.UploaderName, dto.UploaderEmail, dto.ConfigSnapshot); err != nil {
 		return DeviceConfigSaveResult{}, err
 	}
 	if err := s.store.SetDeviceUploadPaused(s.ctx, id, false); err != nil {
@@ -134,7 +141,7 @@ func (s *Service) persistDeviceConfig(id string, dto DeviceConfigDTO) error {
 }
 
 func uploadSessionRequest(dto DeviceConfigDTO, collectorVersion string) backend.UploadSessionRequest {
-	return backend.UploadSessionRequest{DeviceID: dto.DeviceID, Name: dto.Name, PortName: dto.PortName, BaudRate: dto.BaudRate, DataBits: dto.DataBits, StopBits: dto.StopBits, Parity: dto.Parity, Handshake: dto.Handshake, DTR: dto.DTR, RTS: dto.RTS, ProjectID: numericPlatformProjectID(dto.ProjectID), ProjectName: dto.ProjectName, Version: dto.Version, TestTaskID: dto.TestTaskID, TestTaskName: dto.TestTaskName, UploaderName: dto.UploaderName, Remark: dto.Remark, ScenarioIDs: append([]string(nil), dto.ScenarioIDs...), KeywordProfileID: dto.KeywordProfileID, KeywordRuleIDs: append([]string(nil), dto.KeywordRuleIDs...), KeywordMatching: dto.KeywordMatchingEnabled, SaveEnabled: dto.SaveEnabled, UploadEnabled: dto.UploadEnabled, NoLogTimeoutSeconds: dto.NoLogTimeoutSeconds, VID: dto.VID, PID: dto.PID, USBSerial: dto.USBSerial, Location: dto.Location, CollectorVersion: collectorVersion, Timezone: localTimezoneName()}
+	return backend.UploadSessionRequest{DeviceID: dto.DeviceID, Name: dto.Name, PortName: dto.PortName, BaudRate: dto.BaudRate, DataBits: dto.DataBits, StopBits: dto.StopBits, Parity: dto.Parity, Handshake: dto.Handshake, DTR: dto.DTR, RTS: dto.RTS, ProjectID: numericPlatformProjectID(dto.ProjectID), ProjectName: dto.ProjectName, Version: dto.Version, TestTaskID: dto.TestTaskID, TestTaskName: dto.TestTaskName, UploaderName: dto.UploaderName, UploaderEmail: dto.UploaderEmail, Remark: dto.Remark, ScenarioIDs: append([]string(nil), dto.ScenarioIDs...), KeywordProfileID: dto.KeywordProfileID, KeywordRuleIDs: append([]string(nil), dto.KeywordRuleIDs...), KeywordMatching: dto.KeywordMatchingEnabled, SaveEnabled: dto.SaveEnabled, UploadEnabled: dto.UploadEnabled, NoLogTimeoutSeconds: dto.NoLogTimeoutSeconds, VID: dto.VID, PID: dto.PID, USBSerial: dto.USBSerial, Location: dto.Location, CollectorVersion: collectorVersion, Timezone: localTimezoneName()}
 }
 
 func numericPlatformProjectID(value string) string {
@@ -212,8 +219,12 @@ func validateUploadPrerequisites(dto DeviceConfigDTO) error {
 	if strings.TrimSpace(dto.ProjectID) == "" || strings.TrimSpace(dto.Version) == "" {
 		return errors.New("开启云端上传前必须选择项目并填写版本号")
 	}
-	if strings.TrimSpace(dto.UploaderName) == "" {
-		return errors.New("开启云端上传前必须填写上传人")
+	if strings.TrimSpace(dto.UploaderEmail) == "" {
+		return errors.New("开启云端上传前必须填写上传人企业邮箱")
+	}
+	address, err := mail.ParseAddress(dto.UploaderEmail)
+	if err != nil || !strings.EqualFold(address.Address, strings.TrimSpace(dto.UploaderEmail)) {
+		return errors.New("请输入完整有效的上传人企业邮箱")
 	}
 	return nil
 }
@@ -229,6 +240,7 @@ func validateUploadFields(dto DeviceConfigDTO) error {
 		{"测试任务 ID", dto.TestTaskID, 128},
 		{"测试任务名称", dto.TestTaskName, 256},
 		{"上传人", dto.UploaderName, 128},
+		{"上传人企业邮箱", dto.UploaderEmail, 320},
 		{"测试备注", dto.Remark, 4000},
 	}
 	for _, field := range limits {
