@@ -47,6 +47,7 @@ type Batch struct {
 	TestTaskID       string
 	TestTaskName     string
 	UploaderName     string
+	UploaderEmail    string
 	Remark           string
 	ClientRequestID  string
 	CollectorVersion string
@@ -81,6 +82,7 @@ type UploadMetadata struct {
 	TestTaskID       string
 	TestTaskName     string
 	UploaderName     string
+	UploaderEmail    string
 	Remark           string
 	CollectorVersion string
 	Timezone         string
@@ -153,6 +155,7 @@ func Open(path string) (*Store, error) {
 			test_task_id TEXT NOT NULL DEFAULT '',
 			test_task_name TEXT NOT NULL DEFAULT '',
 			uploader_name TEXT NOT NULL DEFAULT '',
+			uploader_email TEXT NOT NULL DEFAULT '',
 			remark TEXT NOT NULL DEFAULT '',
 			collector_version TEXT NOT NULL DEFAULT '',
 			timezone TEXT NOT NULL DEFAULT '',
@@ -240,11 +243,13 @@ func Open(path string) (*Store, error) {
 		{"upload_batches", "completed_at", "TEXT"},
 		{"upload_files", "log_file_id", "TEXT"},
 		{"collection_sessions", "uploader_name", "TEXT NOT NULL DEFAULT ''"},
+		{"collection_sessions", "uploader_email", "TEXT NOT NULL DEFAULT ''"},
 		{"collection_sessions", "remark", "TEXT NOT NULL DEFAULT ''"},
 		{"collection_sessions", "collector_version", "TEXT NOT NULL DEFAULT ''"},
 		{"collection_sessions", "timezone", "TEXT NOT NULL DEFAULT ''"},
 		{"collection_sessions", "scenario_ids_json", "TEXT NOT NULL DEFAULT '[]'"},
 		{"upload_batch_metadata", "config_snapshot", "TEXT NOT NULL DEFAULT '{}'"},
+		{"upload_batch_metadata", "uploader_email", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, column := range columns {
 		if err := ensureColumn(db, column.table, column.name, column.definition); err != nil {
@@ -335,7 +340,7 @@ func (s *Store) EnqueueFileWithMetadata(ctx context.Context, metadata UploadMeta
 	if _, err := tx.ExecContext(ctx, `INSERT INTO upload_batches(local_batch_id,project_name,version,state,next_attempt_at,created_at,session_id,bytes_total,upload_session_id,query_code) VALUES(?,?,?,'pending',?,?,?,?,?,?)`, id, strings.TrimSpace(metadata.ProjectName), strings.TrimSpace(metadata.Version), now, now, file.SessionID, file.SizeBytes, nullable(metadata.UploadSessionID), nullable(metadata.QueryCode)); err != nil {
 		return "", err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO upload_batch_metadata(local_batch_id,project_id,test_task_id,test_task_name,uploader_name,remark,collector_version,timezone,source_created_at,source_started_at,source_ended_at,scenario_ids_json,config_snapshot) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, strings.TrimSpace(metadata.ProjectID), strings.TrimSpace(metadata.TestTaskID), strings.TrimSpace(metadata.TestTaskName), strings.TrimSpace(metadata.UploaderName), strings.TrimSpace(metadata.Remark), strings.TrimSpace(metadata.CollectorVersion), strings.TrimSpace(metadata.Timezone), nullableTime(metadata.CreatedAt), nullableTime(metadata.StartedAt), nullableTime(metadata.EndedAt), string(scenarioJSON), firstNonBlank(metadata.ConfigSnapshot, "{}")); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO upload_batch_metadata(local_batch_id,project_id,test_task_id,test_task_name,uploader_name,uploader_email,remark,collector_version,timezone,source_created_at,source_started_at,source_ended_at,scenario_ids_json,config_snapshot) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, strings.TrimSpace(metadata.ProjectID), strings.TrimSpace(metadata.TestTaskID), strings.TrimSpace(metadata.TestTaskName), strings.TrimSpace(metadata.UploaderName), strings.ToLower(strings.TrimSpace(metadata.UploaderEmail)), strings.TrimSpace(metadata.Remark), strings.TrimSpace(metadata.CollectorVersion), strings.TrimSpace(metadata.Timezone), nullableTime(metadata.CreatedAt), nullableTime(metadata.StartedAt), nullableTime(metadata.EndedAt), string(scenarioJSON), firstNonBlank(metadata.ConfigSnapshot, "{}")); err != nil {
 		return "", err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO upload_files(local_batch_id,file_path,sha256,size_bytes,device_sn,first_sequence,last_sequence,log_file_id) VALUES(?,?,?,?,?,?,?,?)`, id, file.Path, strings.ToLower(file.SHA256), file.SizeBytes, file.DeviceSN, file.FirstSequence, file.LastSequence, nullable(file.LogFileID)); err != nil {
@@ -466,8 +471,8 @@ func (s *Store) GetBatch(ctx context.Context, id string) (*Batch, error) {
 	var b Batch
 	var state, next, created, uploaded, started, completed, sourceCreated, sourceStarted, sourceEnded sql.NullString
 	var scenarioJSON string
-	err := s.db.QueryRowContext(ctx, `SELECT b.local_batch_id,b.project_name,b.version,COALESCE(m.project_id,''),COALESCE(m.test_task_id,''),COALESCE(m.test_task_name,''),COALESCE(m.uploader_name,''),COALESCE(m.remark,''),b.local_batch_id,COALESCE(m.collector_version,''),COALESCE(m.timezone,''),m.source_created_at,m.source_started_at,m.source_ended_at,COALESCE(m.scenario_ids_json,'[]'),b.state,b.attempt_count,b.next_attempt_at,COALESCE(b.upload_id,''),COALESCE(b.task_id,''),COALESCE(b.query_code,''),COALESCE(b.upload_session_id,''),CASE WHEN COALESCE(b.session_id,'')='' THEN 1 ELSE (SELECT COUNT(*) FROM upload_batches position WHERE position.session_id=b.session_id AND (position.created_at<b.created_at OR (position.created_at=b.created_at AND position.local_batch_id<=b.local_batch_id))) END,COALESCE(m.config_snapshot,'{}'),COALESCE(b.session_id,''),b.bytes_total,COALESCE(b.last_error,''),b.created_at,b.uploaded_at,b.started_at,b.completed_at FROM upload_batches b LEFT JOIN upload_batch_metadata m ON m.local_batch_id=b.local_batch_id WHERE b.local_batch_id=?`, id).
-		Scan(&b.ID, &b.ProjectName, &b.Version, &b.ProjectID, &b.TestTaskID, &b.TestTaskName, &b.UploaderName, &b.Remark, &b.ClientRequestID, &b.CollectorVersion, &b.Timezone, &sourceCreated, &sourceStarted, &sourceEnded, &scenarioJSON, &state, &b.AttemptCount, &next, &b.UploadID, &b.TaskID, &b.QueryCode, &b.UploadSessionID, &b.UploadPosition, &b.ConfigSnapshot, &b.SessionID, &b.BytesTotal, &b.LastError, &created, &uploaded, &started, &completed)
+	err := s.db.QueryRowContext(ctx, `SELECT b.local_batch_id,b.project_name,b.version,COALESCE(m.project_id,''),COALESCE(m.test_task_id,''),COALESCE(m.test_task_name,''),COALESCE(m.uploader_name,''),COALESCE(m.uploader_email,''),COALESCE(m.remark,''),b.local_batch_id,COALESCE(m.collector_version,''),COALESCE(m.timezone,''),m.source_created_at,m.source_started_at,m.source_ended_at,COALESCE(m.scenario_ids_json,'[]'),b.state,b.attempt_count,b.next_attempt_at,COALESCE(b.upload_id,''),COALESCE(b.task_id,''),COALESCE(b.query_code,''),COALESCE(b.upload_session_id,''),CASE WHEN COALESCE(b.session_id,'')='' THEN 1 ELSE (SELECT COUNT(*) FROM upload_batches position WHERE position.session_id=b.session_id AND (position.created_at<b.created_at OR (position.created_at=b.created_at AND position.local_batch_id<=b.local_batch_id))) END,COALESCE(m.config_snapshot,'{}'),COALESCE(b.session_id,''),b.bytes_total,COALESCE(b.last_error,''),b.created_at,b.uploaded_at,b.started_at,b.completed_at FROM upload_batches b LEFT JOIN upload_batch_metadata m ON m.local_batch_id=b.local_batch_id WHERE b.local_batch_id=?`, id).
+		Scan(&b.ID, &b.ProjectName, &b.Version, &b.ProjectID, &b.TestTaskID, &b.TestTaskName, &b.UploaderName, &b.UploaderEmail, &b.Remark, &b.ClientRequestID, &b.CollectorVersion, &b.Timezone, &sourceCreated, &sourceStarted, &sourceEnded, &scenarioJSON, &state, &b.AttemptCount, &next, &b.UploadID, &b.TaskID, &b.QueryCode, &b.UploadSessionID, &b.UploadPosition, &b.ConfigSnapshot, &b.SessionID, &b.BytesTotal, &b.LastError, &created, &uploaded, &started, &completed)
 	if err != nil {
 		return nil, err
 	}
@@ -518,14 +523,26 @@ func (s *Store) SetQueryCode(ctx context.Context, id, queryCode string) error {
 	return err
 }
 
-func (s *Store) BindPendingUploads(ctx context.Context, deviceSN, uploadSessionID, queryCode string) error {
+func (s *Store) BindPendingUploads(ctx context.Context, deviceSN, uploadSessionID, queryCode, uploaderName, uploaderEmail, configSnapshot string) error {
 	if strings.TrimSpace(deviceSN) == "" || strings.TrimSpace(uploadSessionID) == "" || strings.TrimSpace(queryCode) == "" {
 		return errors.New("device, upload session, and query code are required")
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE upload_batches SET upload_session_id=?,query_code=?
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `UPDATE upload_batches SET upload_session_id=?,query_code=?
 		WHERE state='pending' AND COALESCE(upload_session_id,'')='' AND EXISTS
-		(SELECT 1 FROM upload_files f WHERE f.local_batch_id=upload_batches.local_batch_id AND f.device_sn=?)`, uploadSessionID, queryCode, deviceSN)
-	return err
+		(SELECT 1 FROM upload_files f WHERE f.local_batch_id=upload_batches.local_batch_id AND f.device_sn=?)`, uploadSessionID, queryCode, deviceSN); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE upload_batch_metadata SET uploader_name=?,uploader_email=?,config_snapshot=?
+		WHERE local_batch_id IN (SELECT b.local_batch_id FROM upload_batches b JOIN upload_files f ON f.local_batch_id=b.local_batch_id
+		WHERE b.state='pending' AND b.upload_session_id=? AND f.device_sn=?)`, strings.TrimSpace(uploaderName), strings.ToLower(strings.TrimSpace(uploaderEmail)), firstNonBlank(configSnapshot, "{}"), uploadSessionID, deviceSN); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) MarkPending(ctx context.Context, id, message string, retryAt time.Time) error {
@@ -568,7 +585,7 @@ func (s *Store) SplitUploading(ctx context.Context, id string) error {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO upload_batches(local_batch_id,project_name,version,state,next_attempt_at,created_at,last_error,session_id,bytes_total,upload_session_id,query_code) VALUES(?,?,?,'pending',?,?, 'split after HTTP 413',?,?,?,?)`, childID, batch.ProjectName, batch.Version, now, now, nullable(batch.SessionID), file.SizeBytes, nullable(batch.UploadSessionID), nullable(batch.QueryCode)); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO upload_batch_metadata(local_batch_id,project_id,test_task_id,test_task_name,uploader_name,remark,collector_version,timezone,source_created_at,source_started_at,source_ended_at,scenario_ids_json,config_snapshot) SELECT ?,project_id,test_task_id,test_task_name,uploader_name,remark,collector_version,timezone,source_created_at,source_started_at,source_ended_at,scenario_ids_json,config_snapshot FROM upload_batch_metadata WHERE local_batch_id=?`, childID, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO upload_batch_metadata(local_batch_id,project_id,test_task_id,test_task_name,uploader_name,uploader_email,remark,collector_version,timezone,source_created_at,source_started_at,source_ended_at,scenario_ids_json,config_snapshot) SELECT ?,project_id,test_task_id,test_task_name,uploader_name,uploader_email,remark,collector_version,timezone,source_created_at,source_started_at,source_ended_at,scenario_ids_json,config_snapshot FROM upload_batch_metadata WHERE local_batch_id=?`, childID, id); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE upload_files SET local_batch_id=? WHERE local_batch_id=? AND file_path=?`, childID, id, file.Path); err != nil {

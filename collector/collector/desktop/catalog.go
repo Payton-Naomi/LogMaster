@@ -63,6 +63,9 @@ type CatalogKeywordRule struct {
 	Match         string `yaml:"match" json:"match"`
 	Mode          string `yaml:"mode" json:"mode"`
 	CaseSensitive bool   `yaml:"case_sensitive" json:"caseSensitive"`
+	Level         string `yaml:"level,omitempty" json:"level,omitempty"`
+	Description   string `yaml:"description,omitempty" json:"description,omitempty"`
+	ReadOnly      bool   `yaml:"-" json:"readOnly,omitempty"`
 }
 
 type CatalogChangeDTO struct {
@@ -360,6 +363,9 @@ func (s *Service) ApplyCatalogImport(token string) error {
 	}
 	if err := atomicWriteFile(s.catalogPath, pending.content, 0o644); err != nil {
 		return err
+	}
+	if cache, cacheErr := readCloudKeywordCache(s.cloudKeywordPath); cacheErr == nil {
+		pending.catalog = mergeCloudKeywords(pending.catalog, cache.Items)
 	}
 	s.mu.Lock()
 	s.catalog = pending.catalog

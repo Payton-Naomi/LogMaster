@@ -60,10 +60,11 @@ describe('ChannelInspector', () => {
   it('上传配置完整时切换保存按钮名称', () => {
     const wrapper = mount(ChannelInspector, {
       props: {
-        device: { deviceId: 'COM3', config: { deviceId: 'COM3', portName: 'COM3', configured: true, saveEnabled: true, uploadEnabled: true, projectId: 'p1', version: 'V1.0.0', uploaderName: '张三' } },
+        device: { deviceId: 'COM3', config: { deviceId: 'COM3', portName: 'COM3', configured: true, saveEnabled: true, uploadEnabled: true, projectId: 'p1', version: 'V1.0.0', uploaderName: '张三', uploaderEmail: 'zhangsan@company.com' } },
         catalog: { projects: [{ id: 'p1', name: '项目一', versions: ['V1.0.0'] }] },
       },
     })
     expect(wrapper.text()).toContain('保存上传/通道配置')
+		expect(wrapper.text()).toContain('上传人企业邮箱')
   })
 })

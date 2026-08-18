@@ -1,11 +1,13 @@
 <script setup>
 import { ref } from 'vue'
 import { Button, Empty, Modal, Tag } from 'ant-design-vue'
-import { ImportOutlined } from '@ant-design/icons-vue'
+import { CloudSyncOutlined, ImportOutlined } from '@ant-design/icons-vue'
 
 const props = defineProps({ catalog: { type: Object, default: () => ({ projects: [] }) }, invoke: Function })
 const preview = ref(null)
 const applying = ref(false)
+const syncing = ref(false)
+const syncMessage = ref('')
 const kindText = { project: '项目', task: '任务', profile: '关键字方案', group: '关键字类别', rule: '关键字' }
 const kindLabel = (kind) => kindText[kind] || kind
 const changeLabel = (change) => ({ added: '新增', modified: '修改', deleted: '删除' })[change.kind] || change.kind
@@ -15,10 +17,16 @@ async function applyImport() {
   if (!preview.value?.token) return
   try { applying.value = true; await props.invoke('ApplyCatalogImport', preview.value.token); preview.value = null } catch (_) {} finally { applying.value = false }
 }
+async function syncCloud() {
+  try { syncing.value = true; const result = await props.invoke('SyncCloudKeywords'); syncMessage.value = result?.message || '云端关键字同步完成' }
+  catch (error) { syncMessage.value = `同步失败，已保留本地缓存：${error.message || error}` }
+  finally { syncing.value = false }
+}
 </script>
 <template>
   <main class="page-view">
-    <div class="page-heading"><div><h1>项目配置</h1><p>内置配置随程序更新；可导入本地 YAML 追加或覆盖关键字方案（无需云端同步）。</p></div><Button type="primary" @click="chooseFile"><template #icon><ImportOutlined /></template>导入本地配置</Button></div>
+    <div class="page-heading"><div><h1>项目配置</h1><p>本地配置与云端标准关键字独立保存；同步失败不会影响日志采集。</p></div><div class="row-actions"><Button :loading="syncing" @click="syncCloud"><template #icon><CloudSyncOutlined /></template>立即同步</Button><Button type="primary" @click="chooseFile"><template #icon><ImportOutlined /></template>导入本地配置</Button></div></div>
+    <p v-if="syncMessage" class="warning-note">{{ syncMessage }}</p>
     <section class="catalog-tree catalog-tree-readonly">
       <div class="section-heading"><h2>当前配置</h2><Tag>结构版本 {{ catalog.schemaVersion }}</Tag></div>
       <article v-for="project in catalog.projects" :key="project.id" class="catalog-project"><strong>{{ project.name }}</strong><small>{{ project.versions?.join(' / ') || '无预设版本' }}</small><div v-for="task in project.tasks" :key="task.id" class="catalog-task"><span>{{ task.name }}</span><Tag>{{ task.keywordProfiles?.length || 0 }} 个关键字方案</Tag></div></article>
