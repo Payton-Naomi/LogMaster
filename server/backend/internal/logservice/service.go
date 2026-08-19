@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"logmaster-agent/internal/config"
+	"logmaster-agent/internal/securevalue"
 )
 
 type Service struct {
@@ -25,6 +26,8 @@ type Service struct {
 	currentUserResolver func(*http.Request) (string, bool)
 	uploadToken         string
 	uploadOwnerOpenID   string
+	directory           *feishuDirectory
+	dynamicLLM          bool
 }
 
 const (
@@ -34,9 +37,13 @@ const (
 
 func NewService(cfg config.Config, repo *Repository) *Service {
 	service := &Service{config: cfg, repo: repo}
+	if cfg.FeishuAppID != "" && cfg.FeishuAppSecret != "" {
+		service.directory = newFeishuDirectory(cfg.FeishuAppID, cfg.FeishuAppSecret)
+	}
 	switch {
-	case cfg.LLMAPIBaseURL != "":
+	case cfg.LLMAPIBaseURL != "" || cfg.AgentAnalysisURL == "":
 		service.agent = NewLLMAnalyzer(cfg.LLMAPIBaseURL, cfg.LLMAPIKey, cfg.LLMModel, cfg.LLMTimeout, cfg.LLMMaxMatches, cfg.LLMMaxInputBytes)
+		service.dynamicLLM = true
 	case cfg.AgentAnalysisURL != "":
 		service.agent = NewHTTPAgentAnalyzer(cfg.AgentAnalysisURL, cfg.AgentAnalysisToken, cfg.AgentAnalysisTimeout)
 	}
@@ -49,6 +56,9 @@ func NewService(cfg config.Config, repo *Repository) *Service {
 
 func NewServiceWithAgent(cfg config.Config, repo *Repository, analyzer AgentAnalyzer) *Service {
 	service := &Service{config: cfg, repo: repo, agent: analyzer}
+	if cfg.FeishuAppID != "" && cfg.FeishuAppSecret != "" {
+		service.directory = newFeishuDirectory(cfg.FeishuAppID, cfg.FeishuAppSecret)
+	}
 	if service.agent != nil {
 		service.startAgentWorkers()
 	}
@@ -81,12 +91,30 @@ func (s *Service) processAgentJob(job agentJob) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
+	settings, settingsErr := s.repo.AIAnalysisSettings(ctx, s.fallbackAISettings())
+	if settingsErr != nil {
+		log.Printf("load AI settings for %s: %v", job.file.RelativePath, settingsErr)
+		return
+	}
+	analyzer := s.agent
+	if s.dynamicLLM {
+		apiKey := s.config.LLMAPIKey
+		if settings.LLMAPIKeyEncrypted != "" {
+			apiKey, settingsErr = securevalue.Decrypt(settings.LLMAPIKeyEncrypted, s.config.ConfigEncryptionKey)
+			if settingsErr != nil {
+				log.Printf("decrypt LLM API key for %s: %v", job.file.RelativePath, settingsErr)
+				return
+			}
+		}
+		analyzer = NewLLMAnalyzer(settings.LLMAPIBaseURL, apiKey, settings.LLMModel,
+			time.Duration(settings.LLMTimeoutSeconds)*time.Second, settings.LLMMaxMatches, settings.LLMMaxInputBytes)
+	}
 	if job.ownerOpenID != "" {
-		if settings, err := s.repo.AIAnalysisSettings(ctx, s.config.AIMaxFilesPerTask, s.config.AIDailyTokenQuota); err == nil && settings.DailyTokenQuota > 0 {
+		if settings.DailyTokenQuota > 0 {
 			used, usageErr := s.repo.UserDailyTokenUsage(ctx, job.ownerOpenID)
 			if usageErr == nil && used >= settings.DailyTokenQuota {
 				quotaErr := fmt.Errorf("daily AI token quota exceeded (%d/%d)", used, settings.DailyTokenQuota)
-				if err := s.repo.SaveAgentAnalysis(ctx, job.taskID, job.file.ID, s.agent.Provider(), AgentAnalysisResponse{}, quotaErr); err != nil {
+				if err := s.repo.SaveAgentAnalysis(ctx, job.taskID, job.file.ID, analyzer.Provider(), AgentAnalysisResponse{}, quotaErr); err != nil {
 					log.Printf("save agent analysis for %s: %v", job.file.RelativePath, err)
 				}
 				return
@@ -94,12 +122,19 @@ func (s *Service) processAgentJob(job agentJob) {
 		}
 	}
 
-	result, agentErr := s.agent.Analyze(ctx, AgentAnalysisRequest{
+	request := AgentAnalysisRequest{
 		TaskID: job.taskID, UploadID: job.uploadID, File: job.file,
 		TotalLines: job.totalLines, Matches: job.matches,
-	})
+	}
+	var result AgentAnalysisResponse
+	var agentErr error
+	if limited, ok := analyzer.(TokenLimitedAnalyzer); ok {
+		result, agentErr = limited.AnalyzeWithTokenLimit(ctx, request, settings.MaxTokensPerFile)
+	} else {
+		result, agentErr = analyzer.Analyze(ctx, request)
+	}
 
-	if reporter, ok := s.agent.(TokenUsageReporter); ok && agentErr == nil {
+	if reporter, ok := analyzer.(TokenUsageReporter); ok && agentErr == nil {
 		prompt, completion := reporter.LastUsage()
 		if prompt > 0 || completion > 0 {
 			if err := s.repo.RecordAIUsage(ctx, job.ownerOpenID, job.taskID, job.file.ID, prompt, completion); err != nil {
@@ -108,9 +143,29 @@ func (s *Service) processAgentJob(job agentJob) {
 		}
 	}
 
-	if err := s.repo.SaveAgentAnalysis(ctx, job.taskID, job.file.ID, s.agent.Provider(), result, agentErr); err != nil {
+	if err := s.repo.SaveAgentAnalysis(ctx, job.taskID, job.file.ID, analyzer.Provider(), result, agentErr); err != nil {
 		log.Printf("save agent analysis for %s: %v", job.file.RelativePath, err)
 	}
+}
+
+func (s *Service) fallbackAISettings() AIAnalysisSettings {
+	return AIAnalysisSettings{
+		LLMAPIBaseURL: s.config.LLMAPIBaseURL, LLMModel: s.config.LLMModel,
+		LLMTimeoutSeconds: int(s.config.LLMTimeout / time.Second), LLMMaxMatches: s.config.LLMMaxMatches,
+		LLMMaxInputBytes: s.config.LLMMaxInputBytes, MaxTokensPerFile: s.config.AIMaxTokensPerFile,
+		DailyTokenQuota: s.config.AIDailyTokenQuota,
+	}
+}
+
+func (s *Service) analysisEnabled(ctx context.Context) bool {
+	if s.agent == nil {
+		return false
+	}
+	if !s.dynamicLLM {
+		return true
+	}
+	settings, err := s.repo.AIAnalysisSettings(ctx, s.fallbackAISettings())
+	return err == nil && strings.TrimSpace(settings.LLMAPIBaseURL) != ""
 }
 
 func (s *Service) enqueueAgentAnalysis(job agentJob) {
@@ -237,13 +292,6 @@ func (s *Service) processUpload(uploadID string) {
 		fail("load parsing rules", fmt.Sprintf("load parsing rules: %v", err))
 		return
 	}
-	aiSettings := AIAnalysisSettings{MaxFilesPerTask: s.config.AIMaxFilesPerTask, DailyTokenQuota: s.config.AIDailyTokenQuota}
-	if s.agent != nil {
-		if loaded, err := s.repo.AIAnalysisSettings(ctx, s.config.AIMaxFilesPerTask, s.config.AIDailyTokenQuota); err == nil {
-			aiSettings = loaded
-		}
-	}
-	aiFilesEnqueued := 0
 	var processedBytes int64
 	for _, file := range files {
 		path := filepath.Join(storagePath, filepath.FromSlash(file.RelativePath))
@@ -275,13 +323,12 @@ func (s *Service) processUpload(uploadID string) {
 		if err := s.repo.UpdateParsingProgress(ctx, taskID, processedBytes); err != nil {
 			log.Printf("finalize parsing progress %s: %v", taskID, err)
 		}
-		if s.agent != nil && aiFilesEnqueued < aiSettings.MaxFilesPerTask {
+		if s.analysisEnabled(ctx) {
 			file.LineCount = summary.Lines
 			s.enqueueAgentAnalysis(agentJob{
 				taskID: taskID, uploadID: uploadID, ownerOpenID: ownerOpenID, file: file,
 				totalLines: summary.Lines, matches: summary.Results,
 			})
-			aiFilesEnqueued++
 		}
 	}
 	if err := s.repo.CompleteParsing(ctx, uploadID); err != nil {

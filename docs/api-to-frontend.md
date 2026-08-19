@@ -2,6 +2,10 @@
 
 本文档记录 `server/frontend` 使用的 Web API，更新日期为 2026-08-15。后端全部接口见 [`backend-api.md`](backend-api.md)。
 
+> **最新：818 调整（2026-08-18）**：采集端连续上传会话新增飞书通讯录 `uploader_email` 校验；前端普通文件上传保持 `uploader_name` 契约不变。
+
+> **818 补充**：修复 AI 分析用量记录的数据库权限问题，前端接口和返回结构不变。
+
 ## 1. 前端 API 清单
 
 > **8/16新增**：`GET` / `PUT` `/api/admin/ai-analysis-settings`
@@ -155,7 +159,7 @@ Axios 响应拦截器返回 `data` 字段，因此页面通常直接获得业务
 
 ### 4.3 `POST /api/logs/upload`
 
-使用 `multipart/form-data`。必填字段为一个或多个 `file`、`project_name`、`version`、`uploader_name`；常用可选字段为 `project_id`、任务信息、`remark`、`scenario_ids` 和 `client_request_id`。
+使用 `multipart/form-data`。采集会话创建接口要求 `uploader_email`，后端通过飞书通讯录解析并保存用户身份；普通前端文件上传仍可提交 `uploader_name`，不受采集端邮箱契约影响。
 
 请求头 `Idempotency-Key` 优先于表单幂等键。成功为 HTTP `202`，数据包含 `upload_id`、`task_id`、`query_code`、`status`、`file_count` 和 `client_request_id`。前端收到 `202` 后继续轮询任务接口。
 
@@ -363,9 +367,9 @@ AI 分析是异步任务：关键字规则结果先返回，AI 结果可能延�
 
 ### 8.6 AI 分析限额设置
 
-`GET /api/admin/ai-analysis-settings` 返回 `{max_files_per_task, daily_token_quota}`；`PUT` 使用相同结构更新。仅超级管理员可访问。
+`GET /api/admin/ai-analysis-settings` 返回 `{max_tokens_per_file, daily_token_quota}`；`PUT` 使用相同结构更新。仅超级管理员可访问。
 
-- `max_files_per_task`：每个上传任务最多对多少个文件做 AI 分析（1 到 500）。
+- `max_tokens_per_file`：单个文件允许的 AI 模型最大输出 token 数（1 到 1000000）。
 - `daily_token_quota`：每个用户每天的 AI token 配额，`0` 表示不限制。
 
 管理页面在「AI 分析」相关设置里提供这两个输入项，保存后调用 `PUT`；加载时调用 `GET`。
