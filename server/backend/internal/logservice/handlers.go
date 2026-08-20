@@ -96,6 +96,10 @@ func (s *Service) uploadHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if uploadSessionID == "" && metadata.UploaderName == "" {
+		writeError(w, http.StatusBadRequest, "uploader_name is required")
+		return
+	}
 	if metadata.ClientRequestID != "" {
 		existingUploadID, existingTaskID, existingQueryCode, existingStatus, existingFileCount, findErr := s.repo.FindUploadByClientRequestID(r.Context(), creatorOpenID, metadata.ClientRequestID)
 		if findErr == nil {
@@ -157,12 +161,15 @@ func (s *Service) uploadHandler(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "validate upload session failed")
 			return
 		}
-		if session.ProjectName != metadata.ProjectName || session.Version != metadata.Version ||
-			session.TestTaskID != metadata.TestTaskID || session.TestTaskName != metadata.TestTaskName ||
-			session.UploaderName != metadata.UploaderName {
+		if metadata.UploaderName != "" && session.UploaderName != metadata.UploaderName {
 			writeError(w, http.StatusBadRequest, "upload metadata does not match upload session")
 			return
 		}
+		if session.ProjectName != metadata.ProjectName || session.Version != metadata.Version || session.TestTaskID != metadata.TestTaskID || session.TestTaskName != metadata.TestTaskName {
+			writeError(w, http.StatusBadRequest, "upload metadata does not match upload session")
+			return
+		}
+		metadata.UploaderName, metadata.UploaderID = session.UploaderName, session.UploaderID
 		if !sameJSON(session.ConfigSnapshot, []byte(r.FormValue("config_snapshot"))) {
 			writeError(w, http.StatusBadRequest, "config_snapshot does not match upload session")
 			return
@@ -280,9 +287,6 @@ func uploadMetadataFromForm(r *http.Request, creatorOpenID, projectName, version
 		CollectorVersion:    strings.TrimSpace(r.FormValue("collector_version")),
 		Timezone:            strings.TrimSpace(r.FormValue("timezone")),
 		DisableParsingRules: true,
-	}
-	if metadata.UploaderName == "" {
-		return UploadMetadata{}, errors.New("uploader_name is required")
 	}
 	if value := strings.TrimSpace(r.FormValue("disable_parsing_rules")); value != "" {
 		disableParsingRules, err := strconv.ParseBool(value)
@@ -668,7 +672,7 @@ func (s *Service) taskHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.JSON(w, response.APIResponse{Code: 0, Message: "success", Data: map[string]any{
-		"task": upload, "files": files, "agent_enabled": s.agent != nil,
+		"task": upload, "files": files, "agent_enabled": s.analysisEnabled(r.Context()),
 	}})
 }
 

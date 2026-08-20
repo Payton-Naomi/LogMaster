@@ -55,14 +55,14 @@ func TestSaveDeviceConfigRequiresProjectAndVersionForUpload(t *testing.T) {
 	}
 }
 
-func TestUploadPrerequisitesRequireUploaderName(t *testing.T) {
-	dto := DeviceConfigDTO{SaveEnabled: true, UploadEnabled: true, ProjectID: "project-a", Version: "V1.0.0", UploaderName: "   "}
+func TestUploadPrerequisitesRequireUploaderEmail(t *testing.T) {
+	dto := DeviceConfigDTO{SaveEnabled: true, UploadEnabled: true, ProjectID: "project-a", Version: "V1.0.0"}
 	if err := validateUploadPrerequisites(dto); err == nil {
-		t.Fatal("upload without uploader name must be rejected")
+		t.Fatal("upload without uploader email must be rejected")
 	}
-	dto.UploaderName = "张三"
+	dto.UploaderEmail = "zhangsan@company.com"
 	if err := validateUploadPrerequisites(dto); err != nil {
-		t.Fatalf("upload with uploader name should pass prerequisite validation: %v", err)
+		t.Fatalf("upload with uploader email should pass prerequisite validation: %v", err)
 	}
 }
 

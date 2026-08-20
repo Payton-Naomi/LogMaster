@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -24,34 +25,36 @@ import (
 )
 
 type Service struct {
-	ctx            context.Context
-	cancel         context.CancelFunc
-	manager        *collector.Manager
-	store          *spool.Store
-	worker         *backend.Worker
-	backendClient  *backend.Client
-	close          sync.Once
-	mu             sync.RWMutex
-	configs        map[string]DeviceConfigDTO
-	configPath     string
-	rootDirectory  string
-	catalogPath    string
-	settingsPath   string
-	catalog        CatalogConfig
-	appSettings    AppSettingsDTO
-	pendingImports map[string]pendingCatalogImport
-	connectErrors  map[string]string
-	configDirty    map[string]bool
-	uploadProgress map[string]UploadProgressDTO
-	spoolDirectory string
-	maxDiskBytes   int64
-	workerCancel   context.CancelFunc
-	workerCtx      context.Context
-	workerDone     chan struct{}
-	workerStarted  chan struct{}
-	workerStart    sync.Once
-	logger         *slog.Logger
-	logWriter      *rotatingFile
+	ctx                    context.Context
+	cancel                 context.CancelFunc
+	manager                *collector.Manager
+	store                  *spool.Store
+	worker                 *backend.Worker
+	backendClient          *backend.Client
+	close                  sync.Once
+	mu                     sync.RWMutex
+	configs                map[string]DeviceConfigDTO
+	configPath             string
+	rootDirectory          string
+	catalogPath            string
+	cloudKeywordPath       string
+	settingsPath           string
+	catalog                CatalogConfig
+	appSettings            AppSettingsDTO
+	pendingImports         map[string]pendingCatalogImport
+	connectErrors          map[string]string
+	configDirty            map[string]bool
+	uploadProgress         map[string]UploadProgressDTO
+	spoolDirectory         string
+	maxDiskBytes           int64
+	workerCancel           context.CancelFunc
+	workerCtx              context.Context
+	workerDone             chan struct{}
+	workerStarted          chan struct{}
+	workerStart            sync.Once
+	logger                 *slog.Logger
+	logWriter              *rotatingFile
+	reportedServerFailures map[string]struct{}
 }
 
 type PortInfo struct {
@@ -83,6 +86,7 @@ type DeviceConfigDTO struct {
 	TestTaskID              string   `json:"testTaskId"`
 	TestTaskName            string   `json:"testTaskName"`
 	UploaderName            string   `json:"uploaderName"`
+	UploaderEmail           string   `json:"uploaderEmail"`
 	Remark                  string   `json:"remark"`
 	ScenarioIDs             []string `json:"scenarioIds"`
 	KeywordProfileID        string   `json:"keywordProfileId"`
@@ -153,6 +157,7 @@ type UploadBatchDTO struct {
 	CompletedAt    *time.Time `json:"completedAt,omitempty"`
 }
 type desktopSettings struct {
+	Version int               `json:"version"`
 	Devices []DeviceConfigDTO `json:"devices"`
 }
 type QueueStatus struct {
@@ -316,7 +321,7 @@ func newServiceAtConfig(root string, cfg config.Config, configured bool) (*Servi
 		isConfigured := strings.TrimSpace(cfg.Backend.ProjectName) != "" && strings.TrimSpace(cfg.Backend.Version) != ""
 		configs[id] = DeviceConfigDTO{DeviceID: id, Name: defaultSerialChannelName(port.PortName, i+1), PortName: port.PortName, BaudRate: port.BaudRate, DataBits: port.DataBits, StopBits: port.StopBits, Parity: port.Parity, Handshake: port.Handshake, DTR: port.DTR, RTS: port.RTS, Configured: isConfigured, ProjectID: cfg.Backend.ProjectName, ProjectName: cfg.Backend.ProjectName, Version: cfg.Backend.Version, SaveEnabled: isConfigured, UploadEnabled: isConfigured, NoLogTimeoutSeconds: appSettings.NoLogTimeoutSeconds, VID: port.PortMatch.VID, PID: port.PortMatch.PID, USBSerial: port.PortMatch.USBSerial, Location: port.PortMatch.PhysicalLocation}
 	}
-	service := &Service{manager: manager, store: store, worker: worker, backendClient: client, ctx: ctx, cancel: cancel, configs: configs, configPath: filepath.Join(root, "desktop-config.json"), rootDirectory: root, catalogPath: catalogPath, settingsPath: settingsPath, catalog: catalog, appSettings: appSettings, pendingImports: map[string]pendingCatalogImport{}, connectErrors: map[string]string{}, configDirty: map[string]bool{}, uploadProgress: map[string]UploadProgressDTO{}, spoolDirectory: cfg.Spool.Directory, maxDiskBytes: cfg.Spool.MaxDiskBytes, workerCtx: workerCtx, workerCancel: workerCancel, workerDone: make(chan struct{}), workerStarted: make(chan struct{}), logger: logger, logWriter: logWriter}
+	service := &Service{manager: manager, store: store, worker: worker, backendClient: client, ctx: ctx, cancel: cancel, configs: configs, configPath: filepath.Join(root, "desktop-config.json"), rootDirectory: root, catalogPath: catalogPath, cloudKeywordPath: filepath.Join(root, "cloud-keywords.json"), settingsPath: settingsPath, catalog: catalog, appSettings: appSettings, pendingImports: map[string]pendingCatalogImport{}, connectErrors: map[string]string{}, configDirty: map[string]bool{}, uploadProgress: map[string]UploadProgressDTO{}, spoolDirectory: cfg.Spool.Directory, maxDiskBytes: cfg.Spool.MaxDiskBytes, workerCtx: workerCtx, workerCancel: workerCancel, workerDone: make(chan struct{}), workerStarted: make(chan struct{}), logger: logger, logWriter: logWriter, reportedServerFailures: map[string]struct{}{}}
 	worker.SetProgressHandler(service.handleUploadProgress)
 	if err := service.loadSettings(); err != nil {
 		cancel()
@@ -325,6 +330,7 @@ func newServiceAtConfig(root string, cfg config.Config, configured bool) (*Servi
 		store.Close()
 		return nil, err
 	}
+	service.loadCloudKeywordCache()
 	for _, dto := range service.configs {
 		if dto.UploadEnabled {
 			ready := dto.UploadSetupState == "active" && dto.UploadSessionID != "" && dto.QueryCode != ""
@@ -362,6 +368,12 @@ func (s *Service) startup(ctx context.Context) {
 	go s.pumpEvents()
 	go s.monitorPorts()
 	go s.cleanupLoop()
+	go func() {
+		if _, err := s.SyncCloudKeywords(); err != nil && s.logger != nil {
+			s.logger.Warn("automatic cloud keyword sync failed; cached keywords retained", "component", "desktop.keywords", "error", err)
+		}
+	}()
+	go s.monitorUploadSessionFailures()
 	s.workerStart.Do(func() { close(s.workerStarted); go func() { defer close(s.workerDone); s.worker.Run(s.workerCtx) }() })
 }
 func (s *Service) shutdown() {
@@ -577,7 +589,7 @@ func (s *Service) configForPortLocked(value any, index int) DeviceConfigDTO {
 		// defaults instead of inheriting the previous device's upload settings.
 		stableMatch := port.USBSerial != "" && cfg.USBSerial != "" && strings.EqualFold(port.USBSerial, cfg.USBSerial) && strings.EqualFold(port.VID, cfg.VID) && strings.EqualFold(port.PID, cfg.PID)
 		nameMatch := strings.TrimSpace(cfg.USBSerial) == "" && strings.TrimSpace(port.USBSerial) == "" && strings.EqualFold(strings.TrimSpace(cfg.PortName), name)
-		if stableMatch || nameMatch {
+		if stableMatch {
 			cfg.PortName = name
 			cfg.VID, cfg.PID, cfg.USBSerial, cfg.Location = port.VID, port.PID, port.USBSerial, port.Location
 			if strings.TrimSpace(cfg.Name) == "" {
@@ -585,10 +597,27 @@ func (s *Service) configForPortLocked(value any, index int) DeviceConfigDTO {
 			}
 			return s.applyLogConfigDefaultsLocked(normalizeDeviceConfig(cfg))
 		}
+		if nameMatch {
+			return serialOnlyInheritedConfig(cfg, port, index)
+		}
 	}
 	defaults := defaultDesktopPortConfig()
 	dto := DeviceConfigDTO{DeviceID: serialDeviceID(name, index), Name: defaultSerialChannelName(name, index+1), PortName: name, BaudRate: defaults.BaudRate, DataBits: defaults.DataBits, StopBits: defaults.StopBits, Parity: defaults.Parity, Handshake: defaults.Handshake, Encoding: "utf-8", DTR: defaults.DTR, RTS: defaults.RTS, SaveEnabled: s.appSettings.DefaultSaveEnabled, UploadEnabled: false, NoLogTimeoutSeconds: s.appSettings.NoLogTimeoutSeconds, VID: port.VID, PID: port.PID, USBSerial: port.USBSerial, Location: port.Location}
 	return s.applyLogConfigDefaultsLocked(dto)
+}
+
+func serialOnlyInheritedConfig(source DeviceConfigDTO, port PortInfo, index int) DeviceConfigDTO {
+	dto := DeviceConfigDTO{
+		DeviceID: serialDeviceID(port.Name, index), Name: source.Name, PortName: strings.TrimSpace(port.Name),
+		BaudRate: source.BaudRate, DataBits: source.DataBits, StopBits: source.StopBits, Parity: source.Parity,
+		Handshake: source.Handshake, Encoding: source.Encoding, DTR: source.DTR, RTS: source.RTS,
+		SaveEnabled: source.SaveEnabled, UploadEnabled: false, NoLogTimeoutSeconds: source.NoLogTimeoutSeconds,
+		VID: port.VID, PID: port.PID, USBSerial: port.USBSerial, Location: port.Location,
+	}
+	if strings.TrimSpace(dto.Name) == "" {
+		dto.Name = defaultSerialChannelName(port.Name, index+1)
+	}
+	return normalizeDeviceConfig(dto)
 }
 
 func defaultDesktopPortConfig() config.PortConfig {
@@ -797,6 +826,7 @@ func (s *Service) toCollectorConfig(dto DeviceConfigDTO) collector.DeviceConfig 
 	result.TestTaskID = dto.TestTaskID
 	result.TestTaskName = dto.TestTaskName
 	result.UploaderName = dto.UploaderName
+	result.UploaderEmail = dto.UploaderEmail
 	result.Remark = dto.Remark
 	result.ScenarioIDs = append([]string(nil), dto.ScenarioIDs...)
 	result.CollectorVersion = settings.ProgramVersion
@@ -820,6 +850,7 @@ func normalizeDeviceConfig(dto DeviceConfigDTO) DeviceConfigDTO {
 	dto.TestTaskID = strings.TrimSpace(dto.TestTaskID)
 	dto.TestTaskName = strings.TrimSpace(dto.TestTaskName)
 	dto.UploaderName = strings.TrimSpace(dto.UploaderName)
+	dto.UploaderEmail = strings.ToLower(strings.TrimSpace(dto.UploaderEmail))
 	dto.Remark = strings.TrimSpace(dto.Remark)
 	legacyID := strings.HasPrefix(dto.DeviceID, "DUT-")
 	if (dto.DeviceID == "" || legacyID) && dto.PortName != "" {
@@ -909,22 +940,87 @@ func (s *Service) disconnectRemovedPorts(ports []PortInfo) {
 	}
 }
 
-// loadSettings intentionally does not restore per-channel history. Starting
-// with 0.0.9 each channel begins from clean defaults on every launch (cloud
-// upload off, no project/version/uploader retained). Any legacy
-// desktop-config.json left by older versions is removed so it cannot be
-// mistaken for active configuration.
 func (s *Service) loadSettings() error {
-	if err := os.Remove(s.configPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove legacy desktop settings: %w", err)
+	sourcePath := s.configPath
+	data, err := os.ReadFile(s.configPath)
+	if errors.Is(err, os.ErrNotExist) {
+		backup := s.configPath + ".bak"
+		data, err = os.ReadFile(backup)
+		sourcePath = backup
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read desktop settings: %w", err)
+	}
+	var settings desktopSettings
+	if err := json.Unmarshal(data, &settings); err != nil {
+		broken := s.configPath + "." + time.Now().Format("20060102-150405") + ".broken"
+		if renameErr := os.Rename(sourcePath, broken); renameErr != nil && !errors.Is(renameErr, os.ErrNotExist) {
+			return fmt.Errorf("backup broken desktop settings: %w", renameErr)
+		}
+		if s.logger != nil {
+			s.logger.Error("desktop settings are invalid; defaults restored", "component", "desktop.settings", "backup", broken, "error", err)
+		}
+		return nil
+	}
+	for _, value := range settings.Devices {
+		value = normalizeDeviceConfig(value)
+		if strings.TrimSpace(value.USBSerial) == "" {
+			value = serialOnlyInheritedConfig(value, PortInfo{Name: value.PortName, VID: value.VID, PID: value.PID, Location: value.Location}, 0)
+		}
+		if value.UploadEnabled && (value.UploadSessionID == "" || value.QueryCode == "" || value.ConfigSnapshot == "") {
+			value.UploadSetupState = "pending"
+			value.UploadSessionID, value.QueryCode = "", ""
+		}
+		key := value.DeviceID
+		if key == "" {
+			key = fmt.Sprintf("persisted-%d", len(s.configs)+1)
+		}
+		s.configs[key] = value
 	}
 	return nil
 }
 
-// saveSettings keeps channel configuration in memory only for the current
-// session. It no longer writes desktop-config.json, so a channel's previous
-// configuration is never carried over to the next run or another device.
 func (s *Service) saveSettings() error {
+	s.mu.RLock()
+	byIdentity := make(map[string]DeviceConfigDTO, len(s.configs))
+	for _, value := range s.configs {
+		key := strings.ToUpper(strings.TrimSpace(value.PortName))
+		if value.USBSerial != "" {
+			key = strings.ToUpper(strings.TrimSpace(value.VID)) + "|" + strings.ToUpper(strings.TrimSpace(value.PID)) + "|" + strings.ToUpper(strings.TrimSpace(value.USBSerial))
+		}
+		byIdentity[key] = value
+	}
+	devices := make([]DeviceConfigDTO, 0, len(byIdentity))
+	for _, value := range byIdentity {
+		devices = append(devices, value)
+	}
+	s.mu.RUnlock()
+	sort.Slice(devices, func(i, j int) bool { return naturalPortLess(devices[i].PortName, devices[j].PortName) })
+	data, err := json.MarshalIndent(desktopSettings{Version: 1, Devices: devices}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode desktop settings: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(s.configPath), 0o755); err != nil {
+		return err
+	}
+	temporary := s.configPath + ".tmp"
+	backup := s.configPath + ".bak"
+	if err := os.WriteFile(temporary, append(data, '\n'), 0o600); err != nil {
+		return fmt.Errorf("write desktop settings: %w", err)
+	}
+	_ = os.Remove(backup)
+	if err := os.Rename(s.configPath, backup); err != nil && !errors.Is(err, os.ErrNotExist) {
+		_ = os.Remove(temporary)
+		return fmt.Errorf("backup desktop settings: %w", err)
+	}
+	if err := os.Rename(temporary, s.configPath); err != nil {
+		_ = os.Rename(backup, s.configPath)
+		return fmt.Errorf("commit desktop settings: %w", err)
+	}
+	_ = os.Remove(backup)
 	return nil
 }
 

@@ -21,6 +21,7 @@ type Session struct {
 	TestTaskID       string
 	TestTaskName     string
 	UploaderName     string
+	UploaderEmail    string
 	Remark           string
 	ScenarioIDs      []string
 	CollectorVersion string
@@ -94,8 +95,8 @@ func (s *Store) StartSession(ctx context.Context, session Session) (string, erro
 	if err != nil {
 		return "", fmt.Errorf("encode session scenario ids: %w", err)
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO collection_sessions(session_id,device_sn,port_name,project_id,project_name,version,test_task_id,test_task_name,save_enabled,upload_enabled,started_at,uploader_name,remark,collector_version,timezone,scenario_ids_json)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id) DO NOTHING`, session.ID, session.DeviceSN, session.PortName, session.ProjectID, session.ProjectName, session.Version, session.TestTaskID, session.TestTaskName, boolInt(session.SaveEnabled), boolInt(session.UploadEnabled), session.StartedAt.UTC().Format(time.RFC3339Nano), session.UploaderName, session.Remark, session.CollectorVersion, session.Timezone, string(scenarioJSON))
+	_, err = s.db.ExecContext(ctx, `INSERT INTO collection_sessions(session_id,device_sn,port_name,project_id,project_name,version,test_task_id,test_task_name,save_enabled,upload_enabled,started_at,uploader_name,uploader_email,remark,collector_version,timezone,scenario_ids_json)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id) DO NOTHING`, session.ID, session.DeviceSN, session.PortName, session.ProjectID, session.ProjectName, session.Version, session.TestTaskID, session.TestTaskName, boolInt(session.SaveEnabled), boolInt(session.UploadEnabled), session.StartedAt.UTC().Format(time.RFC3339Nano), session.UploaderName, strings.ToLower(strings.TrimSpace(session.UploaderEmail)), session.Remark, session.CollectorVersion, session.Timezone, string(scenarioJSON))
 	return session.ID, err
 }
 

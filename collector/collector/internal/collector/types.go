@@ -63,6 +63,7 @@ type DeviceConfig struct {
 	TestTaskID       string
 	TestTaskName     string
 	UploaderName     string
+	UploaderEmail    string
 	Remark           string
 	ScenarioIDs      []string
 	CollectorVersion string

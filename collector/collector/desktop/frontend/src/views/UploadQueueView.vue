@@ -37,7 +37,7 @@ onMounted(load)
         <article v-for="item in group.items" :key="item.id" class="upload-card">
           <div class="upload-main"><Tag :color="item.state === 'uploaded' ? 'success' : item.state === 'uncertain' ? 'warning' : item.state === 'dead' ? 'error' : 'processing'">{{ state(item.state) }}</Tag><div><strong>第 {{ item.uploadPosition || 1 }} 次上传 · {{ item.fileName?.split(/[\\/]/).pop() || item.id }}</strong><small>{{ item.deviceId }} · {{ item.projectName || '未配置' }} · {{ item.version || '—' }}</small></div></div>
           <div class="progress-area"><Progress :percent="progress(item).percent" size="small" :status="item.state === 'dead' ? 'exception' : item.state === 'uploaded' ? 'success' : 'active'" /><small>{{ bytes(progress(item).sent) }} / {{ bytes(progress(item).total) }} · {{ bytes(progress(item).speed) }}/s</small></div>
-          <div class="query-code"><span>{{ item.queryCode ? `${item.projectName || '未配置项目'} · ${item.queryCode}` : '平台未提供查询码' }}</span><Button size="small" :disabled="!item.queryCode" @click="copy(item.queryCode)"><template #icon><CopyOutlined /></template>{{ item.queryCode ? '复制' : '不可查询' }}</Button></div>
+          <div class="query-code"><span>{{ item.queryCode || '平台未提供查询码' }}</span><Button size="small" :disabled="!item.queryCode" @click="copy(item.queryCode)"><template #icon><CopyOutlined /></template>{{ item.queryCode ? '复制' : '不可查询' }}</Button></div>
           <div v-if="item.state === 'uncertain' || item.state === 'dead'" class="upload-actions"><Button size="small" type="primary" :loading="retrying" @click="retry(item)"><template #icon><ReloadOutlined /></template>重新上传</Button></div>
           <small class="upload-error">{{ item.lastError || `重试 ${item.attemptCount || 0} 次` }}</small>
         </article>

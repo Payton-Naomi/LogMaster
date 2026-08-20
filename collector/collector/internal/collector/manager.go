@@ -254,14 +254,14 @@ func (m *Manager) deliver(config DeviceConfig) segment.Deliver {
 			version = m.cfg.Version
 		}
 		createdAt := config.StartedAt
-		metadata := spool.UploadMetadata{ProjectID: config.ProjectID, ProjectName: project, Version: version, TestTaskID: config.TestTaskID, TestTaskName: config.TestTaskName, UploaderName: config.UploaderName, Remark: config.Remark, CollectorVersion: config.CollectorVersion, Timezone: config.Timezone, CreatedAt: &createdAt, StartedAt: &createdAt, ScenarioIDs: append([]string(nil), config.ScenarioIDs...), UploadSessionID: config.UploadSessionID, QueryCode: config.QueryCode, ConfigSnapshot: config.ConfigSnapshot}
+		metadata := spool.UploadMetadata{ProjectID: config.ProjectID, ProjectName: project, Version: version, TestTaskID: config.TestTaskID, TestTaskName: config.TestTaskName, UploaderName: config.UploaderName, UploaderEmail: config.UploaderEmail, Remark: config.Remark, CollectorVersion: config.CollectorVersion, Timezone: config.Timezone, CreatedAt: &createdAt, StartedAt: &createdAt, ScenarioIDs: append([]string(nil), config.ScenarioIDs...), UploadSessionID: config.UploadSessionID, QueryCode: config.QueryCode, ConfigSnapshot: config.ConfigSnapshot}
 		_, err = m.store.EnqueueFileWithMetadata(ctx, metadata, spool.File{LogFileID: logFileID, SessionID: config.SessionID, Path: completed.Path, SHA256: completed.SHA256, SizeBytes: completed.SizeBytes, DeviceSN: config.ID, FirstSequence: completed.FirstSequence, LastSequence: completed.LastSequence})
 		return err
 	}
 }
 
 func sessionFromConfig(config DeviceConfig) spool.Session {
-	return spool.Session{ID: config.SessionID, DeviceSN: config.ID, PortName: config.Serial.PortName, ProjectID: config.ProjectID, ProjectName: config.ProjectName, Version: config.Version, TestTaskID: config.TestTaskID, TestTaskName: config.TestTaskName, UploaderName: config.UploaderName, Remark: config.Remark, ScenarioIDs: append([]string(nil), config.ScenarioIDs...), CollectorVersion: config.CollectorVersion, Timezone: config.Timezone, SaveEnabled: true, UploadEnabled: config.uploadEnabled(), StartedAt: config.StartedAt}
+	return spool.Session{ID: config.SessionID, DeviceSN: config.ID, PortName: config.Serial.PortName, ProjectID: config.ProjectID, ProjectName: config.ProjectName, Version: config.Version, TestTaskID: config.TestTaskID, TestTaskName: config.TestTaskName, UploaderName: config.UploaderName, UploaderEmail: config.UploaderEmail, Remark: config.Remark, ScenarioIDs: append([]string(nil), config.ScenarioIDs...), CollectorVersion: config.CollectorVersion, Timezone: config.Timezone, SaveEnabled: true, UploadEnabled: config.uploadEnabled(), StartedAt: config.StartedAt}
 }
 
 func (m *Manager) UpdateDeviceConfig(deviceID string, config DeviceConfig) error {

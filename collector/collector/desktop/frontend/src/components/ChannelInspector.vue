@@ -36,7 +36,7 @@ const pickerRules = computed(() => pickerGroup.value?.rules || [])
 const selectedRules = computed(() => rules.value.filter((rule) => draft.keywordRuleIds?.includes(rule.id)))
 const versionOptions = computed(() => (project.value?.versions || []).map((value) => ({ value, label: value })))
 const storageText = computed(() => formatBytes(props.device?.storageBytes || 0))
-const uploadReady = computed(() => Boolean(draft.uploadEnabled && draft.saveEnabled && draft.projectId && String(draft.version || '').trim() && String(draft.uploaderName || '').trim()))
+const uploadReady = computed(() => Boolean(draft.uploadEnabled && draft.saveEnabled && draft.projectId && String(draft.version || '').trim() && String(draft.uploaderEmail || '').trim()))
 
 function uniqueCatalogItems(items) {
   const result = new Map()
@@ -122,8 +122,9 @@ function time(value) { return value ? new Date(value).toLocaleString('zh-CN', { 
           </div>
           <div class="field-grid">
             <FormItem label="测试任务"><Select v-model:value="draft.testTaskId" allow-clear placeholder="请选择" :options="tasks.map((item) => ({ value: item.id, label: item.name }))" @change="onTaskChange" /></FormItem>
-            <FormItem label="上传人"><Input v-model:value="draft.uploaderName" :maxlength="128" allow-clear placeholder="上传云端时必填" @input="change" /></FormItem>
+            <FormItem label="上传人企业邮箱"><Input v-model:value="draft.uploaderEmail" type="email" :maxlength="320" allow-clear placeholder="name@company.com" @input="change" /></FormItem>
           </div>
+          <FormItem v-if="draft.uploaderName" label="已识别上传人"><Input :value="draft.uploaderName" disabled /></FormItem>
           <FormItem label="测试备注"><Input.TextArea v-model:value="draft.remark" :maxlength="4000" :auto-size="{ minRows: 1, maxRows: 3 }" allow-clear placeholder="选填" @input="change" /></FormItem>
         </template>
         <Button type="primary" block :loading="busy" :disabled="!dirty && device.config?.configured" @click="save"><template #icon><SaveOutlined /></template>{{ uploadReady ? '保存上传/通道配置' : '保存通道配置' }}</Button>
@@ -148,7 +149,7 @@ function time(value) { return value ? new Date(value).toLocaleString('zh-CN', { 
     <Modal v-model:open="keywordDialog" title="选择关键字" ok-text="完成" @ok="confirmKeywordSelection">
       <div class="keyword-picker">
         <aside class="keyword-profile-list"><Button v-for="item in groups" :key="item.id" block :type="pickerGroupId === item.id ? 'primary' : 'text'" @click="selectPickerGroup(item.id)"><span>{{ item.name }}</span><small v-if="item.scope">{{ item.scope }}</small></Button></aside>
-        <section class="keyword-rule-list"><Empty v-if="!pickerRules.length" :image="Empty.PRESENTED_IMAGE_SIMPLE" description="该方案没有关键字" /><Checkbox v-for="rule in pickerRules" v-else :key="rule.id" :checked="pickerRuleIds.includes(rule.id)" @change="togglePickerRule(rule.id, $event.target.checked)"><span class="check-row"><strong>{{ rule.name }}</strong><small>{{ rule.match }}</small></span></Checkbox></section>
+        <section class="keyword-rule-list"><Empty v-if="!pickerRules.length" :image="Empty.PRESENTED_IMAGE_SIMPLE" description="该方案没有关键字" /><Checkbox v-for="rule in pickerRules" v-else :key="rule.id" :checked="pickerRuleIds.includes(rule.id)" @change="togglePickerRule(rule.id, $event.target.checked)"><span class="check-row"><strong>{{ rule.name }}<Tag v-if="rule.readOnly" color="blue">云端</Tag></strong><small>{{ rule.match }}{{ rule.level ? ` · ${rule.level}` : '' }}{{ rule.description ? ` · ${rule.description}` : '' }}</small></span></Checkbox></section>
       </div>
     </Modal>
   </aside>

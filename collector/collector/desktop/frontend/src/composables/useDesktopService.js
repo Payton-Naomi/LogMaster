@@ -1,5 +1,5 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { notification } from 'ant-design-vue'
+import { Modal, notification } from 'ant-design-vue'
 
 const DEFAULT_MAX_LINES = 2000
 
@@ -23,6 +23,7 @@ export function useDesktopService() {
   let disposePorts
   let disposeProgress
   let disposeCatalog
+  let disposeServerFailure
 
   const api = () => window.go?.main?.Service
   const selectedDevice = computed(() => devices.value.find((item) => item.deviceId === selectedDeviceId.value) || devices.value[0] || null)
@@ -124,10 +125,14 @@ export function useDesktopService() {
         if (item) Object.assign(item, { bytesSent: progress.sentBytes, bytesTotal: progress.totalBytes, speedBytes: progress.speedBytes })
       })
       disposeCatalog = window.runtime.EventsOn('catalog:updated', (value) => { catalog.value = value })
+      disposeServerFailure = window.runtime.EventsOn('upload:server-failure', (failure) => {
+        const labels = { decompress_failed: '解压失败', parse_failed: '解析失败', storage_failed: '存储失败', unknown_failed: '处理失败' }
+        Modal.error({ title: labels[failure.errorType] || '云端处理失败', content: `文件：${failure.fileName || '未知'}\n查询码：${failure.queryCode || '—'}\n原因：${failure.errorMessage || '服务端未返回具体原因'}`, okText: '知道了' })
+      })
     }
   })
 
-  onBeforeUnmount(() => { disposeLogs?.(); disposeState?.(); disposePorts?.(); disposeProgress?.(); disposeCatalog?.() })
+  onBeforeUnmount(() => { disposeLogs?.(); disposeState?.(); disposePorts?.(); disposeProgress?.(); disposeCatalog?.(); disposeServerFailure?.() })
 
   return { serviceReady, banner, busy, devices, selectedDeviceId, selectedDevice, queueStatus, queuePage, catalog, settings, logs, uploadProgress, invoke, showWarning, refreshAll, refreshDevices, refreshQueue, withBusy, clearLogs, deviceLogs, connect, disconnect, saveDeviceConfig, sendCommand }
 }

@@ -25,8 +25,9 @@ type Config struct {
 	LLMTimeout            time.Duration
 	LLMMaxMatches         int
 	LLMMaxInputBytes      int
-	AIMaxFilesPerTask     int
+	AIMaxTokensPerFile    int
 	AIDailyTokenQuota     int64
+	ConfigEncryptionKey   string
 	FrontendDistDir       string
 	PublicBaseURL         string
 	FeishuRoleTitleRules  string
@@ -60,8 +61,9 @@ func Load() Config {
 		LLMTimeout:            time.Duration(envInt64("LLM_TIMEOUT_SECONDS", 120)) * time.Second,
 		LLMMaxMatches:         envInt("LLM_MAX_MATCHES", 50),
 		LLMMaxInputBytes:      envInt("LLM_MAX_INPUT_BYTES", 200000),
-		AIMaxFilesPerTask:     envInt("AI_MAX_FILES_PER_TASK", 20),
+		AIMaxTokensPerFile:    envInt("AI_MAX_TOKENS_PER_FILE", 20000),
 		AIDailyTokenQuota:     envInt64("AI_DAILY_TOKEN_QUOTA", 1000000),
+		ConfigEncryptionKey:   os.Getenv("LOGMASTER_CONFIG_ENCRYPTION_KEY"),
 		FrontendDistDir:       firstNonEmpty(os.Getenv("FRONTEND_DIST_DIR"), "frontend/dist"),
 		PublicBaseURL:         strings.TrimRight(os.Getenv("PUBLIC_BASE_URL"), "/"),
 		FeishuRoleTitleRules:  os.Getenv("FEISHU_ROLE_TITLE_RULES"),
