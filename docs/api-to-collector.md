@@ -2,6 +2,10 @@
 
 本文档记录 `collector/collector` 对接的后端 API，更新日期为 2026-08-15。后端全部接口见 [`backend-api.md`](backend-api.md)。
 
+> **最新：818 调整（2026-08-18）**：连续上传会话创建必须提交 `uploader_email`；后端先通过飞书通讯录校验企业归属和账号状态，再同步姓名、用户 ID 与邮箱，`uploader_name` 可选。
+
+> **818 补充**：AI 用量记录权限已通过 `027_ai_usage_permissions.sql` 修复，采集端 API 契约不变。
+
 ## 1. 采集端 API 清单
 
 > **8/16新增**：无
@@ -88,7 +92,8 @@ Authorization: Bearer <token>
 | `client_request_id` | 非空，最多 128 字符，同一上传用户下用于幂等 |
 | `project_name` | 非空，最多 128 字符，必须是启用项目 |
 | `version` | 非空，最多 64 字符 |
-| `uploader_name` | 非空，最多 128 字符 |
+| `uploader_email` | 必填，必须匹配飞书当前企业通讯录中的有效邮箱，最多 320 字符 |
+| `uploader_name` | 可选；提供时必须与邮箱对应用户姓名一致，最多 128 字符 |
 
 完整请求可包含：
 
@@ -110,6 +115,7 @@ Authorization: Bearer <token>
   "version": "1.0.0",
   "test_task_id": "task-001",
   "test_task_name": "稳定性测试",
+  "uploader_email": "wushouchao@70mai.com",
   "uploader_name": "张三",
   "remark": "连续采集",
   "scenario_ids": ["scenario-01"],

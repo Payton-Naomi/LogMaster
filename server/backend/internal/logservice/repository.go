@@ -13,10 +13,22 @@ import (
 type Repository struct{ db *sql.DB }
 
 var (
-	ErrProjectNotFound         = errors.New("project not found")
-	ErrScenarioNotApplicable   = errors.New("scenario does not exist, is not published, or does not apply to the project")
-	ErrScenarioRuleUnavailable = errors.New("scenario contains a rule unavailable to the current user")
+	ErrProjectNotFound          = errors.New("project not found")
+	ErrScenarioNotApplicable    = errors.New("scenario does not exist, is not published, or does not apply to the project")
+	ErrScenarioRuleUnavailable  = errors.New("scenario contains a rule unavailable to the current user")
+	ErrUploaderEmailNotFound    = errors.New("uploader email is not registered")
+	ErrUploaderEmailAmbiguous   = errors.New("uploader email matches multiple users")
+	ErrUploaderEmailMismatch    = errors.New("uploader name does not match uploader email")
+	ErrUploaderEmailNotInternal = errors.New("uploader email is not an active enterprise member")
 )
+
+func (r *Repository) UpsertCollectorIdentity(ctx context.Context, identity collectorIdentity) error {
+	_, err := r.db.ExecContext(ctx, `INSERT INTO logmaster_api.users (feishu_open_id, name, email, role, role_source)
+		VALUES ($1,$2,$3,'user','feishu')
+		ON CONFLICT (feishu_open_id) DO UPDATE SET name=EXCLUDED.name,email=EXCLUDED.email,updated_at=NOW()`,
+		identity.OpenID, identity.Name, identity.Email)
+	return err
+}
 
 type Upload struct {
 	ID               string     `json:"id"`
@@ -1065,15 +1077,25 @@ func (r *Repository) AgentResults(ctx context.Context, taskID, ownerOpenID strin
 }
 
 type AIAnalysisSettings struct {
-	MaxFilesPerTask int   `json:"max_files_per_task"`
-	DailyTokenQuota int64 `json:"daily_token_quota"`
+	LLMAPIBaseURL      string
+	LLMAPIKeyEncrypted string
+	LLMModel           string
+	LLMTimeoutSeconds  int
+	LLMMaxMatches      int
+	LLMMaxInputBytes   int
+	MaxTokensPerFile   int
+	DailyTokenQuota    int64
 }
 
-func (r *Repository) AIAnalysisSettings(ctx context.Context, fallbackMaxFiles int, fallbackQuota int64) (AIAnalysisSettings, error) {
-	settings := AIAnalysisSettings{MaxFilesPerTask: fallbackMaxFiles, DailyTokenQuota: fallbackQuota}
-	err := r.db.QueryRowContext(ctx, `SELECT max_files_per_task, daily_token_quota
-		FROM logmaster_api.ai_analysis_config WHERE singleton = TRUE`).
-		Scan(&settings.MaxFilesPerTask, &settings.DailyTokenQuota)
+func (r *Repository) AIAnalysisSettings(ctx context.Context, fallback AIAnalysisSettings) (AIAnalysisSettings, error) {
+	settings := fallback
+	err := r.db.QueryRowContext(ctx, `SELECT COALESCE(NULLIF(llm_api_base_url,''),$1), llm_api_key_encrypted,
+		COALESCE(NULLIF(llm_model,''),$2), COALESCE(NULLIF(llm_timeout_seconds,0),$3),
+		COALESCE(NULLIF(llm_max_matches,0),$4), COALESCE(NULLIF(llm_max_input_bytes,0),$5),
+		max_tokens_per_file, daily_token_quota FROM logmaster_api.ai_analysis_config WHERE singleton = TRUE`,
+		fallback.LLMAPIBaseURL, fallback.LLMModel, fallback.LLMTimeoutSeconds, fallback.LLMMaxMatches, fallback.LLMMaxInputBytes).
+		Scan(&settings.LLMAPIBaseURL, &settings.LLMAPIKeyEncrypted, &settings.LLMModel, &settings.LLMTimeoutSeconds,
+			&settings.LLMMaxMatches, &settings.LLMMaxInputBytes, &settings.MaxTokensPerFile, &settings.DailyTokenQuota)
 	if errors.Is(err, sql.ErrNoRows) {
 		return settings, nil
 	}

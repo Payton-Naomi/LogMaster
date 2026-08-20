@@ -60,6 +60,10 @@ func (a *LLMAnalyzer) LastUsage() (int, int) {
 }
 
 func (a *LLMAnalyzer) Analyze(ctx context.Context, request AgentAnalysisRequest) (AgentAnalysisResponse, error) {
+	return a.AnalyzeWithTokenLimit(ctx, request, 0)
+}
+
+func (a *LLMAnalyzer) AnalyzeWithTokenLimit(ctx context.Context, request AgentAnalysisRequest, maxTokens int) (AgentAnalysisResponse, error) {
 	if a.baseURL == "" {
 		return AgentAnalysisResponse{}, fmt.Errorf("llm base url is empty")
 	}
@@ -67,7 +71,7 @@ func (a *LLMAnalyzer) Analyze(ctx context.Context, request AgentAnalysisRequest)
 	if err != nil {
 		return AgentAnalysisResponse{}, err
 	}
-	raw, err := a.chat(ctx, prompt)
+	raw, err := a.chat(ctx, prompt, maxTokens)
 	if err != nil {
 		return AgentAnalysisResponse{}, err
 	}
@@ -84,6 +88,7 @@ type llmContextLine struct {
 
 type llmMatch struct {
 	Level       string           `json:"level"`
+	RuleName    string           `json:"rule_name,omitempty"`
 	MatchedText string           `json:"matched_text"`
 	LineNumber  int64            `json:"line_number"`
 	FilePath    string           `json:"file_path"`
@@ -103,14 +108,13 @@ line_number 和 file_path 必须回填输入中对应命中的值，用于关联
 {"summary":"整体结论","findings":[{"category":"string","severity":"string","root_cause":"string","evidence":"string","impact":"string","suggestion":"string","confidence":0.0,"line_number":0,"file_path":"string"}]}`
 
 func (a *LLMAnalyzer) buildPrompt(request AgentAnalysisRequest) (string, error) {
-	matches := make([]llmMatch, 0, min(len(request.Matches), a.maxMatches))
+	selected := selectDiverseMatches(request.Matches, a.maxMatches)
+	matches := make([]llmMatch, 0, len(selected))
 	estimatedBytes := 0
-	for _, match := range request.Matches {
-		if len(matches) >= a.maxMatches {
-			break
-		}
+	for _, match := range selected {
 		item := llmMatch{
 			Level:       match.Level,
+			RuleName:    match.RuleName,
 			MatchedText: truncateString(match.MatchedText, 200),
 			LineNumber:  match.LineNumber,
 			FilePath:    match.FilePath,
@@ -152,6 +156,49 @@ func (a *LLMAnalyzer) buildPrompt(request AgentAnalysisRequest) (string, error) 
 	return llmSystemInstruction + "\n" + llmTaskInstruction + "\n输入：" + string(payload), nil
 }
 
+// selectDiverseMatches prevents one noisy keyword from consuming the whole AI sample.
+// It takes one match from each rule group per round, then fills remaining slots in order.
+func selectDiverseMatches(input []ParseResult, limit int) []ParseResult {
+	if limit <= 0 || len(input) <= limit {
+		return input
+	}
+	groups := make([][]ParseResult, 0)
+	groupIndex := make(map[string]int)
+	for _, match := range input {
+		key := strings.TrimSpace(match.RuleName)
+		if key == "" {
+			key = strings.TrimSpace(match.MatchedText)
+		}
+		if key == "" {
+			key = "_ungrouped"
+		}
+		index, ok := groupIndex[key]
+		if !ok {
+			index = len(groups)
+			groupIndex[key] = index
+			groups = append(groups, nil)
+		}
+		groups[index] = append(groups[index], match)
+	}
+	selected := make([]ParseResult, 0, limit)
+	for round := 0; len(selected) < limit; round++ {
+		added := false
+		for _, group := range groups {
+			if round < len(group) {
+				selected = append(selected, group[round])
+				added = true
+				if len(selected) == limit {
+					return selected
+				}
+			}
+		}
+		if !added {
+			break
+		}
+	}
+	return selected
+}
+
 const llmContextHalfWindow = 20
 
 func contextHitIndex(lines []ContextLine) int {
@@ -181,12 +228,12 @@ func contextWindow(lines []ContextLine, hitIndex int) (int, int) {
 	return start, end
 }
 
-func (a *LLMAnalyzer) chat(ctx context.Context, prompt string) (string, error) {
+func (a *LLMAnalyzer) chat(ctx context.Context, prompt string, maxTokens int) (string, error) {
 	endpoint := a.baseURL
 	if !strings.HasSuffix(endpoint, "/chat/completions") {
 		endpoint = endpoint + "/chat/completions"
 	}
-	body, err := json.Marshal(map[string]any{
+	bodyPayload := map[string]any{
 		"model": a.model,
 		"messages": []map[string]string{
 			{"role": "system", "content": llmSystemInstruction},
@@ -194,7 +241,11 @@ func (a *LLMAnalyzer) chat(ctx context.Context, prompt string) (string, error) {
 		},
 		"response_format": map[string]string{"type": "json_object"},
 		"temperature":     0.2,
-	})
+	}
+	if maxTokens > 0 {
+		bodyPayload["max_tokens"] = maxTokens
+	}
+	body, err := json.Marshal(bodyPayload)
 	if err != nil {
 		return "", fmt.Errorf("encode llm request: %w", err)
 	}

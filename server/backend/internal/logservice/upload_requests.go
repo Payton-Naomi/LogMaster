@@ -32,6 +32,8 @@ type UploadSessionRequest struct {
 	TestTaskID          string   `json:"test_task_id"`
 	TestTaskName        string   `json:"test_task_name"`
 	UploaderName        string   `json:"uploader_name"`
+	UploaderEmail       string   `json:"uploader_email"`
+	UploaderID          string   `json:"-"`
 	Remark              string   `json:"remark"`
 	ScenarioIDs         []string `json:"scenario_ids"`
 	KeywordProfileID    string   `json:"keyword_profile_id"`
@@ -58,6 +60,8 @@ type UploadSession struct {
 	TestTaskID      string    `json:"test_task_id"`
 	TestTaskName    string    `json:"test_task_name"`
 	UploaderName    string    `json:"uploader_name"`
+	UploaderEmail   string    `json:"uploader_email"`
+	UploaderID      string    `json:"uploader_id"`
 	StorageRoot     string    `json:"-"`
 	ConfigSnapshot  []byte    `json:"-"`
 	Status          string    `json:"status"`
@@ -91,11 +95,34 @@ func (s *Service) uploadSessionHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	snapshot, err := json.Marshal(request)
+	clientSnapshot, err := json.Marshal(request)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "encode upload session snapshot failed")
 		return
 	}
+	if s.directory == nil {
+		writeError(w, http.StatusServiceUnavailable, "Feishu directory validation is not configured")
+		return
+	}
+	identity, err := s.directory.identityByEmail(r.Context(), request.UploaderEmail)
+	if err != nil {
+		if errors.Is(err, ErrUploaderEmailNotInternal) {
+			writeError(w, http.StatusBadRequest, err.Error())
+		} else {
+			writeError(w, http.StatusBadGateway, "validate uploader email with Feishu failed")
+		}
+		return
+	}
+	if request.UploaderName != "" && request.UploaderName != identity.Name {
+		writeError(w, http.StatusBadRequest, ErrUploaderEmailMismatch.Error())
+		return
+	}
+	request.UploaderID, request.UploaderName, request.UploaderEmail = identity.OpenID, identity.Name, identity.Email
+	if err := s.repo.UpsertCollectorIdentity(r.Context(), identity); err != nil {
+		writeError(w, http.StatusInternalServerError, "save uploader identity failed")
+		return
+	}
+	snapshot := clientSnapshot
 	sessionID, queryCode := newID(), newQueryCode(request.ProjectName)
 	root := filepath.Join(s.config.StorageDir, "sessions", queryCode)
 	if err := os.MkdirAll(root, 0o750); err != nil {
@@ -107,6 +134,10 @@ func (s *Service) uploadSessionHandler(w http.ResponseWriter, r *http.Request) {
 		os.RemoveAll(root)
 		if errors.Is(err, ErrProjectNotFound) {
 			writeError(w, http.StatusBadRequest, "project does not exist")
+			return
+		}
+		if errors.Is(err, ErrUploaderEmailNotFound) || errors.Is(err, ErrUploaderEmailAmbiguous) || errors.Is(err, ErrUploaderEmailMismatch) {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "create upload session failed")
@@ -154,6 +185,7 @@ func normalizeUploadSessionRequest(request *UploadSessionRequest) {
 	request.TestTaskID = strings.TrimSpace(request.TestTaskID)
 	request.TestTaskName = strings.TrimSpace(request.TestTaskName)
 	request.UploaderName = strings.TrimSpace(request.UploaderName)
+	request.UploaderEmail = strings.ToLower(strings.TrimSpace(request.UploaderEmail))
 	request.Remark = strings.TrimSpace(request.Remark)
 	request.CollectorVersion = strings.TrimSpace(request.CollectorVersion)
 	request.Timezone = strings.TrimSpace(request.Timezone)
@@ -162,14 +194,17 @@ func normalizeUploadSessionRequest(request *UploadSessionRequest) {
 func validateUploadSessionRequest(request UploadSessionRequest) error {
 	required := []struct{ name, value string }{
 		{"client_request_id", request.ClientRequestID}, {"project_name", request.ProjectName},
-		{"version", request.Version}, {"uploader_name", request.UploaderName},
+		{"version", request.Version},
 	}
 	for _, field := range required {
 		if field.value == "" {
 			return errors.New(field.name + " is required")
 		}
 	}
-	if len(request.ClientRequestID) > 128 || len(request.ProjectName) > 128 || len(request.Version) > 64 || len(request.UploaderName) > 128 {
+	if request.UploaderEmail == "" {
+		return errors.New("uploader_email is required")
+	}
+	if len(request.ClientRequestID) > 128 || len(request.ProjectName) > 128 || len(request.Version) > 64 || len(request.UploaderEmail) > 320 || len(request.UploaderName) > 128 {
 		return errors.New("upload session field is too long")
 	}
 	return nil
@@ -185,6 +220,10 @@ func numericProjectID(value string) string {
 }
 
 func (r *Repository) CreateOrGetUploadSession(ctx context.Context, sessionID, queryCode, owner string, request UploadSessionRequest, snapshot []byte, root string) (UploadSession, bool, error) {
+	uploaderID := request.UploaderID
+	if uploaderID == "" {
+		return UploadSession{}, false, ErrUploaderEmailNotInternal
+	}
 	var projectID int64
 	err := r.db.QueryRowContext(ctx, `SELECT id FROM logmaster_api.projects WHERE name=$1 AND ($2='' OR id::text=$2) AND is_active=TRUE`, request.ProjectName, request.ProjectID).Scan(&projectID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -194,10 +233,10 @@ func (r *Repository) CreateOrGetUploadSession(ctx context.Context, sessionID, qu
 		return UploadSession{}, false, err
 	}
 	result, err := r.db.ExecContext(ctx, `INSERT INTO logmaster_api.upload_sessions
-		(id,query_code,created_by_open_id,client_request_id,project_id,project_name,version,test_task_id,test_task_name,uploader_name,config_snapshot,storage_root)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		(id,query_code,created_by_open_id,client_request_id,project_id,project_name,version,test_task_id,test_task_name,uploader_name,uploader_id,uploader_email,config_snapshot,storage_root)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 		ON CONFLICT(created_by_open_id,client_request_id) DO NOTHING`, sessionID, queryCode, owner, request.ClientRequestID,
-		projectID, request.ProjectName, request.Version, request.TestTaskID, request.TestTaskName, request.UploaderName, snapshot, root)
+		projectID, request.ProjectName, request.Version, request.TestTaskID, request.TestTaskName, request.UploaderName, uploaderID, request.UploaderEmail, snapshot, root)
 	if err != nil {
 		return UploadSession{}, false, err
 	}
@@ -206,19 +245,19 @@ func (r *Repository) CreateOrGetUploadSession(ctx context.Context, sessionID, qu
 		return UploadSession{}, false, err
 	}
 	var session UploadSession
-	err = r.db.QueryRowContext(ctx, `SELECT id,query_code,client_request_id,project_id::text,project_name,version,test_task_id,test_task_name,uploader_name,storage_root,config_snapshot,status,created_at
+	err = r.db.QueryRowContext(ctx, `SELECT id,query_code,client_request_id,project_id::text,project_name,version,test_task_id,test_task_name,uploader_name,uploader_id,uploader_email,storage_root,config_snapshot,status,created_at
 		FROM logmaster_api.upload_sessions WHERE created_by_open_id=$1 AND client_request_id=$2`, owner, request.ClientRequestID).Scan(
 		&session.ID, &session.QueryCode, &session.ClientRequestID, &session.ProjectID, &session.ProjectName, &session.Version,
-		&session.TestTaskID, &session.TestTaskName, &session.UploaderName, &session.StorageRoot, &session.ConfigSnapshot, &session.Status, &session.CreatedAt)
+		&session.TestTaskID, &session.TestTaskName, &session.UploaderName, &session.UploaderID, &session.UploaderEmail, &session.StorageRoot, &session.ConfigSnapshot, &session.Status, &session.CreatedAt)
 	return session, rows == 1, err
 }
 
 func (r *Repository) GetUploadSessionForUpload(ctx context.Context, id, queryCode, owner string) (UploadSession, error) {
 	var session UploadSession
-	err := r.db.QueryRowContext(ctx, `SELECT id,query_code,client_request_id,project_id::text,project_name,version,test_task_id,test_task_name,uploader_name,storage_root,config_snapshot,status,created_at
+	err := r.db.QueryRowContext(ctx, `SELECT id,query_code,client_request_id,project_id::text,project_name,version,test_task_id,test_task_name,uploader_name,uploader_id,uploader_email,storage_root,config_snapshot,status,created_at
 		FROM logmaster_api.upload_sessions WHERE id=$1 AND query_code=$2 AND created_by_open_id=$3`, id, queryCode, owner).Scan(
 		&session.ID, &session.QueryCode, &session.ClientRequestID, &session.ProjectID, &session.ProjectName, &session.Version,
-		&session.TestTaskID, &session.TestTaskName, &session.UploaderName, &session.StorageRoot, &session.ConfigSnapshot, &session.Status, &session.CreatedAt)
+		&session.TestTaskID, &session.TestTaskName, &session.UploaderName, &session.UploaderID, &session.UploaderEmail, &session.StorageRoot, &session.ConfigSnapshot, &session.Status, &session.CreatedAt)
 	return session, err
 }
 
