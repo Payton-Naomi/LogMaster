@@ -26,7 +26,7 @@ const views = [
   { key: 'collection', label: '采集工作台', icon: () => h(DatabaseOutlined) },
   { key: 'history', label: '历史文件', icon: () => h(FolderOpenOutlined) },
   { key: 'uploads', label: '上传队列', icon: () => h(CloudUploadOutlined) },
-  { key: 'catalog', label: '项目配置', icon: () => h(SlidersOutlined) },
+  { key: 'catalog', label: '配置管理', icon: () => h(SlidersOutlined) },
   { key: 'settings', label: '设置', icon: () => h(SettingOutlined) },
 ]
 const theme = {
@@ -39,7 +39,7 @@ const theme = {
     borderRadius: 6,
     controlHeight: 34,
     fontSize: 14,
-    fontFamily: 'LogMasterUI, "STZhongsong", serif',
+    fontFamily: 'LogMasterUI, Arial, "Source Han Sans SC", "Source Han Sans CN", "思源黑体", sans-serif',
   },
   components: {
     Menu: { itemHeight: 52, horizontalItemBorderRadius: 0 },
@@ -64,11 +64,11 @@ const clock = computed(() => {
       <Tag class="service-state" :color="desktop.serviceReady.value ? 'success' : 'error'">{{ desktop.serviceReady.value ? '本地服务正常' : '服务未连接' }}</Tag>
     </header>
     <div class="content-shell">
-      <CollectionView v-if="activeKey === 'collection'" :desktop="desktop" />
-      <HistoryView v-else-if="activeKey === 'history'" :devices="desktop.devices.value" :invoke="desktop.invoke" />
-      <UploadQueueView v-else-if="activeKey === 'uploads'" :devices="desktop.devices.value" :queue-status="desktop.queueStatus.value" :upload-progress="desktop.uploadProgress" :invoke="desktop.invoke" />
-      <CatalogView v-else-if="activeKey === 'catalog'" :catalog="desktop.catalog.value" :invoke="desktop.invoke" />
-      <SettingsView v-else :settings="desktop.settings.value" :invoke="desktop.invoke" @saved="desktop.refreshAll" />
+      <CollectionView v-show="activeKey === 'collection'" :desktop="desktop" />
+      <HistoryView v-show="activeKey === 'history'" :devices="desktop.devices.value" :invoke="desktop.invoke" />
+      <UploadQueueView v-show="activeKey === 'uploads'" :devices="desktop.devices.value" :queue-status="desktop.queueStatus.value" :upload-progress="desktop.uploadProgress" :invoke="desktop.invoke" />
+      <CatalogView v-show="activeKey === 'catalog'" :catalog="desktop.catalog.value" :invoke="desktop.invoke" />
+      <SettingsView v-show="activeKey === 'settings'" :settings="desktop.settings.value" :invoke="desktop.invoke" @saved="desktop.refreshAll" />
     </div>
     <footer class="statusbar"><span>当前通道：{{ desktop.selectedDevice.value?.portName || '未选择' }} · {{ selectedStatus }}</span><span v-if="desktop.selectedDevice.value?.configStatus !== 'saved'" class="footer-warning">通道配置未保存</span><time>{{ clock }}</time><span class="status-right">待上传 {{ desktop.queueStatus.value.pending || 0 }} · 待核对 {{ desktop.queueStatus.value.uncertain || 0 }}</span></footer>
   </div>

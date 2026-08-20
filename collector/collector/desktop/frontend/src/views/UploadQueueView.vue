@@ -1,28 +1,61 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import { Alert, Button, Checkbox, Input, Progress, Select, Statistic, Tag } from 'ant-design-vue'
+import { Alert, Button, Checkbox, Input, Progress, Select, Statistic, Tag, Tooltip } from 'ant-design-vue'
 import { CopyOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons-vue'
 const props = defineProps({ devices: { type: Array, default: () => [] }, queueStatus: { type: Object, default: () => ({}) }, uploadProgress: { type: Object, default: () => new Map() }, invoke: Function })
 const query = reactive({ deviceId: '', states: [], search: '', includeUploaded: false, offset: 0, limit: 100 })
 const page = ref({ items: [], total: 0 })
 const message = ref('')
 const retrying = ref(false)
+const checking = ref(false)
+const checked = reactive({})
+const confirmations = reactive({})
 const enabledIds = computed(() => new Set(props.devices.filter((item) => item.config?.uploadEnabled).map((item) => item.deviceId)))
 const groups = computed(() => [{ title: '已开启云端上传的通道', note: '', items: page.value.items?.filter((item) => enabledIds.value.has(item.deviceId)) || [] }, { title: '历史遗留', note: '通道已关闭上传，但批次仍需处理', items: page.value.items?.filter((item) => !enabledIds.value.has(item.deviceId) && item.state !== 'uploaded') || [] }])
 async function load() { try { page.value = await props.invoke('GetUploadQueue', { ...query }) || { items: [], total: 0 } } catch (error) { message.value = error.message || String(error) } }
 function progress(item) { const live = props.uploadProgress.get?.(item.id); const sent = live?.sentBytes ?? item.bytesSent ?? 0; const total = live?.totalBytes ?? item.bytesTotal ?? item.sizeBytes ?? 0; return { sent, total, percent: total ? Math.min(100, Math.round(sent / total * 100)) : 0, speed: live?.speedBytes ?? item.speedBytes ?? 0 } }
 function bytes(value) { if (!value) return '0 B'; if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`; if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`; return `${value} B` }
 function state(value) { return ({ pending: '待上传', uploading: '上传中', uploaded: '已上传', uncertain: '待核对', dead: '上传失败' })[value] || value }
+function failureReason(item) {
+  const value = String(item.lastError || '').toLowerCase()
+  if (/decompress|unzip|gzip/.test(value)) return '解压失败'
+  if (/parse|解析/.test(value)) return '解析失败'
+  if (/checksum|sha256|校验/.test(value)) return '校验失败'
+  if (/401|403|unauthorized|forbidden|鉴权|认证/.test(value)) return '认证失败'
+  if (/400|invalid|参数|配置/.test(value)) return '配置无效'
+  if (/413|too large|文件过大/.test(value)) return '文件过大'
+  if (/timeout|deadline|超时/.test(value)) return '请求超时'
+  if (/connection refused|connectex|dial tcp|无法连接/.test(value)) return '服务不可用'
+  if (/network|socket|connection reset|eof|网络/.test(value)) return '网络中断'
+  if (/storage|disk|磁盘|存储/.test(value)) return '存储失败'
+  if (/5\d\d|server|服务端/.test(value)) return '服务端异常'
+  return item.state === 'uncertain' ? '结果待核对' : '上传失败'
+}
 function copy(value) { if (!value) return; navigator.clipboard?.writeText(value); message.value = '查询码已复制' }
+function confirmation(item) { return confirmations[item.id] || (confirmations[item.id] = { uploadId: '', taskId: '' }) }
 async function retry(item) {
   const method = item.state === 'dead' ? 'RetryDeadBatch' : 'RetryUncertain'
   try { retrying.value = true; await props.invoke(method, item.id); message.value = '已重新加入上传队列'; await load() } catch (error) { message.value = error.message || String(error) } finally { retrying.value = false }
+}
+async function check(item) {
+  try {
+    checking.value = true
+    checked[item.id] = await props.invoke('CheckUncertain', item.id)
+    if (checked[item.id]?.matched) confirmations[item.id] = { uploadId: checked[item.id].uploadId || '', taskId: checked[item.id].taskId || '' }
+    message.value = checked[item.id]?.matched ? '平台已找到对应上传记录，请核对 Upload ID / Task ID 后确认' : `平台暂未找到记录（状态：${checked[item.id]?.status || '未知'}）`
+    await load()
+  } catch (error) { message.value = error.message || String(error) } finally { checking.value = false }
+}
+async function confirm(item) {
+  const value = confirmation(item)
+  if (!value.uploadId || !value.taskId) return
+  try { retrying.value = true; await props.invoke('ConfirmUncertain', item.id, value.uploadId.trim(), value.taskId.trim()); message.value = '已确认平台上传结果'; await load() } catch (error) { message.value = error.message || String(error) } finally { retrying.value = false }
 }
 onMounted(load)
 </script>
 <template>
   <main class="page-view">
-    <div class="page-heading"><div><h1>上传队列</h1><p>进度来自真实发送字节；响应不确定的批次不会盲目重试。</p></div><Button @click="load"><template #icon><ReloadOutlined /></template>刷新</Button></div>
+    <div class="page-heading"><h1>上传队列</h1><Tooltip title="刷新上传队列"><Button aria-label="刷新上传队列" shape="circle" @click="load"><template #icon><ReloadOutlined /></template></Button></Tooltip></div>
     <div class="summary-grid"><Statistic title="待上传" :value="queueStatus.pending || 0" /><Statistic title="上传中" :value="queueStatus.uploading || 0" /><Statistic title="已上传" :value="queueStatus.uploaded || 0" /><Statistic class="warning" title="待核对" :value="queueStatus.uncertain || 0" /><Statistic title="失败" :value="queueStatus.dead || 0" /></div>
     <form class="filter-bar" @submit.prevent="load">
       <Select v-model:value="query.deviceId" :options="[{value:'',label:'全部上传通道'}, ...devices.filter((item) => item.config?.uploadEnabled).map((device) => ({value:device.deviceId,label:device.portName}))]" />
@@ -38,8 +71,10 @@ onMounted(load)
           <div class="upload-main"><Tag :color="item.state === 'uploaded' ? 'success' : item.state === 'uncertain' ? 'warning' : item.state === 'dead' ? 'error' : 'processing'">{{ state(item.state) }}</Tag><div><strong>第 {{ item.uploadPosition || 1 }} 次上传 · {{ item.fileName?.split(/[\\/]/).pop() || item.id }}</strong><small>{{ item.deviceId }} · {{ item.projectName || '未配置' }} · {{ item.version || '—' }}</small></div></div>
           <div class="progress-area"><Progress :percent="progress(item).percent" size="small" :status="item.state === 'dead' ? 'exception' : item.state === 'uploaded' ? 'success' : 'active'" /><small>{{ bytes(progress(item).sent) }} / {{ bytes(progress(item).total) }} · {{ bytes(progress(item).speed) }}/s</small></div>
           <div class="query-code"><span>{{ item.queryCode || '平台未提供查询码' }}</span><Button size="small" :disabled="!item.queryCode" @click="copy(item.queryCode)"><template #icon><CopyOutlined /></template>{{ item.queryCode ? '复制' : '不可查询' }}</Button></div>
-          <div v-if="item.state === 'uncertain' || item.state === 'dead'" class="upload-actions"><Button size="small" type="primary" :loading="retrying" @click="retry(item)"><template #icon><ReloadOutlined /></template>重新上传</Button></div>
-          <small class="upload-error">{{ item.lastError || `重试 ${item.attemptCount || 0} 次` }}</small>
+          <div v-if="item.state === 'uncertain' || item.state === 'dead'" class="upload-actions"><Button v-if="item.state === 'uncertain'" size="small" :loading="checking" @click="check(item)"><template #icon><SearchOutlined /></template>查询平台</Button><Button size="small" type="primary" :loading="retrying" @click="retry(item)"><template #icon><ReloadOutlined /></template>重新上传</Button></div>
+          <div v-if="item.state === 'uncertain'" class="confirm-fields"><Input v-model:value="confirmation(item).uploadId" placeholder="Upload ID" /><Input v-model:value="confirmation(item).taskId" placeholder="Task ID" /><Button size="small" :disabled="!confirmation(item).uploadId || !confirmation(item).taskId" :loading="retrying" @click="confirm(item)">确认已上传</Button></div>
+          <small v-if="checked[item.id]" class="upload-check">平台状态：{{ checked[item.id].status }} · {{ checked[item.id].matched ? `匹配 Upload ID：${checked[item.id].uploadId}` : '未找到匹配记录' }}</small>
+          <Tooltip v-if="item.lastError || item.state === 'uncertain' || item.state === 'dead'" :title="item.lastError || ''"><small class="upload-error">{{ item.state === 'uncertain' ? '状态' : '失败原因' }}：{{ failureReason(item) }}</small></Tooltip>
         </article>
         <div v-if="!group.items.length" class="table-empty">当前没有上传记录</div>
       </div>

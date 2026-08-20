@@ -47,6 +47,13 @@ async function save(config) {
     }
   } catch (_) {}
 }
+async function reusePrevious() {
+  if (!selected.value) return
+  try {
+    const config = await props.desktop.invoke('ReusePreviousDeviceConfig', selected.value.deviceId)
+    inspector.value?.applyDraft(config)
+  } catch (_) {}
+}
 async function saveSession(windowContent) { if (!selected.value) return; try { await props.desktop.withBusy(() => props.desktop.invoke('SaveLogAs', selected.value.deviceId, selected.value.sessionId || '', 'session', windowContent), false) } catch (_) {} }
 async function exportWindow(content) { if (!selected.value) return; try { await props.desktop.withBusy(() => props.desktop.invoke('ExportWindowLogs', selected.value.deviceId, content), false) } catch (_) {} }
 async function openFolder() { try { await props.desktop.withBusy(() => props.desktop.invoke('OpenLogFolder', ''), false) } catch (_) {} }
@@ -93,7 +100,7 @@ onBeforeUnmount(() => document.body.classList.remove('resizing-layout'))
     <div class="layout-resizer" title="拖动调整串口栏宽度" @pointerdown="startResize('left', $event)"></div>
     <LogConsole :rows="rows" :device="selected" :busy="desktop.busy.value" :default-wrap="desktop.settings.value.autoWrap" :log-font-size="desktop.settings.value.logFontSize || 12" :inspector-open="hasInspector" @clear="selected && desktop.clearLogs(selected.deviceId)" @save-session="saveSession" @export-window="exportWindow" @open-folder="openFolder" @send-command="selected && desktop.sendCommand(selected.deviceId, $event)" @log-font-size-change="setLogFontSize" @toggle-inspector="toggleInspector" />
     <div v-show="hasInspector" class="layout-resizer" title="拖动调整配置栏宽度" @pointerdown="startResize('right', $event)"></div>
-    <ChannelInspector v-show="hasInspector" ref="inspector" :device="selected" :catalog="desktop.catalog.value" :busy="desktop.busy.value" :keyword-hits="hitCache" @save="save" @open-folder="openFolder" @load-hits="loadHits" @reset-hits="resetHits" @dirty-change="markDirty" @warning="desktop.showWarning" />
+    <ChannelInspector v-show="hasInspector" ref="inspector" :device="selected" :catalog="desktop.catalog.value" :busy="desktop.busy.value" :keyword-hits="hitCache" @save="save" @reuse-previous="reusePrevious" @open-folder="openFolder" @load-hits="loadHits" @reset-hits="resetHits" @dirty-change="markDirty" @warning="desktop.showWarning" />
     <Modal :open="closeDialog.open" :title="closeDialog.confirmStop ? '确认停止上传' : `关闭 ${closeDialog.device?.portName || '串口'}`" :ok-text="closeDialog.confirmStop ? '确认停止并关闭' : '关闭串口'" cancel-text="取消" :confirm-loading="desktop.busy.value" @ok="confirmDisconnect" @cancel="cancelDisconnect">
       <template v-if="!closeDialog.confirmStop">
         <RadioGroup v-model:value="closeDialog.mode" class="disconnect-options">

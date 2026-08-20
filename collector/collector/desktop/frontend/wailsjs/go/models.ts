@@ -126,6 +126,9 @@ export namespace main {
 	    match: string;
 	    mode: string;
 	    caseSensitive: boolean;
+	    level?: string;
+	    description?: string;
+	    readOnly?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new CatalogKeywordRule(source);
@@ -138,6 +141,9 @@ export namespace main {
 	        this.match = source["match"];
 	        this.mode = source["mode"];
 	        this.caseSensitive = source["caseSensitive"];
+	        this.level = source["level"];
+	        this.description = source["description"];
+	        this.readOnly = source["readOnly"];
 	    }
 	}
 	export class CatalogKeywordProfile {
@@ -280,6 +286,81 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class CatalogFileDTO {
+	    name: string;
+	    path: string;
+	    exists: boolean;
+	    sizeBytes: number;
+	    // Go type: time
+	    modifiedAt?: any;
+	    editable: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new CatalogFileDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.path = source["path"];
+	        this.exists = source["exists"];
+	        this.sizeBytes = source["sizeBytes"];
+	        this.modifiedAt = this.convertValues(source["modifiedAt"], null);
+	        this.editable = source["editable"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class CatalogFilesDTO {
+	    directory: string;
+	    files: CatalogFileDTO[];
+	    cloudCache: CatalogFileDTO;
+	
+	    static createFrom(source: any = {}) {
+	        return new CatalogFilesDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.directory = source["directory"];
+	        this.files = this.convertValues(source["files"], CatalogFileDTO);
+	        this.cloudCache = this.convertValues(source["cloudCache"], CatalogFileDTO);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class CatalogImportPreviewDTO {
 	    token: string;
 	    fileName: string;
@@ -331,6 +412,41 @@ export namespace main {
 	
 	
 	
+	export class CloudKeywordSyncResult {
+	    count: number;
+	    // Go type: time
+	    syncedAt: any;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CloudKeywordSyncResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.count = source["count"];
+	        this.syncedAt = this.convertValues(source["syncedAt"], null);
+	        this.message = source["message"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class DeviceConfigDTO {
 	    deviceId: string;
 	    name: string;
@@ -343,6 +459,10 @@ export namespace main {
 	    encoding: string;
 	    dtr: boolean;
 	    rts: boolean;
+	    readTimeoutMs: number;
+	    writeTimeoutMs: number;
+	    idleGapMs: number;
+	    maxFrameBytes: number;
 	    configured: boolean;
 	    projectId: string;
 	    projectName: string;
@@ -350,6 +470,7 @@ export namespace main {
 	    testTaskId: string;
 	    testTaskName: string;
 	    uploaderName: string;
+	    uploaderEmail: string;
 	    remark: string;
 	    scenarioIds: string[];
 	    keywordProfileId: string;
@@ -368,6 +489,7 @@ export namespace main {
 	    uploadSetupState?: string;
 	    uploadConfigFingerprint?: string;
 	    configSnapshot?: string;
+	    previousConfigAvailable?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new DeviceConfigDTO(source);
@@ -386,6 +508,10 @@ export namespace main {
 	        this.encoding = source["encoding"];
 	        this.dtr = source["dtr"];
 	        this.rts = source["rts"];
+	        this.readTimeoutMs = source["readTimeoutMs"];
+	        this.writeTimeoutMs = source["writeTimeoutMs"];
+	        this.idleGapMs = source["idleGapMs"];
+	        this.maxFrameBytes = source["maxFrameBytes"];
 	        this.configured = source["configured"];
 	        this.projectId = source["projectId"];
 	        this.projectName = source["projectName"];
@@ -393,6 +519,7 @@ export namespace main {
 	        this.testTaskId = source["testTaskId"];
 	        this.testTaskName = source["testTaskName"];
 	        this.uploaderName = source["uploaderName"];
+	        this.uploaderEmail = source["uploaderEmail"];
 	        this.remark = source["remark"];
 	        this.scenarioIds = source["scenarioIds"];
 	        this.keywordProfileId = source["keywordProfileId"];
@@ -411,6 +538,7 @@ export namespace main {
 	        this.uploadSetupState = source["uploadSetupState"];
 	        this.uploadConfigFingerprint = source["uploadConfigFingerprint"];
 	        this.configSnapshot = source["configSnapshot"];
+	        this.previousConfigAvailable = source["previousConfigAvailable"];
 	    }
 	}
 	export class DeviceConfigSaveResult {
@@ -803,6 +931,28 @@ export namespace main {
 	        this.dead = source["dead"];
 	        this.diskUsagePercent = source["diskUsagePercent"];
 	        this.diskUsageText = source["diskUsageText"];
+	    }
+	}
+	export class UncertainCheckDTO {
+	    batchId: string;
+	    queryCode: string;
+	    status: string;
+	    uploadId?: string;
+	    taskId?: string;
+	    matched: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new UncertainCheckDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.batchId = source["batchId"];
+	        this.queryCode = source["queryCode"];
+	        this.status = source["status"];
+	        this.uploadId = source["uploadId"];
+	        this.taskId = source["taskId"];
+	        this.matched = source["matched"];
 	    }
 	}
 	export class UploadBatchDTO {

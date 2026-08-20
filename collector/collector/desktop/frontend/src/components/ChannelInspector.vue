@@ -4,12 +4,13 @@ import { AutoComplete, Button, Checkbox, Empty, Form, FormItem, Input, Modal, Se
 import { DownOutlined, FolderOpenOutlined, KeyOutlined, ReloadOutlined, SaveOutlined, SettingOutlined } from '@ant-design/icons-vue'
 
 const props = defineProps({ device: { type: Object, default: null }, catalog: { type: Object, default: () => ({ projects: [] }) }, keywordHits: { type: Object, default: () => ({}) }, busy: Boolean })
-const emit = defineEmits(['save', 'open-folder', 'load-hits', 'reset-hits', 'dirty-change', 'warning'])
+const emit = defineEmits(['save', 'reuse-previous', 'open-folder', 'load-hits', 'reset-hits', 'dirty-change', 'warning'])
 const draft = reactive({})
 const dirty = ref(false)
 const keywordDialog = ref(false)
 const pickerGroupId = ref('')
 const pickerRuleIds = ref([])
+const keywordSearch = ref('')
 const expandedRule = ref('')
 const baudRates = [9600, 19200, 115200, 921600, 1500000]
 const baudOptions = baudRates.map((value) => ({ value: String(value), label: String(value) }))
@@ -33,6 +34,11 @@ const groups = computed(() => {
 const rules = computed(() => groups.value.flatMap((group) => group.rules || []))
 const pickerGroup = computed(() => groups.value.find((item) => item.id === pickerGroupId.value))
 const pickerRules = computed(() => pickerGroup.value?.rules || [])
+const filteredPickerRules = computed(() => {
+  const keyword = keywordSearch.value.trim().toLowerCase()
+  if (!keyword) return pickerRules.value
+  return pickerRules.value.filter((rule) => [rule.name, rule.match, rule.description, rule.level].some((value) => String(value || '').toLowerCase().includes(keyword)))
+})
 const selectedRules = computed(() => rules.value.filter((rule) => draft.keywordRuleIds?.includes(rule.id)))
 const versionOptions = computed(() => (project.value?.versions || []).map((value) => ({ value, label: value })))
 const storageText = computed(() => formatBytes(props.device?.storageBytes || 0))
@@ -50,10 +56,12 @@ function onProjectChange() { draft.projectName = project.value?.name || ''; chan
 function onTaskChange() { draft.testTaskName = task.value?.name || ''; change() }
 function onProfileChange() { draft.keywordRuleIds = []; change() }
 function onBaudChange(value) { draft.baudRate = Number(value); change() }
+function onNumberChange(key, value) { draft[key] = Number(value); change() }
 function openKeywordDialog() {
   const selectedGroup = groups.value.find((group) => group.rules?.some((rule) => draft.keywordRuleIds?.includes(rule.id)))
   pickerGroupId.value = selectedGroup?.id || groups.value[0]?.id || ''
   pickerRuleIds.value = [...(draft.keywordRuleIds || [])]
+  keywordSearch.value = ''
   keywordDialog.value = true
 }
 function selectPickerGroup(id) { pickerGroupId.value = id }
@@ -75,7 +83,8 @@ function setSwitch(key, value) {
 }
 function save() { emit('save', clonePlain(draft)) }
 function confirmSaved() { dirty.value = false; emit('dirty-change', false) }
-defineExpose({ confirmSaved })
+function applyDraft(value) { Object.keys(draft).forEach((key) => delete draft[key]); Object.assign(draft, clonePlain(value)); dirty.value = true; emit('dirty-change', true) }
+defineExpose({ confirmSaved, applyDraft })
 async function expand(rule) { expandedRule.value = expandedRule.value === rule.id ? '' : rule.id; if (expandedRule.value && !props.keywordHits[rule.id]) emit('load-hits', rule.id) }
 function formatBytes(value) { return value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(2)} GB` : value >= 1024 ** 2 ? `${(value / 1024 ** 2).toFixed(1)} MB` : `${Math.ceil(value / 1024)} KB` }
 function time(value) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false, fractionalSecondDigits: 3 }) : '—' }
@@ -85,7 +94,7 @@ function time(value) { return value ? new Date(value).toLocaleString('zh-CN', { 
   <aside class="inspector-panel">
     <Empty v-if="!device" class="empty-state" description="选择一个串口后配置" />
     <template v-else>
-      <div class="inspector-header"><h2>日志配置</h2><Tag v-if="dirty" color="warning">未保存</Tag></div>
+      <div class="inspector-header"><h2>日志配置</h2><div class="inspector-header-actions"><Button v-if="device.config?.previousConfigAvailable" size="small" @click="emit('reuse-previous')">复用上次业务配置</Button><Tag v-if="dirty" color="warning">未保存</Tag></div></div>
 
       <Tabs class="inspector-tabs" size="small">
       <TabPane key="config" tab="通道配置">
@@ -104,13 +113,20 @@ function time(value) { return value ? new Date(value).toLocaleString('zh-CN', { 
         <div class="field-grid">
           <FormItem class="signal-switches"><div class="inline-switches"><span>DTR <Switch class="capsule-switch" size="small" :checked="Boolean(draft.dtr)" @change="(value) => setSwitch('dtr', value)" /></span><span>RTS <Switch class="capsule-switch" size="small" :checked="Boolean(draft.rts)" @change="(value) => setSwitch('rts', value)" /></span></div></FormItem>
         </div>
+        <div class="field-grid serial-tuning-grid">
+          <FormItem label="读取超时（毫秒）"><Input :value="draft.readTimeoutMs" type="number" min="1" @change="(event) => onNumberChange('readTimeoutMs', event.target.value)" /></FormItem>
+          <FormItem label="写入超时（毫秒）"><Input :value="draft.writeTimeoutMs" type="number" min="1" @change="(event) => onNumberChange('writeTimeoutMs', event.target.value)" /></FormItem>
+          <FormItem label="空闲分帧（毫秒）"><Input :value="draft.idleGapMs" type="number" min="1" @change="(event) => onNumberChange('idleGapMs', event.target.value)" /></FormItem>
+          <FormItem label="最大帧长度（字节）"><Input :value="draft.maxFrameBytes" type="number" min="256" @change="(event) => onNumberChange('maxFrameBytes', event.target.value)" /></FormItem>
+        </div>
+        <small class="field-help">空闲分帧用于没有换行符的串口日志；设备持续输出时达到最大帧长度会自动封口。</small>
       </Form>
 
       <Form class="form-section" layout="vertical" size="small">
         <div class="policy-grid">
-          <div class="policy-item policy-item-wide"><div><strong>上传云端</strong><small>开启后填写项目、版本等上传参数</small></div><Switch class="capsule-switch" size="small" :checked="Boolean(draft.uploadEnabled)" :disabled="!draft.saveEnabled" @change="(value) => setSwitch('uploadEnabled', value)" /></div>
-          <div class="policy-item"><div><strong>本地保存</strong><small>保存后写正式日志</small></div><Switch class="capsule-switch" size="small" :checked="Boolean(draft.saveEnabled)" @change="(value) => setSwitch('saveEnabled', value)" /></div>
-          <div class="policy-item"><div><strong>关键字匹配</strong><small>暂停时不清零</small></div><Switch class="capsule-switch" size="small" :checked="Boolean(draft.keywordMatchingEnabled)" :disabled="!profile || !draft.keywordRuleIds?.length" @change="(value) => setSwitch('keywordMatchingEnabled', value)" /></div>
+          <div class="policy-item policy-item-wide"><Tooltip title="开启后填写项目、版本等上传参数"><strong>上传云端</strong></Tooltip><Switch class="capsule-switch" size="small" :checked="Boolean(draft.uploadEnabled)" :disabled="!draft.saveEnabled" @change="(value) => setSwitch('uploadEnabled', value)" /></div>
+          <div class="policy-item"><Tooltip title="保存后写正式日志"><strong>本地保存</strong></Tooltip><Switch class="capsule-switch" size="small" :checked="Boolean(draft.saveEnabled)" @change="(value) => setSwitch('saveEnabled', value)" /></div>
+          <div class="policy-item"><Tooltip title="暂停时不清零"><strong>关键字匹配</strong></Tooltip><Switch class="capsule-switch" size="small" :checked="Boolean(draft.keywordMatchingEnabled)" :disabled="!profile || !draft.keywordRuleIds?.length" @change="(value) => setSwitch('keywordMatchingEnabled', value)" /></div>
         </div>
         <FormItem label="关键字方案"><Select v-model:value="draft.keywordProfileId" allow-clear placeholder="请选择" :options="profiles.map((item) => ({ value: item.id, label: item.name }))" @change="onProfileChange" /></FormItem>
         <Button block :disabled="!profile" @click="openKeywordDialog"><template #icon><KeyOutlined /></template>选择关键字（{{ draft.keywordRuleIds?.length || 0 }}）</Button>
@@ -149,7 +165,7 @@ function time(value) { return value ? new Date(value).toLocaleString('zh-CN', { 
     <Modal v-model:open="keywordDialog" title="选择关键字" ok-text="完成" @ok="confirmKeywordSelection">
       <div class="keyword-picker">
         <aside class="keyword-profile-list"><Button v-for="item in groups" :key="item.id" block :type="pickerGroupId === item.id ? 'primary' : 'text'" @click="selectPickerGroup(item.id)"><span>{{ item.name }}</span><small v-if="item.scope">{{ item.scope }}</small></Button></aside>
-        <section class="keyword-rule-list"><Empty v-if="!pickerRules.length" :image="Empty.PRESENTED_IMAGE_SIMPLE" description="该方案没有关键字" /><Checkbox v-for="rule in pickerRules" v-else :key="rule.id" :checked="pickerRuleIds.includes(rule.id)" @change="togglePickerRule(rule.id, $event.target.checked)"><span class="check-row"><strong>{{ rule.name }}<Tag v-if="rule.readOnly" color="blue">云端</Tag></strong><small>{{ rule.match }}{{ rule.level ? ` · ${rule.level}` : '' }}{{ rule.description ? ` · ${rule.description}` : '' }}</small></span></Checkbox></section>
+        <section class="keyword-rule-list"><Input.Search v-model:value="keywordSearch" allow-clear placeholder="搜索名称、内容或级别" /><Empty v-if="!filteredPickerRules.length" :image="Empty.PRESENTED_IMAGE_SIMPLE" :description="pickerRules.length ? '没有匹配的关键字' : '该方案没有关键字'" /><Checkbox v-for="rule in filteredPickerRules" v-else :key="rule.id" :checked="pickerRuleIds.includes(rule.id)" @change="togglePickerRule(rule.id, $event.target.checked)"><span class="check-row"><strong>{{ rule.name }}<Tag v-if="rule.readOnly" color="blue">云端</Tag></strong><small>{{ rule.match }}{{ rule.level ? ` · ${rule.level}` : '' }}{{ rule.description ? ` · ${rule.description}` : '' }}</small></span></Checkbox></section>
       </div>
     </Modal>
   </aside>

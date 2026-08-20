@@ -24,6 +24,57 @@ type maintainedKeywordsFile struct {
 	Profiles      []CatalogKeywordProfile `yaml:"profiles"`
 }
 
+type editableKeywordsFile struct {
+	SchemaVersion int                      `yaml:"schema_version"`
+	Profiles      []editableKeywordProfile `yaml:"profiles"`
+}
+
+type editableKeywordProfile struct {
+	ID     string                 `yaml:"id"`
+	Name   string                 `yaml:"name"`
+	Rules  []editableKeywordRule  `yaml:"rules,omitempty"`
+	Groups []editableKeywordGroup `yaml:"groups,omitempty"`
+}
+
+type editableKeywordGroup struct {
+	ID    string                `yaml:"id"`
+	Name  string                `yaml:"name"`
+	Scope string                `yaml:"scope,omitempty"`
+	Rules []editableKeywordRule `yaml:"rules"`
+}
+
+type editableKeywordRule struct {
+	ID            string `yaml:"id"`
+	Text          string `yaml:"text"`
+	Name          string `yaml:"name,omitempty"`
+	Mode          string `yaml:"mode,omitempty"`
+	CaseSensitive bool   `yaml:"case_sensitive,omitempty"`
+}
+
+func (rule editableKeywordRule) MarshalYAML() (any, error) {
+	node := &yaml.Node{Kind: yaml.MappingNode, Style: yaml.FlowStyle}
+	addText := func(key, value string) {
+		if value == "" {
+			return
+		}
+		node.Content = append(node.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: key},
+			&yaml.Node{Kind: yaml.ScalarNode, Value: value},
+		)
+	}
+	addText("id", rule.ID)
+	addText("text", rule.Text)
+	addText("name", rule.Name)
+	addText("mode", rule.Mode)
+	if rule.CaseSensitive {
+		node.Content = append(node.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "case_sensitive"},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "true"},
+		)
+	}
+	return node, nil
+}
+
 type maintainedDefaultsFile struct {
 	SchemaVersion int `yaml:"schema_version"`
 	Serial        struct {
@@ -79,6 +130,7 @@ func parseMaintainedCatalog(projectData, taskData, keywordData []byte) (CatalogC
 	if err := decodeMaintainedYAML("关键字配置", keywordData, &keywordFile); err != nil {
 		return CatalogConfig{}, err
 	}
+	normalizeMaintainedKeywordRules(keywordFile.Profiles)
 	if projectFile.SchemaVersion != 1 || taskFile.SchemaVersion != 1 || keywordFile.SchemaVersion != 1 {
 		return CatalogConfig{}, fmt.Errorf("配置文件 schema_version 必须为 1")
 	}
@@ -95,6 +147,69 @@ func parseMaintainedCatalog(projectData, taskData, keywordData []byte) (CatalogC
 		return CatalogConfig{}, err
 	}
 	return catalog, nil
+}
+
+func normalizeMaintainedKeywordRules(profiles []CatalogKeywordProfile) {
+	normalize := func(rule *CatalogKeywordRule) {
+		if strings.TrimSpace(rule.Match) == "" {
+			rule.Match = strings.TrimSpace(rule.Text)
+		}
+		if strings.TrimSpace(rule.Name) == "" {
+			rule.Name = rule.Match
+		}
+		if strings.TrimSpace(rule.Mode) == "" {
+			rule.Mode = "contains"
+		}
+		rule.Text = ""
+	}
+	for profileIndex := range profiles {
+		for ruleIndex := range profiles[profileIndex].Rules {
+			normalize(&profiles[profileIndex].Rules[ruleIndex])
+		}
+		for groupIndex := range profiles[profileIndex].Groups {
+			for ruleIndex := range profiles[profileIndex].Groups[groupIndex].Rules {
+				normalize(&profiles[profileIndex].Groups[groupIndex].Rules[ruleIndex])
+			}
+		}
+	}
+}
+
+func compactMaintainedKeywords(data []byte) ([]byte, error) {
+	var source maintainedKeywordsFile
+	if err := decodeMaintainedYAML("关键字配置", data, &source); err != nil {
+		return nil, err
+	}
+	toRule := func(rule CatalogKeywordRule) editableKeywordRule {
+		item := editableKeywordRule{ID: rule.ID, Text: rule.Match, CaseSensitive: rule.CaseSensitive}
+		if strings.TrimSpace(rule.Name) != "" && rule.Name != rule.Match {
+			item.Name = rule.Name
+		}
+		if rule.Mode != "" && rule.Mode != "contains" {
+			item.Mode = rule.Mode
+		}
+		return item
+	}
+	result := editableKeywordsFile{SchemaVersion: source.SchemaVersion}
+	for _, profile := range source.Profiles {
+		item := editableKeywordProfile{ID: profile.ID, Name: profile.Name}
+		for _, rule := range profile.Rules {
+			item.Rules = append(item.Rules, toRule(rule))
+		}
+		for _, group := range profile.Groups {
+			groupItem := editableKeywordGroup{ID: group.ID, Name: group.Name, Scope: group.Scope}
+			for _, rule := range group.Rules {
+				groupItem.Rules = append(groupItem.Rules, toRule(rule))
+			}
+			item.Groups = append(item.Groups, groupItem)
+		}
+		result.Profiles = append(result.Profiles, item)
+	}
+	encoded, err := yaml.Marshal(result)
+	if err != nil {
+		return nil, err
+	}
+	header := []byte("# 精简关键字配置：text 是匹配内容；默认普通包含且不区分大小写。\n# 只有正则匹配或严格区分大小写时才需要填写 mode / case_sensitive。\n")
+	return append(header, encoded...), nil
 }
 
 func mustLoadMaintainedDefaults() maintainedDefaultsFile {

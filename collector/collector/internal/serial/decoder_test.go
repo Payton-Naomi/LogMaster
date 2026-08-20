@@ -83,3 +83,21 @@ func TestDecoderPushFrameFlushesTextWithoutLineEnding(t *testing.T) {
 		t.Fatalf("frame left %d pending bytes", decoder.PendingBytes())
 	}
 }
+
+func TestDecoderBoundsUnterminatedRecord(t *testing.T) {
+	decoder, err := NewDecoderWithLimit(EncodingUTF8, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := decoder.Push([]byte("abcdef"), time.Unix(1, 0))
+	if len(lines) != 1 || lines[0].Text != "abcd" {
+		t.Fatalf("unexpected bounded output: %#v", lines)
+	}
+	if decoder.PendingBytes() != 2 {
+		t.Fatalf("expected remaining bytes after forced flush, got %d", decoder.PendingBytes())
+	}
+	line, ok := decoder.Flush(time.Unix(1, 0))
+	if !ok || line.Text != "ef" {
+		t.Fatalf("unexpected final flush: %#v, %v", line, ok)
+	}
+}

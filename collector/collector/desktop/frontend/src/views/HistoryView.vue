@@ -36,7 +36,7 @@ onMounted(load)
 </script>
 <template>
   <main class="page-view">
-    <div class="page-heading"><div><h1>历史文件</h1><p>检索、预览和追溯正式采集日志。</p></div><Button @click="load"><template #icon><ReloadOutlined /></template>刷新</Button></div>
+    <div class="page-heading"><h1>历史文件</h1><Tooltip title="刷新历史文件"><Button aria-label="刷新历史文件" shape="circle" @click="load"><template #icon><ReloadOutlined /></template></Button></Tooltip></div>
     <form class="filter-bar" @submit.prevent="load">
       <Select v-model:value="query.deviceId" :options="[{value:'',label:'全部串口'}, ...devices.map((device) => ({value:device.deviceId,label:device.portName}))]" />
       <Input v-model:value="query.search" allow-clear placeholder="文件名、SHA-256 或查询码" />

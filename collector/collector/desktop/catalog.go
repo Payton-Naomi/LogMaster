@@ -61,6 +61,7 @@ type CatalogKeywordRule struct {
 	ID            string `yaml:"id" json:"id"`
 	Name          string `yaml:"name" json:"name"`
 	Match         string `yaml:"match" json:"match"`
+	Text          string `yaml:"text,omitempty" json:"-"`
 	Mode          string `yaml:"mode" json:"mode"`
 	CaseSensitive bool   `yaml:"case_sensitive" json:"caseSensitive"`
 	Level         string `yaml:"level,omitempty" json:"level,omitempty"`

@@ -37,6 +37,7 @@ type Service struct {
 	configPath             string
 	rootDirectory          string
 	catalogPath            string
+	catalogDirectory       string
 	cloudKeywordPath       string
 	settingsPath           string
 	catalog                CatalogConfig
@@ -55,6 +56,7 @@ type Service struct {
 	logger                 *slog.Logger
 	logWriter              *rotatingFile
 	reportedServerFailures map[string]struct{}
+	previousConfigs        map[string]DeviceConfigDTO
 }
 
 type PortInfo struct {
@@ -79,6 +81,10 @@ type DeviceConfigDTO struct {
 	Encoding                string   `json:"encoding"`
 	DTR                     bool     `json:"dtr"`
 	RTS                     bool     `json:"rts"`
+	ReadTimeoutMs           int      `json:"readTimeoutMs"`
+	WriteTimeoutMs          int      `json:"writeTimeoutMs"`
+	IdleGapMs               int      `json:"idleGapMs"`
+	MaxFrameBytes           int      `json:"maxFrameBytes"`
 	Configured              bool     `json:"configured"`
 	ProjectID               string   `json:"projectId"`
 	ProjectName             string   `json:"projectName"`
@@ -105,6 +111,7 @@ type DeviceConfigDTO struct {
 	UploadSetupState        string   `json:"uploadSetupState,omitempty"`
 	UploadConfigFingerprint string   `json:"uploadConfigFingerprint,omitempty"`
 	ConfigSnapshot          string   `json:"configSnapshot,omitempty"`
+	PreviousConfigAvailable bool     `json:"previousConfigAvailable,omitempty"`
 }
 
 type DeviceConfigSaveResult struct {
@@ -168,6 +175,14 @@ type QueueStatus struct {
 	Dead             int64  `json:"dead"`
 	DiskUsagePercent int    `json:"diskUsagePercent"`
 	DiskUsageText    string `json:"diskUsageText"`
+}
+type UncertainCheckDTO struct {
+	BatchID   string `json:"batchId"`
+	QueryCode string `json:"queryCode"`
+	Status    string `json:"status"`
+	UploadID  string `json:"uploadId,omitempty"`
+	TaskID    string `json:"taskId,omitempty"`
+	Matched   bool   `json:"matched"`
 }
 type LogRow struct {
 	DeviceID   string              `json:"deviceId"`
@@ -301,7 +316,7 @@ func newServiceAtConfig(root string, cfg config.Config, configured bool) (*Servi
 	ctx, cancel := context.WithCancel(context.Background())
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	catalogPath := filepath.Join(root, "project-catalog.yaml")
-	catalog, err := loadDesktopCatalog(catalogPath)
+	catalog, catalogFiles, err := loadRuntimeCatalog(root, catalogPath)
 	if err != nil {
 		cancel()
 		workerCancel()
@@ -321,7 +336,7 @@ func newServiceAtConfig(root string, cfg config.Config, configured bool) (*Servi
 		isConfigured := strings.TrimSpace(cfg.Backend.ProjectName) != "" && strings.TrimSpace(cfg.Backend.Version) != ""
 		configs[id] = DeviceConfigDTO{DeviceID: id, Name: defaultSerialChannelName(port.PortName, i+1), PortName: port.PortName, BaudRate: port.BaudRate, DataBits: port.DataBits, StopBits: port.StopBits, Parity: port.Parity, Handshake: port.Handshake, DTR: port.DTR, RTS: port.RTS, Configured: isConfigured, ProjectID: cfg.Backend.ProjectName, ProjectName: cfg.Backend.ProjectName, Version: cfg.Backend.Version, SaveEnabled: isConfigured, UploadEnabled: isConfigured, NoLogTimeoutSeconds: appSettings.NoLogTimeoutSeconds, VID: port.PortMatch.VID, PID: port.PortMatch.PID, USBSerial: port.PortMatch.USBSerial, Location: port.PortMatch.PhysicalLocation}
 	}
-	service := &Service{manager: manager, store: store, worker: worker, backendClient: client, ctx: ctx, cancel: cancel, configs: configs, configPath: filepath.Join(root, "desktop-config.json"), rootDirectory: root, catalogPath: catalogPath, cloudKeywordPath: filepath.Join(root, "cloud-keywords.json"), settingsPath: settingsPath, catalog: catalog, appSettings: appSettings, pendingImports: map[string]pendingCatalogImport{}, connectErrors: map[string]string{}, configDirty: map[string]bool{}, uploadProgress: map[string]UploadProgressDTO{}, spoolDirectory: cfg.Spool.Directory, maxDiskBytes: cfg.Spool.MaxDiskBytes, workerCtx: workerCtx, workerCancel: workerCancel, workerDone: make(chan struct{}), workerStarted: make(chan struct{}), logger: logger, logWriter: logWriter, reportedServerFailures: map[string]struct{}{}}
+	service := &Service{manager: manager, store: store, worker: worker, backendClient: client, ctx: ctx, cancel: cancel, configs: configs, configPath: filepath.Join(root, "desktop-config.json"), rootDirectory: root, catalogPath: catalogPath, catalogDirectory: catalogFiles.Directory, cloudKeywordPath: filepath.Join(root, "cloud-keywords.json"), settingsPath: settingsPath, catalog: catalog, appSettings: appSettings, pendingImports: map[string]pendingCatalogImport{}, connectErrors: map[string]string{}, configDirty: map[string]bool{}, uploadProgress: map[string]UploadProgressDTO{}, spoolDirectory: cfg.Spool.Directory, maxDiskBytes: cfg.Spool.MaxDiskBytes, workerCtx: workerCtx, workerCancel: workerCancel, workerDone: make(chan struct{}), workerStarted: make(chan struct{}), logger: logger, logWriter: logWriter, reportedServerFailures: map[string]struct{}{}, previousConfigs: map[string]DeviceConfigDTO{}}
 	worker.SetProgressHandler(service.handleUploadProgress)
 	if err := service.loadSettings(); err != nil {
 		cancel()
@@ -598,11 +613,20 @@ func (s *Service) configForPortLocked(value any, index int) DeviceConfigDTO {
 			return s.applyLogConfigDefaultsLocked(normalizeDeviceConfig(cfg))
 		}
 		if nameMatch {
-			return serialOnlyInheritedConfig(cfg, port, index)
+			if cfg.Configured || strings.TrimSpace(cfg.ProjectID) != "" || strings.TrimSpace(cfg.UploaderEmail) != "" || strings.TrimSpace(cfg.Remark) != "" {
+				if s.previousConfigs == nil {
+					s.previousConfigs = map[string]DeviceConfigDTO{}
+				}
+				s.previousConfigs[strings.ToUpper(name)] = cfg
+			}
+			inherited := serialOnlyInheritedConfig(cfg, port, index)
+			inherited.PreviousConfigAvailable = s.previousConfigs[strings.ToUpper(name)].Configured
+			return inherited
 		}
 	}
 	defaults := defaultDesktopPortConfig()
 	dto := DeviceConfigDTO{DeviceID: serialDeviceID(name, index), Name: defaultSerialChannelName(name, index+1), PortName: name, BaudRate: defaults.BaudRate, DataBits: defaults.DataBits, StopBits: defaults.StopBits, Parity: defaults.Parity, Handshake: defaults.Handshake, Encoding: "utf-8", DTR: defaults.DTR, RTS: defaults.RTS, SaveEnabled: s.appSettings.DefaultSaveEnabled, UploadEnabled: false, NoLogTimeoutSeconds: s.appSettings.NoLogTimeoutSeconds, VID: port.VID, PID: port.PID, USBSerial: port.USBSerial, Location: port.Location}
+	dto.PreviousConfigAvailable = s.previousConfigs[strings.ToUpper(name)].Configured
 	return s.applyLogConfigDefaultsLocked(dto)
 }
 
@@ -618,6 +642,30 @@ func serialOnlyInheritedConfig(source DeviceConfigDTO, port PortInfo, index int)
 		dto.Name = defaultSerialChannelName(port.Name, index+1)
 	}
 	return normalizeDeviceConfig(dto)
+}
+
+// ReusePreviousDeviceConfig explicitly copies business fields from the last
+// saved configuration. It is intentionally opt-in when a device has no USB
+// serial, because a COM port alone cannot prove device identity.
+func (s *Service) ReusePreviousDeviceConfig(id string) (DeviceConfigDTO, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.configs[id]
+	if !ok {
+		return DeviceConfigDTO{}, errors.New("未找到串口通道")
+	}
+	key := strings.ToUpper(strings.TrimSpace(current.PortName))
+	previous, ok := s.previousConfigs[key]
+	if !ok || (!previous.Configured && strings.TrimSpace(previous.ProjectID) == "" && strings.TrimSpace(previous.UploaderEmail) == "" && strings.TrimSpace(previous.Remark) == "") {
+		return DeviceConfigDTO{}, errors.New("该串口没有可复用的历史配置")
+	}
+	previous.DeviceID = current.DeviceID
+	previous.PortName, previous.VID, previous.PID, previous.USBSerial, previous.Location = current.PortName, current.VID, current.PID, current.USBSerial, current.Location
+	previous.Configured = false
+	previous.PreviousConfigAvailable = false
+	previous.UploadSessionID, previous.QueryCode, previous.UploadSetupID = "", "", ""
+	previous.UploadSetupState, previous.UploadConfigFingerprint, previous.ConfigSnapshot = "", "", ""
+	return normalizeDeviceConfig(previous), nil
 }
 
 func defaultDesktopPortConfig() config.PortConfig {
@@ -734,6 +782,35 @@ func (s *Service) ConfirmUncertain(id, uploadID, taskID string) error {
 	}
 	return s.store.ConfirmUncertain(s.ctx, id, uploadID, taskID)
 }
+
+// CheckUncertain queries the public backend status without changing local
+// state. This gives the operator evidence before confirming or retrying.
+func (s *Service) CheckUncertain(id string) (UncertainCheckDTO, error) {
+	batch, err := s.store.GetBatch(s.ctx, id)
+	if err != nil {
+		return UncertainCheckDTO{}, err
+	}
+	if batch.State != spool.Uncertain {
+		return UncertainCheckDTO{}, fmt.Errorf("batch %s is not uncertain", id)
+	}
+	result := UncertainCheckDTO{BatchID: id, QueryCode: batch.QueryCode, Status: "not_found"}
+	if strings.TrimSpace(batch.QueryCode) == "" {
+		return result, nil
+	}
+	status, err := s.backendClient.QueryUploadSession(s.ctx, batch.QueryCode)
+	if err != nil {
+		return result, err
+	}
+	result.Status = status.Status
+	for _, item := range status.Batches {
+		if item.ClientRequestID != batch.ClientRequestID {
+			continue
+		}
+		result.UploadID, result.TaskID, result.Matched = item.UploadID, item.TaskID, item.UploadID != "" && item.TaskID != ""
+		break
+	}
+	return result, nil
+}
 func (s *Service) ConnectDevice(dto DeviceConfigDTO) error {
 	dto = normalizeDeviceConfig(dto)
 	config := s.toCollectorConfig(dto)
@@ -808,7 +885,21 @@ func (s *Service) SendCommand(id, command string) error {
 }
 
 func baseCollectorConfig(dto DeviceConfigDTO) collector.DeviceConfig {
-	return collector.DeviceConfig{ID: dto.DeviceID, Name: dto.Name, Serial: serialagent.SerialConfig{PortName: dto.PortName, BaudRate: dto.BaudRate, DataBits: dto.DataBits, StopBits: dto.StopBits, Parity: serialagent.Parity(dto.Parity), Handshake: serialagent.HandshakeNone, DTR: dto.DTR, RTS: dto.RTS, ReadTimeout: 200 * time.Millisecond, WriteTimeout: time.Second, IdleGap: 10 * time.Millisecond, MaxFrameBytes: 10 * 1024, Encoding: serialagent.Encoding(dto.Encoding)}}
+	readTimeout, writeTimeout, idleGap := time.Duration(dto.ReadTimeoutMs)*time.Millisecond, time.Duration(dto.WriteTimeoutMs)*time.Millisecond, time.Duration(dto.IdleGapMs)*time.Millisecond
+	if readTimeout <= 0 {
+		readTimeout = 200 * time.Millisecond
+	}
+	if writeTimeout <= 0 {
+		writeTimeout = time.Second
+	}
+	if idleGap <= 0 {
+		idleGap = 10 * time.Millisecond
+	}
+	maxFrameBytes := dto.MaxFrameBytes
+	if maxFrameBytes <= 0 {
+		maxFrameBytes = 10 * 1024
+	}
+	return collector.DeviceConfig{ID: dto.DeviceID, Name: dto.Name, Serial: serialagent.SerialConfig{PortName: dto.PortName, BaudRate: dto.BaudRate, DataBits: dto.DataBits, StopBits: dto.StopBits, Parity: serialagent.Parity(dto.Parity), Handshake: serialagent.HandshakeNone, DTR: dto.DTR, RTS: dto.RTS, ReadTimeout: readTimeout, WriteTimeout: writeTimeout, IdleGap: idleGap, MaxFrameBytes: maxFrameBytes, Encoding: serialagent.Encoding(dto.Encoding)}}
 }
 
 func (s *Service) toCollectorConfig(dto DeviceConfigDTO) collector.DeviceConfig {
@@ -867,6 +958,18 @@ func normalizeDeviceConfig(dto DeviceConfigDTO) DeviceConfigDTO {
 	}
 	if dto.StopBits == 0 {
 		dto.StopBits = 1
+	}
+	if dto.ReadTimeoutMs <= 0 {
+		dto.ReadTimeoutMs = 200
+	}
+	if dto.WriteTimeoutMs <= 0 {
+		dto.WriteTimeoutMs = 1000
+	}
+	if dto.IdleGapMs <= 0 {
+		dto.IdleGapMs = 10
+	}
+	if dto.MaxFrameBytes <= 0 {
+		dto.MaxFrameBytes = 10 * 1024
 	}
 	if dto.Parity == "" {
 		dto.Parity = "none"
@@ -967,6 +1070,12 @@ func (s *Service) loadSettings() error {
 	}
 	for _, value := range settings.Devices {
 		value = normalizeDeviceConfig(value)
+		if strings.TrimSpace(value.USBSerial) == "" && (value.Configured || strings.TrimSpace(value.ProjectID) != "" || strings.TrimSpace(value.UploaderEmail) != "" || strings.TrimSpace(value.Remark) != "") {
+			if s.previousConfigs == nil {
+				s.previousConfigs = map[string]DeviceConfigDTO{}
+			}
+			s.previousConfigs[strings.ToUpper(strings.TrimSpace(value.PortName))] = value
+		}
 		if strings.TrimSpace(value.USBSerial) == "" {
 			value = serialOnlyInheritedConfig(value, PortInfo{Name: value.PortName, VID: value.VID, PID: value.PID, Location: value.Location}, 0)
 		}

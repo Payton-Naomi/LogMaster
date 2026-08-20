@@ -6,6 +6,10 @@ export function ApplyCatalogImport(arg1) {
   return window['go']['main']['Service']['ApplyCatalogImport'](arg1);
 }
 
+export function CheckUncertain(arg1) {
+  return window['go']['main']['Service']['CheckUncertain'](arg1);
+}
+
 export function CloseWarnings() {
   return window['go']['main']['Service']['CloseWarnings']();
 }
@@ -44,6 +48,10 @@ export function GetAppSettings() {
 
 export function GetCatalog() {
   return window['go']['main']['Service']['GetCatalog']();
+}
+
+export function GetCatalogFiles() {
+  return window['go']['main']['Service']['GetCatalogFiles']();
 }
 
 export function GetDeviceStates() {
@@ -86,12 +94,20 @@ export function OpenAppLogDirectory() {
   return window['go']['main']['Service']['OpenAppLogDirectory']();
 }
 
+export function OpenCatalogDirectory() {
+  return window['go']['main']['Service']['OpenCatalogDirectory']();
+}
+
 export function OpenLogFolder(arg1) {
   return window['go']['main']['Service']['OpenLogFolder'](arg1);
 }
 
 export function ReadHistoryPreview(arg1) {
   return window['go']['main']['Service']['ReadHistoryPreview'](arg1);
+}
+
+export function ReloadCatalogFiles() {
+  return window['go']['main']['Service']['ReloadCatalogFiles']();
 }
 
 export function ResetKeywordHits(arg1) {
@@ -104,6 +120,10 @@ export function RetryDeadBatch(arg1) {
 
 export function RetryUncertain(arg1) {
   return window['go']['main']['Service']['RetryUncertain'](arg1);
+}
+
+export function ReusePreviousDeviceConfig(arg1) {
+  return window['go']['main']['Service']['ReusePreviousDeviceConfig'](arg1);
 }
 
 export function SaveAppSettings(arg1) {
@@ -148,6 +168,10 @@ export function StopTask(arg1) {
 
 export function SubscribeLogEvents(arg1) {
   return window['go']['main']['Service']['SubscribeLogEvents'](arg1);
+}
+
+export function SyncCloudKeywords() {
+  return window['go']['main']['Service']['SyncCloudKeywords']();
 }
 
 export function UpdateDeviceConfig(arg1, arg2) {

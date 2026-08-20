@@ -44,3 +44,4 @@ coverage.out
 .workbuddy/server/backend/start.ps1
 
 .workbuddy/
+.tmp-go-cache-collector/

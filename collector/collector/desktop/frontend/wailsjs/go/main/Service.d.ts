@@ -4,6 +4,8 @@ import {main} from '../models';
 
 export function ApplyCatalogImport(arg1:string):Promise<void>;
 
+export function CheckUncertain(arg1:string):Promise<main.UncertainCheckDTO>;
+
 export function CloseWarnings():Promise<Array<string>>;
 
 export function ConfirmUncertain(arg1:string,arg2:string,arg3:string):Promise<void>;
@@ -23,6 +25,8 @@ export function ExportWindowLogs(arg1:string,arg2:string):Promise<string>;
 export function GetAppSettings():Promise<main.AppSettingsDTO>;
 
 export function GetCatalog():Promise<main.CatalogConfig>;
+
+export function GetCatalogFiles():Promise<main.CatalogFilesDTO>;
 
 export function GetDeviceStates():Promise<Array<main.DeviceStateDTO>>;
 
@@ -44,15 +48,21 @@ export function LogPanic(arg1:any):Promise<void>;
 
 export function OpenAppLogDirectory():Promise<void>;
 
+export function OpenCatalogDirectory():Promise<void>;
+
 export function OpenLogFolder(arg1:string):Promise<void>;
 
 export function ReadHistoryPreview(arg1:string):Promise<main.HistoryPreviewDTO>;
+
+export function ReloadCatalogFiles():Promise<main.CatalogConfig>;
 
 export function ResetKeywordHits(arg1:string):Promise<void>;
 
 export function RetryDeadBatch(arg1:string):Promise<void>;
 
 export function RetryUncertain(arg1:string):Promise<void>;
+
+export function ReusePreviousDeviceConfig(arg1:string):Promise<main.DeviceConfigDTO>;
 
 export function SaveAppSettings(arg1:main.AppSettingsDTO):Promise<void>;
 
@@ -75,6 +85,8 @@ export function StartTask(arg1:string):Promise<void>;
 export function StopTask(arg1:string):Promise<void>;
 
 export function SubscribeLogEvents(arg1:string):Promise<void>;
+
+export function SyncCloudKeywords():Promise<main.CloudKeywordSyncResult>;
 
 export function UpdateDeviceConfig(arg1:string,arg2:main.DeviceConfigDTO):Promise<void>;
 

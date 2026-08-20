@@ -131,7 +131,7 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 func (a *App) runPort(ctx context.Context, port config.PortConfig) {
-	writer, decoder, err := a.pipelineForPort(port.DeviceSN, port.PortName, port.Encoding, port.SegmentMaxAge, port.SegmentMaxBytes)
+	writer, decoder, err := a.pipelineForPort(port.DeviceSN, port.PortName, port.Encoding, port.MaxFrameBytes, port.SegmentMaxAge, port.SegmentMaxBytes)
 	if err != nil {
 		a.logger.Error("initialize serial pipeline", "device_sn", port.DeviceSN, "error", err)
 		return
@@ -181,7 +181,7 @@ func (a *App) runDemo(ctx context.Context) {
 	port.DeviceSN, port.PortName = "DEMO-DVR-0001", "DEMO"
 	port.SegmentMaxAge = 3 * time.Second
 	port.SegmentMaxBytes = 4096
-	writer, _, err := a.pipelineForPort(port.DeviceSN, port.PortName, port.Encoding, port.SegmentMaxAge, port.SegmentMaxBytes)
+	writer, _, err := a.pipelineForPort(port.DeviceSN, port.PortName, port.Encoding, port.MaxFrameBytes, port.SegmentMaxAge, port.SegmentMaxBytes)
 	if err != nil {
 		a.logger.Error("initialize demo pipeline", "error", err)
 		return
@@ -206,8 +206,8 @@ func (a *App) runDemo(ctx context.Context) {
 	}
 }
 
-func (a *App) pipelineForPort(deviceSN, portName, encoding string, maxAge time.Duration, maxBytes int64) (*segment.Writer, *serialagent.Decoder, error) {
-	decoder, err := serialagent.NewDecoder(serialagent.Encoding(encoding))
+func (a *App) pipelineForPort(deviceSN, portName, encoding string, maxFrameBytes int, maxAge time.Duration, maxBytes int64) (*segment.Writer, *serialagent.Decoder, error) {
+	decoder, err := serialagent.NewDecoderWithLimit(serialagent.Encoding(encoding), maxFrameBytes)
 	if err != nil {
 		return nil, nil, err
 	}

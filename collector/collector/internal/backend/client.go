@@ -144,13 +144,15 @@ type StandardKeyword struct {
 }
 
 type PublicUploadBatch struct {
-	UploadID     string    `json:"upload_id"`
-	QueryCode    string    `json:"query_code"`
-	Status       string    `json:"status"`
-	OriginalName string    `json:"original_name"`
-	ErrorType    string    `json:"error_type"`
-	ErrorMessage string    `json:"error_message"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	UploadID        string    `json:"upload_id"`
+	TaskID          string    `json:"task_id"`
+	ClientRequestID string    `json:"client_request_id"`
+	QueryCode       string    `json:"query_code"`
+	Status          string    `json:"status"`
+	OriginalName    string    `json:"original_name"`
+	ErrorType       string    `json:"error_type"`
+	ErrorMessage    string    `json:"error_message"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 type PublicUploadSession struct {

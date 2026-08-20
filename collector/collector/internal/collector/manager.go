@@ -175,7 +175,7 @@ func (m *Manager) ConnectDevice(config DeviceConfig) error {
 			return err
 		}
 	}
-	decoder, err := serialagent.NewDecoder(config.Serial.Encoding)
+	decoder, err := serialagent.NewDecoderWithLimit(config.Serial.Encoding, config.Serial.MaxFrameBytes)
 	if err != nil {
 		if writer != nil {
 			_ = writer.Close(context.Background())
