@@ -61,19 +61,8 @@
              <p v-if="!projectOptions.length" class="project-warning">暂无可用项目，请联系管理员创建并授权后再上传。</p>
              <p v-else-if="projectName && !projectOptions.includes(projectName)" class="project-warning">当前项目已不可用，请重新选择有效项目。</p>
           </el-form-item>
-          <el-form-item label="版本标识" required>
+          <el-form-item class="version-field" label="版本标识" required>
             <el-input v-model="version" maxlength="64" placeholder="例如 V1.2.0" :disabled="filesLocked" />
-          </el-form-item>
-          <div class="field-pair">
-            <el-form-item label="测试任务 ID">
-              <el-input v-model="testTaskId" maxlength="128" placeholder="选填" :disabled="filesLocked" />
-            </el-form-item>
-            <el-form-item label="测试任务名称">
-              <el-input v-model="testTaskName" maxlength="256" placeholder="选填" :disabled="filesLocked" />
-            </el-form-item>
-          </div>
-          <el-form-item label="上传人" required>
-            <el-input v-model="uploaderName" maxlength="128" placeholder="必填" :disabled="filesLocked" />
           </el-form-item>
           <el-form-item label="备注">
             <el-input v-model="remark" type="textarea" :rows="2" maxlength="4000" show-word-limit placeholder="选填" :disabled="filesLocked" />
@@ -122,7 +111,7 @@
             <div><dt>错误</dt><dd class="danger">{{ formatNumber(task.error_count) }}</dd></div>
             <div><dt>警告</dt><dd class="warning">{{ formatNumber(task.warning_count) }}</dd></div>
           </dl>
-          <el-alert v-if="task.error_message" :title="task.error_message" type="error" :closable="false" show-icon />
+          <el-alert v-if="task.error_message" :title="task.error_message" type="error" :closable="false" show-icon><template #default><div class="upload-error"><span>{{ task.error_message }}</span><el-button text size="small" :icon="CopyDocument" @click="copyText(task.error_message)">复制错误</el-button></div></template></el-alert>
           <div class="task-actions">
             <el-button v-if="task.status === 'completed'" type="primary" @click="router.push(`/analysis/${task.task_id}`)">查看解析结果</el-button>
             <el-button :plain="task.status !== 'completed'" @click="startNewUpload">上传另一批</el-button>
@@ -151,9 +140,14 @@ const projectOptions = ref([])
 const scenarios = ref([])
 const projectName = ref('')
 const version = ref('')
-const testTaskId = ref('')
-const testTaskName = ref('')
-const uploaderName = ref(window.localStorage.getItem('logmaster_uploader_name') || '')
+const uploaderName = ref((() => {
+  try {
+    const user = JSON.parse(window.localStorage.getItem('user_info') || '{}')
+    return String(user.name || user.email || 'Web User').trim()
+  } catch {
+    return 'Web User'
+  }
+})())
 const remark = ref('')
 const scenarioIds = ref([])
 const disableParsingRules = ref(true)
@@ -172,7 +166,7 @@ const terminalStatuses = new Set(['completed', 'failed'])
 const uploadDraftKey = 'logmaster_upload_draft_v1'
 const totalSize = computed(() => files.value.reduce((sum, item) => sum + item.raw.size, 0))
 const filesLocked = computed(() => submitting.value || Boolean(task.value && !terminalStatuses.has(task.value.status)))
-const submitDisabled = computed(() => !files.value.length || !projectName.value.trim() || !version.value.trim() || !uploaderName.value.trim() || totalSize.value > maxUploadBytes.value || files.value.length > maxFilesPerUpload.value || submitting.value || Boolean(task.value))
+const submitDisabled = computed(() => !files.value.length || !projectName.value.trim() || !version.value.trim() || totalSize.value > maxUploadBytes.value || files.value.length > maxFilesPerUpload.value || submitting.value || Boolean(task.value))
 const applicableScenarios = computed(() => scenarios.value.filter(item => {
   const metadata = item.metadata || {}
   const published = typeof item.enabled === 'boolean' ? item.enabled : (metadata.status || 'published') === 'published'
@@ -190,7 +184,7 @@ const analysisModeLabel = computed(() => {
   if (!selectedScenarios.value.length) return '按解析规则开关'
   return disableParsingRules.value ? '仅测试场景' : '场景 + 解析规则'
 })
-const hasDraft = computed(() => Boolean(projectName.value || version.value || testTaskId.value || testTaskName.value || remark.value || scenarioIds.value.length || disableParsingRules.value !== true))
+const hasDraft = computed(() => Boolean(projectName.value || version.value || remark.value || scenarioIds.value.length || disableParsingRules.value !== true))
 
 const progress = computed(() => {
   const current = task.value
@@ -324,9 +318,7 @@ async function submit() {
     const created = await uploadLogs(files.value.map((item) => item.raw), {
       project_name: projectName.value.trim(),
       version: version.value.trim(),
-      test_task_id: testTaskId.value.trim(),
-      test_task_name: testTaskName.value.trim(),
-      uploader_name: uploaderName.value.trim(),
+      uploader_name: uploaderName.value,
       remark: remark.value.trim(),
       client_request_id: crypto.randomUUID(),
       collector_version: 'web',
@@ -343,8 +335,10 @@ async function submit() {
     task.value = { task_id: created.task_id, status: created.status, progress: 25, total_files: created.file_count || 0, processed_files: 0, total_lines: 0, error_count: 0, warning_count: 0, error_message: '' }
     ElMessage.success('日志已上传，后台开始解析')
     await poll(created.task_id, generation)
-  } catch {
-    task.value = null
+  } catch (error) {
+    const message = error?.response?.data?.message || error?.message || '上传失败，请检查网络和文件后重试'
+    task.value = { ...task.value, status: 'failed', progress: 100, error_message: message }
+    ElMessage.error(message)
   } finally {
     submitting.value = false
   }
@@ -374,14 +368,16 @@ async function copyTaskId() {
     ElMessage.warning('无法访问剪贴板')
   }
 }
+async function copyText(value) {
+  try { await navigator.clipboard.writeText(String(value || '')); ElMessage.success('错误信息已复制') }
+  catch { ElMessage.warning('复制失败，请检查浏览器剪贴板权限') }
+}
 
 function startNewUpload() {
   pollGeneration++
   window.clearTimeout(pollTimer)
   files.value = []
   version.value = ''
-  testTaskId.value = ''
-  testTaskName.value = ''
   remark.value = ''
   task.value = null
   uploadPercent.value = 0
@@ -393,14 +389,12 @@ watch(projectName, () => {
   const applicableIds = new Set(applicableScenarios.value.map(item => item.id))
   scenarioIds.value = scenarioIds.value.filter(id => applicableIds.has(id))
 })
-watch(uploaderName, value => window.localStorage.setItem('logmaster_uploader_name', value.trim()))
-watch([projectName, version, testTaskId, testTaskName, uploaderName, remark, scenarioIds, disableParsingRules], saveDraft, { deep: true })
+watch([projectName, version, remark, scenarioIds, disableParsingRules], saveDraft, { deep: true })
 
 function saveDraft() {
   if (task.value || submitting.value) return
   window.localStorage.setItem(uploadDraftKey, JSON.stringify({
-    projectName: projectName.value, version: version.value, testTaskId: testTaskId.value,
-    testTaskName: testTaskName.value, uploaderName: uploaderName.value, remark: remark.value,
+    projectName: projectName.value, version: version.value, remark: remark.value,
     scenarioIds: scenarioIds.value, disableParsingRules: disableParsingRules.value
   }))
 }
@@ -411,9 +405,6 @@ function restoreDraft() {
     if (!draft || typeof draft !== 'object') return
     projectName.value = typeof draft.projectName === 'string' ? draft.projectName : ''
     version.value = typeof draft.version === 'string' ? draft.version : ''
-    testTaskId.value = typeof draft.testTaskId === 'string' ? draft.testTaskId : ''
-    testTaskName.value = typeof draft.testTaskName === 'string' ? draft.testTaskName : ''
-    uploaderName.value = typeof draft.uploaderName === 'string' ? draft.uploaderName : uploaderName.value
     remark.value = typeof draft.remark === 'string' ? draft.remark : ''
     scenarioIds.value = Array.isArray(draft.scenarioIds) ? draft.scenarioIds : []
     disableParsingRules.value = typeof draft.disableParsingRules === 'boolean' ? draft.disableParsingRules : true
@@ -424,8 +415,6 @@ function clearDraft() {
   window.localStorage.removeItem(uploadDraftKey)
   projectName.value = ''
   version.value = ''
-  testTaskId.value = ''
-  testTaskName.value = ''
   remark.value = ''
   scenarioIds.value = []
   disableParsingRules.value = true
@@ -455,6 +444,7 @@ onBeforeUnmount(() => {
 .file-empty { display: flex; min-height: 76px; align-items: center; justify-content: center; flex-direction: column; gap: 5px; color: #788595; font-size: 11px; }.file-empty small { color: #9aa3ae; }
 .upload-panel { position: sticky; top: 0; }.upload-panel .el-select { width: 100%; }.upload-panel :deep(.el-form-item__label) { color: #536174; font-size: 12px; font-weight: 600; }.upload-panel :deep(.el-form-item) { margin-bottom: 15px; }
 .project-warning { margin: -8px 0 14px; color: #b45309; font-size: 11px; line-height: 1.5; }
+.upload-panel :deep(.el-form-item__content) { display: block; width: 100%; }
 .draft-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:-2px 0 14px;padding:8px 10px;border:1px solid #d8e3ee;border-radius:5px;background:#f5f8fc;color:#667789;font-size:11px}.draft-toolbar .el-button{margin:0}
 .field-pair{display:grid;grid-template-columns:1fr 1fr;gap:10px}.field-pair :deep(.el-form-item){min-width:0}
 .scenario-rule-count{float:right;margin-left:18px;color:#8a94a3;font-size:11px}.scenario-note{display:flex;width:100%;align-items:flex-start;gap:5px;margin-top:7px;color:#39785f;font-size:10px;line-height:1.5}.scenario-note .el-icon{margin-top:2px;flex:0 0 auto}

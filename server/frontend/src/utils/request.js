@@ -24,6 +24,8 @@ service.interceptors.response.use(
           ElMessage.error('登录已过期，请重新登录')
           window.location.href = import.meta.env.VITE_FEISHU_LOGIN_URL
         }
+      } else if (status === 403) {
+        ElMessage.error(error.response.data?.message || '当前账号没有执行此操作的权限')
       } else {
         ElMessage.error(error.response.data?.message || '服务器错误')
       }
