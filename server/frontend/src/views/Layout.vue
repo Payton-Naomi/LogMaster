@@ -62,7 +62,6 @@
         </div>
       </el-header>
       <el-main class="main">
-        <ParticleBackdrop v-if="route.path !== '/log-records'" />
         <router-view v-slot="{ Component }">
           <component :is="Component" :class="{ 'shared-particle-surface': route.path !== '/log-records' }" />
         </router-view>
@@ -81,7 +80,6 @@ import { computed, markRaw, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown, ArrowRight, DataAnalysis, DataBoard, Expand, FolderOpened, Fold, Key, List, Menu, Moon, Operation, Search, Setting, Sunny, SwitchButton, Upload } from '@element-plus/icons-vue'
-import ParticleBackdrop from '@/components/ParticleBackdrop.vue'
 import { getCurrentUser, logout } from '@/api/auth'
 import { useTheme } from '@/utils/theme'
 

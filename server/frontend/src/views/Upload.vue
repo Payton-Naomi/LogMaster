@@ -111,7 +111,7 @@
             <div><dt>错误</dt><dd class="danger">{{ formatNumber(task.error_count) }}</dd></div>
             <div><dt>警告</dt><dd class="warning">{{ formatNumber(task.warning_count) }}</dd></div>
           </dl>
-          <el-alert v-if="task.error_message" :title="task.error_message" type="error" :closable="false" show-icon />
+          <el-alert v-if="task.error_message" :title="task.error_message" type="error" :closable="false" show-icon><template #default><div class="upload-error"><span>{{ task.error_message }}</span><el-button text size="small" :icon="CopyDocument" @click="copyText(task.error_message)">复制错误</el-button></div></template></el-alert>
           <div class="task-actions">
             <el-button v-if="task.status === 'completed'" type="primary" @click="router.push(`/analysis/${task.task_id}`)">查看解析结果</el-button>
             <el-button :plain="task.status !== 'completed'" @click="startNewUpload">上传另一批</el-button>
@@ -335,8 +335,10 @@ async function submit() {
     task.value = { task_id: created.task_id, status: created.status, progress: 25, total_files: created.file_count || 0, processed_files: 0, total_lines: 0, error_count: 0, warning_count: 0, error_message: '' }
     ElMessage.success('日志已上传，后台开始解析')
     await poll(created.task_id, generation)
-  } catch {
-    task.value = null
+  } catch (error) {
+    const message = error?.response?.data?.message || error?.message || '上传失败，请检查网络和文件后重试'
+    task.value = { ...task.value, status: 'failed', progress: 100, error_message: message }
+    ElMessage.error(message)
   } finally {
     submitting.value = false
   }
@@ -365,6 +367,10 @@ async function copyTaskId() {
   } catch {
     ElMessage.warning('无法访问剪贴板')
   }
+}
+async function copyText(value) {
+  try { await navigator.clipboard.writeText(String(value || '')); ElMessage.success('错误信息已复制') }
+  catch { ElMessage.warning('复制失败，请检查浏览器剪贴板权限') }
 }
 
 function startNewUpload() {
