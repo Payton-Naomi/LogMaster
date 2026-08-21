@@ -25,6 +25,11 @@ type TokenUsageReporter interface {
 	LastUsage() (promptTokens, completionTokens int)
 }
 
+// TokenLimitedAnalyzer allows the service to cap the model output for one file.
+type TokenLimitedAnalyzer interface {
+	AnalyzeWithTokenLimit(context.Context, AgentAnalysisRequest, int) (AgentAnalysisResponse, error)
+}
+
 type AgentAnalysisRequest struct {
 	TaskID     string        `json:"task_id"`
 	UploadID   string        `json:"upload_id"`

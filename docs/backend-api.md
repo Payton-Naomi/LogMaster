@@ -2,6 +2,14 @@
 
 本文档是 `server/backend` 当前全部 HTTP API 的统一说明，更新日期为 2026-08-15。前端专用说明见 [`api-to-frontend.md`](api-to-frontend.md)，采集端专用说明见 [`api-to-collector.md`](api-to-collector.md)。
 
+> **最新：818 调整（2026-08-18）**：`POST /api/upload-sessions` 必须提交 `uploader_email`；后端通过飞书通讯录校验企业成员身份并同步用户资料，`uploader_name` 可选。
+
+> **818 补充**：AI 分析完成后会记录 `ai_usage` token 用量；迁移 `027_ai_usage_permissions.sql` 补齐表和序列权限，后端重启后自动执行。该修复不改变 HTTP API 返回结构。
+
+> **819 调整**：超级管理员可通过 `/api/admin/ai-analysis-settings` 修改大模型地址、模型、超时、命中采样上限、输入字节上限和输出 token/配额。API Key 只接收写入，不返回明文，并使用 `LOGMASTER_CONFIG_ENCRYPTION_KEY` 加密保存；数据库配置优先于环境变量。
+
+AI 分析命中日志采用按规则/关键词分组轮询采样，避免重复关键词占满输入；采样上限和输入字节保护由后端固定执行。
+
 ## 1. 全部 API 清单
 
 > **8/16新增**：`GET` / `PUT` `/api/admin/ai-analysis-settings`
@@ -230,7 +238,7 @@ state 无效返回 `400`；飞书换取令牌或用户信息失败返回 `502`�
 
 创建连续上传会话。请求为 JSON，未知字段会导致 `400`。
 
-必填字段：`client_request_id`、`project_name`、`version`、`uploader_name`。可选字段包括设备串口参数、项目 ID、测试任务、场景、关键词配置、USB 信息、采集端版本和时区。
+必填字段：`client_request_id`、`project_name`、`version`、`uploader_email`。后端通过飞书通讯录校验邮箱归属并同步姓名、用户 ID 和邮箱；`uploader_name` 可选，若提供则必须与飞书姓名一致。
 
 ```json
 {
@@ -243,6 +251,7 @@ state 无效返回 `400`；飞书换取令牌或用户信息失败返回 `502`�
   "version": "1.0.0",
   "test_task_id": "task-001",
   "test_task_name": "稳定性测试",
+  "uploader_email": "wushouchao@70mai.com",
   "uploader_name": "张三",
   "scenario_ids": ["scenario-01"],
   "collector_version": "1.0.0",
@@ -719,26 +728,33 @@ AI 分析为异步任务：关键字规则解析先同步完成（兜底），AI
 
 ### 9.3 `GET /api/admin/ai-analysis-settings` 与 `PUT /api/admin/ai-analysis-settings`
 
-仅 `super_admin`。用于查看和修改 AI 分析的两项限额。
+仅 `super_admin`。用于查看和修改 AI 模型连接、输入采样和分析限额。
 
 `GET` 返回：
 
 ```json
-{"code":0,"message":"success","data":{"max_files_per_task":20,"daily_token_quota":1000000}}
+{"code":0,"message":"success","data":{"max_tokens_per_file":20000,"daily_token_quota":1000000}}
 ```
 
 `PUT` 请求：
 
 ```json
-{"max_files_per_task":20,"daily_token_quota":1000000}
+{"max_tokens_per_file":20000,"daily_token_quota":1000000}
 ```
 
 字段说明：
 
 | 字段 | 范围 | 含义 |
 | --- | --- | --- |
-| `max_files_per_task` | 1 到 500 | 每个上传任务最多对多少个日志文件做 AI 分析，超出部分只做关键字规则 |
+| `max_tokens_per_file` | 1 到 1000000 | 单个日志文件的 AI 模型最大输出 token 数 |
 | `daily_token_quota` | `>= 0` | 每个用户每天的 AI token 配额，`0` 表示不限制 |
+| `llm_api_base_url` | HTTP(S) URL | 大模型 OpenAI 兼容接口地址 |
+| `llm_api_key` | PUT 时可选 | 新 API Key；GET 不返回明文 |
+| `llm_api_key_configured` | 只读 | 是否已配置 API Key |
+| `llm_model` | 1 到 128 字符 | 模型名称 |
+| `llm_timeout_seconds` | 5 到 600 | 单次请求超时时间 |
+| `llm_max_matches` | 1 到 5000 | 按规则/关键词轮询采样的命中条数上限 |
+| `llm_max_input_bytes` | 1024 到 10485760 | 单次模型输入大小上限 |
 
 超过每日配额时，对应文件跳过 AI 分析（关键字规则仍正常执行），AI 结果记录为 `failed` 并提示 quota exceeded。
 
@@ -780,9 +796,9 @@ AI 分析为异步任务：关键字规则解析先同步完成（兜底），AI
 | `LLM_API_KEY` | 视服务 | 空 | API Key；Ollama 可留空 |
 | `LLM_MODEL` | 否 | `qwen-plus` | 模型名 |
 | `LLM_TIMEOUT_SECONDS` | 否 | `120` | 单次分析超时 |
-| `LLM_MAX_MATCHES` | 否 | `50` | 单次最多送入模型的命中条数 |
-| `LLM_MAX_INPUT_BYTES` | 否 | `200000` | 单次输入字节上限 |
-| `AI_MAX_FILES_PER_TASK` | 否 | `20` | 每任务最多 AI 分析文件数（回退默认值，管理员可在后台改） |
+| `LLM_MAX_MATCHES` | 否 | `50` | 单次最多送入模型的命中条数，按规则/关键词分组轮询采样 |
+| `LLM_MAX_INPUT_BYTES` | 否 | `200000` | 单次送入模型的最大输入字节数 |
+| `AI_MAX_TOKENS_PER_FILE` | 否 | `20000` | 单文件 AI 模型最大输出 token 数（回退默认值，管理员可在后台改） |
 | `AI_DAILY_TOKEN_QUOTA` | 否 | `1000000` | 每用户每日 token 配额（回退默认值，`0` 不限） |
 
 结果存入 `agent_analyses` 表，`provider` 记为 `llm`，通过 `/api/tasks/{task_id}/agent-results` 读取。
