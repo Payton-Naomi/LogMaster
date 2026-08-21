@@ -141,13 +141,13 @@
           <section class="resource-setting-section ai-quota-section">
             <div class="resource-setting-heading"><strong>AI 分析配额</strong><span>控制 AI 分析范围和每日 Token 成本</span></div>
             <div class="ai-quota-overview">
-              <div><span>每任务最多分析</span><strong>{{ aiSettingsForm.max_files_per_task }} 个文件</strong></div>
+              <div><span>单文件最大输出</span><strong>{{ aiSettingsForm.max_tokens_per_file.toLocaleString() }} Token</strong></div>
               <div><span>每用户每日 Token</span><strong>{{ formatTokenQuota(aiSettingsForm.daily_token_quota) }}</strong></div>
             </div>
             <el-form class="capacity-form" label-position="top" @submit.prevent="saveAISettings">
-              <el-form-item label="每任务 AI 分析文件数" required>
-                <el-input-number v-model="aiSettingsForm.max_files_per_task" :min="1" :max="500" controls-position="right" />
-                <span class="field-help">超出数量的文件仍会进行关键字分析</span>
+              <el-form-item label="单个文件最大输出 Token" required>
+                <el-input-number v-model="aiSettingsForm.max_tokens_per_file" :min="1" :max="1000000" :step="1000" controls-position="right" />
+                <span class="field-help">限制单个文件 AI 模型的最大输出，关键字分析不受影响</span>
               </el-form-item>
               <el-form-item label="每用户每日 Token 配额" required>
                 <el-input-number v-model="aiSettingsForm.daily_token_quota" :min="0" :step="100000" controls-position="right" />
@@ -334,7 +334,7 @@ const newOptionNames = reactive({ type: '', stage: '' })
 const capacityForm = reactive({ max_upload_bytes: 2 * 1024 * 1024 * 1024, max_files_per_upload: 100 })
 const capacityUpdatedAt = ref('')
 const capacitySaving = ref(false)
-const aiSettingsForm = reactive({ max_files_per_task: 20, daily_token_quota: 1000000 })
+const aiSettingsForm = reactive({ max_tokens_per_file: 20000, daily_token_quota: 1000000 })
 const aiSettingsSaving = ref(false)
 const keywordFileInput = ref(null)
 const keywordFile = ref(null)
@@ -610,7 +610,7 @@ async function saveCapacity() {
 async function loadAISettings() {
   try {
     const settings = await getAIAnalysisSettings()
-    aiSettingsForm.max_files_per_task = Math.min(500, Math.max(1, Number(settings?.max_files_per_task) || aiSettingsForm.max_files_per_task))
+    aiSettingsForm.max_tokens_per_file = Math.min(1000000, Math.max(1, Number(settings?.max_tokens_per_file) || aiSettingsForm.max_tokens_per_file))
     aiSettingsForm.daily_token_quota = Math.max(0, Number(settings?.daily_token_quota) || 0)
   } catch (error) {
     if (error.response?.status === 401) unlocked.value = false
@@ -623,17 +623,17 @@ async function saveAISettings() {
   aiSettingsSaving.value = true
   try {
     const payload = {
-      max_files_per_task: Math.min(500, Math.max(1, Number(aiSettingsForm.max_files_per_task) || 1)),
+      max_tokens_per_file: Math.min(1000000, Math.max(1, Number(aiSettingsForm.max_tokens_per_file) || 1)),
       daily_token_quota: Math.max(0, Number(aiSettingsForm.daily_token_quota) || 0)
     }
     const saved = await updateAIAnalysisSettings(payload)
-    aiSettingsForm.max_files_per_task = Math.min(500, Math.max(1, Number(saved?.max_files_per_task ?? payload.max_files_per_task) || payload.max_files_per_task))
+    aiSettingsForm.max_tokens_per_file = Math.min(1000000, Math.max(1, Number(saved?.max_tokens_per_file ?? payload.max_tokens_per_file) || payload.max_tokens_per_file))
     aiSettingsForm.daily_token_quota = Math.max(0, Number(saved?.daily_token_quota ?? payload.daily_token_quota) || 0)
     ElMessage.success('AI 配额已更新')
   } catch (error) {
     if (error.response?.status === 401) unlocked.value = false
     else if (error.response?.status === 403) ElMessage.error('仅超级管理员可修改 AI 配额')
-    else ElMessage.error('AI 配额保存失败')
+    else ElMessage.error(error.response?.data?.message || error.message || 'AI 配额保存失败')
   } finally { aiSettingsSaving.value = false }
 }
 

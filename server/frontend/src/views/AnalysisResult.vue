@@ -33,16 +33,16 @@
     </section>
 
     <section v-if="agentReady || agentLoading" class="panel ai-summary-panel">
-      <div class="panel-heading"><div><h2>AI 总结</h2><p>基于日志命中行及前后文生成的分析结论</p></div><span v-if="agentLoading">AI 正在分析，请稍候...</span><span v-else-if="agentResults.length">{{ agentResults.length }} 个文件</span><span v-else>暂无 AI 结果</span></div>
+      <div class="panel-heading"><div><h2>AI 总结</h2><p>基于日志命中行及前后文生成的分析结论</p></div><span v-if="agentLoading">AI 正在分析，请稍候...</span><span v-else-if="agentResults.length">{{ agentResults.length }} 个文件 · {{ agentStatusText }}</span><span v-else>暂无 AI 结果</span></div>
       <el-alert v-if="agentLoading" title="AI 正在分析，通常需要几秒到几十秒，请耐心等待，页面会自动更新。" type="info" :closable="false" show-icon />
       <el-alert v-else-if="!agentResults.length" title="AI 分析可能仍在后台处理中，请耐心等待后刷新页面；关键字分析结果不受影响。" type="info" :closable="false" show-icon />
       <div v-for="item in agentResults" :key="`${item.log_file_id || item.file_path}-${item.updated_at || item.created_at || item.status}`" class="ai-file-result">
-        <div class="ai-file-heading"><strong>{{ item.file_path || '当前日志文件' }}</strong><el-tag :type="item.status === 'completed' ? 'success' : 'danger'" effect="plain">{{ item.status === 'completed' ? '分析完成' : '分析失败' }}</el-tag></div>
+        <div class="ai-file-heading"><strong>{{ item.file_path || '当前日志文件' }}</strong><div><el-button text size="small" :icon="CopyDocument" @click="copyText(item.summary || item.error_message || '')">复制</el-button><el-tag :type="item.status === 'completed' ? 'success' : 'danger'" effect="plain">{{ item.status === 'completed' ? '分析完成' : '分析失败' }}</el-tag></div></div>
         <p v-if="item.status === 'completed' && item.summary" class="ai-summary-copy">{{ item.summary }}</p>
         <p v-else-if="item.status === 'failed'" class="ai-summary-error">{{ item.error_message || 'AI 分析失败，请稍后重试' }}</p>
         <div v-if="item.findings?.length" class="ai-findings">
           <article v-for="(finding, index) in item.findings" :key="`${finding.line_number || index}-${finding.category || 'finding'}`" class="ai-finding">
-            <div class="ai-finding-heading"><strong>{{ finding.root_cause || finding.category || '诊断结论' }}</strong><el-tag v-if="finding.confidence != null" size="small" effect="plain">置信度 {{ Math.round(finding.confidence * 100) }}%</el-tag></div>
+            <div class="ai-finding-heading"><strong>{{ finding.root_cause || finding.category || '诊断结论' }}</strong><div><el-button text size="small" :icon="CopyDocument" @click="copyText(formatFinding(finding))">复制</el-button><el-tag v-if="finding.confidence != null" size="small" effect="plain">置信度 {{ Math.round(finding.confidence * 100) }}%</el-tag></div></div>
             <dl><div v-if="finding.evidence"><dt>证据</dt><dd>{{ finding.evidence }}</dd></div><div v-if="finding.impact"><dt>影响</dt><dd>{{ finding.impact }}</dd></div><div v-if="finding.suggestion"><dt>建议</dt><dd>{{ finding.suggestion }}</dd></div></dl>
           </article>
         </div>
@@ -53,7 +53,7 @@
       <div class="filters">
         <el-input v-model="search" :prefix-icon="Search" clearable placeholder="搜索规则、文件或日志内容" />
         <el-select v-model="level" clearable placeholder="全部级别"><el-option label="错误" value="error" /><el-option label="警告" value="warning" /><el-option label="信息" value="info" /></el-select>
-        <el-select v-model="category" clearable placeholder="全部场景"><el-option v-for="item in categories" :key="item" :label="item" :value="item" /></el-select>
+        <el-select v-model="category" clearable placeholder="全部场景"><el-option v-for="item in categories" :key="item" :label="item" :value="item" /></el-select><el-select v-model="groupBy" placeholder="分组方式"><el-option label="按时间排序" value="none" /><el-option label="按分类分组" value="category" /><el-option label="按级别分组" value="level" /></el-select>
         <span>共 {{ filtered.length }} 条</span>
       </div>
       <el-table :data="paged" @row-click="openResult">
@@ -64,7 +64,7 @@
         <el-table-column prop="file_path" label="文件" min-width="190" show-overflow-tooltip />
         <el-table-column prop="line_number" label="行号" width="75" />
         <el-table-column prop="content" label="日志内容" min-width="320" show-overflow-tooltip />
-        <el-table-column label="操作" width="100"><template #default="scope"><el-button type="primary" link @click.stop="openResult(scope.row)">看上下文</el-button></template></el-table-column>
+        <el-table-column label="操作" width="210"><template #default="scope"><el-button type="primary" link @click.stop="copyResult(scope.row)">复制</el-button><el-button type="primary" link @click.stop="openResult(scope.row)">看上下文</el-button><el-button v-if="findAgentFinding(scope.row)" type="primary" link @click.stop="openAgentFinding(scope.row)">AI 解读</el-button></template></el-table-column>
         <template #empty><el-empty description="数据库中暂无解析结果" /></template>
       </el-table>
       <footer><span>点击结果行查看关键字前后各 50 行日志和可能原因</span><el-pagination v-model:current-page="page" :page-size="pageSize" :total="filtered.length" layout="prev, pager, next" /></footer>
@@ -80,13 +80,31 @@
         <section class="drawer-section"><div class="section-title"><h3>关键字前后各 50 行</h3><span>{{ selected.context_lines?.length || 0 }} 行</span></div><div class="context-window"><div v-for="line in contextLines" :key="`${line.line_number}-${line.content}`" :class="['context-line', { hit: line.is_hit, cause: isCauseLine(line) }]" class="context-line"><span class="line-number">{{ line.line_number }}</span><span class="line-time">{{ shortTime(line.timestamp) }}</span><span class="line-content">{{ line.content }}</span></div><div v-if="!contextLines.length" class="fallback-line"><span class="line-number">{{ selected.line_number }}</span><span class="line-content">{{ selected.content }}</span></div></div></section>
       </template>
     </el-drawer>
+
+    <el-dialog v-model="agentFindingDialog" class="agent-finding-dialog" title="AI 解读" width="560px">
+      <template v-if="selectedAgentFinding">
+        <div class="agent-finding-meta">
+          <el-tag :type="levelType(selectedAgentFinding.severity)" effect="plain">{{ levelLabel(selectedAgentFinding.severity) }}</el-tag>
+          <span v-if="selectedAgentFinding.file_path || selectedAgentFinding._filePath">{{ selectedAgentFinding.file_path || selectedAgentFinding._filePath }}</span>
+          <span v-if="selectedAgentFinding.line_number">第 {{ selectedAgentFinding.line_number }} 行</span>
+        </div>
+        <dl class="agent-finding-detail">
+          <div v-if="selectedAgentFinding.root_cause"><dt>可能原因</dt><dd>{{ selectedAgentFinding.root_cause }}</dd></div>
+          <div v-if="selectedAgentFinding.evidence"><dt>证据</dt><dd>{{ selectedAgentFinding.evidence }}</dd></div>
+          <div v-if="selectedAgentFinding.impact"><dt>影响</dt><dd>{{ selectedAgentFinding.impact }}</dd></div>
+          <div v-if="selectedAgentFinding.suggestion"><dt>建议</dt><dd>{{ selectedAgentFinding.suggestion }}</dd></div>
+        </dl>
+        <p v-if="selectedAgentFinding.confidence != null" class="agent-confidence">置信度 {{ Math.round(selectedAgentFinding.confidence * 100) }}%</p>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ArrowRight, Close, Download, Search } from '@element-plus/icons-vue'
+import { ArrowLeft, ArrowRight, Close, CopyDocument, Download, Search } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import * as echarts from 'echarts'
 import { getAgentResults, getTaskDetail, getTaskResults } from '@/api/task'
 
@@ -104,17 +122,20 @@ const agentResults = ref([])
 const search = ref('')
 const level = ref('')
 const category = ref('')
+const groupBy = ref('none')
 const page = ref(1)
 const pageSize = 20
 const drawer = ref(false)
 const selected = ref(null)
+const selectedAgentFinding = ref(null)
+const agentFindingDialog = ref(false)
 const timelineRef = ref(null)
 const clusterEvents = ref([])
 const clusterTitle = ref('')
 let chart = null
 
 const categories = computed(() => [...new Set(results.value.map(item => item.category).filter(Boolean))])
-const agentFindings = computed(() => agentResults.value.flatMap(item => item.findings || []))
+const agentFindings = computed(() => agentResults.value.flatMap(item => (item.findings || []).map(finding => ({ ...finding, _filePath: finding.file_path || item.file_path || '' }))))
 const relatedCauseCount = computed(() => results.value.reduce((sum, item) => sum + (item.related_causes?.length || 0), 0))
 const timelineResults = computed(() => results.value.filter(item => item.level === 'error' && item.event_time))
 const timelineGroups = computed(() => {
@@ -142,16 +163,40 @@ const timelineGroups = computed(() => {
 const contextLines = computed(() => selected.value?.context_lines || [])
 const filtered = computed(() => {
   const text = search.value.trim().toLowerCase()
-  return results.value.filter(item => (!level.value || item.level === level.value) && (!category.value || item.category === category.value) && (!text || `${item.rule_name}${item.matched_text}${item.file_path}${item.content}`.toLowerCase().includes(text)))
+  const items = results.value.filter(item => (!level.value || item.level === level.value) && (!category.value || item.category === category.value) && (!text || `${item.rule_name}${item.matched_text}${item.file_path}${item.content}`.toLowerCase().includes(text)))
+  return [...items].sort((a, b) => groupBy.value === 'category' ? String(a.category || '').localeCompare(String(b.category || '')) : groupBy.value === 'level' ? String(a.level || '').localeCompare(String(b.level || '')) : (Date.parse(b.event_time) || 0) - (Date.parse(a.event_time) || 0))
 })
 const paged = computed(() => filtered.value.slice((page.value - 1) * pageSize, page.value * pageSize))
 
-const levelLabel = value => ({ error: '错误', warning: '警告', info: '信息' }[value] || value || '未知')
-const levelType = value => ({ error: 'danger', warning: 'warning', info: 'info' }[value] || 'info')
+const levelLabel = value => ({ critical: '严重', error: '错误', warning: '警告', info: '信息' }[value] || value || '未知')
+const levelType = value => ({ critical: 'danger', error: 'danger', warning: 'warning', info: 'info' }[value] || 'info')
 const formatTime = value => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '-'
 const shortTime = value => value ? new Date(value).toLocaleTimeString('zh-CN', { hour12: false, fractionalSecondDigits: 3 }) : '--:--:--'
 const isCauseLine = line => selected.value?.related_causes?.some(item => item.line_number === line.line_number)
 const errorMessage = (error, fallback) => error?.response?.data?.message || error?.message || fallback
+const agentStatusText = computed(() => { const failed = agentResults.value.filter(item => item.status === 'failed').length; return failed ? `${failed} 个失败` : '全部完成' })
+const formatFinding = finding => [finding.root_cause && `原因：${finding.root_cause}`, finding.evidence && `证据：${finding.evidence}`, finding.impact && `影响：${finding.impact}`, finding.suggestion && `建议：${finding.suggestion}`].filter(Boolean).join('\n')
+async function copyText(value) { if (!value) return ElMessage.info('暂无可复制内容'); try { await navigator.clipboard.writeText(String(value)); ElMessage.success('内容已复制') } catch { ElMessage.warning('复制失败，请检查浏览器剪贴板权限') } }
+function copyResult(item) { copyText([item.event_time, levelLabel(item.level), item.file_path && `${item.file_path}:${item.line_number}`, item.rule_name || item.matched_text, item.content].filter(Boolean).join(' | ')) }
+const normalizePath = value => String(value || '').replaceAll('\\', '/').replace(/^\.\//, '').toLowerCase()
+function findAgentFinding(result) {
+  if (!result || !agentFindings.value.length) return null
+  const lineNumber = Number(result.line_number)
+  if (!Number.isFinite(lineNumber)) return null
+  const resultPath = normalizePath(result.file_path)
+  return agentFindings.value.find(finding => Number(finding.line_number) === lineNumber
+    && normalizePath(finding.file_path || finding._filePath) === resultPath)
+    || (agentFindings.value.filter(finding => Number(finding.line_number) === lineNumber).length === 1
+      ? agentFindings.value.find(finding => Number(finding.line_number) === lineNumber)
+      : null)
+    || null
+}
+function openAgentFinding(result) {
+  const finding = findAgentFinding(result)
+  if (!finding) return
+  selectedAgentFinding.value = finding
+  agentFindingDialog.value = true
+}
 
 async function loadAllResults() {
   const items = []
@@ -181,8 +226,10 @@ async function load() {
       agentResults.value = agentsResult.value || []
       if (!agentResults.value.length && task.value.status === 'completed') {
         agentLoading.value = true
-        await new Promise(resolve => window.setTimeout(resolve, 3000))
-        try { agentResults.value = await getAgentResults(taskId) || [] } catch { /* AI results are optional */ }
+        for (let attempt = 0; attempt < 2 && !agentResults.value.length; attempt += 1) {
+          await new Promise(resolve => window.setTimeout(resolve, attempt ? 5000 : 3000))
+          try { agentResults.value = await getAgentResults(taskId) || [] } catch { /* AI results are optional */ }
+        }
         agentLoading.value = false
       }
       agentReady.value = true

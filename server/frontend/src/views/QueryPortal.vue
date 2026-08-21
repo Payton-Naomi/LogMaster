@@ -73,6 +73,12 @@
             <code>{{ batch.upload_id }}</code><span>{{ batch.status }}</span><span>{{ batch.processed_files || 0 }} / {{ batch.total_files || 0 }} 文件</span>
           </div>
         </div>
+        <div class="result-actions">
+          <el-button :icon="Refresh" :loading="loading" @click="handleQuery">刷新进度</el-button>
+          <el-button v-if="!linked" type="primary" :loading="linking" @click="collectResult">加入我的日志</el-button>
+          <el-button v-else type="primary" @click="router.push('/log-records')">打开日志记录</el-button>
+          <el-button v-if="latestTaskId" @click="router.push(`/task/${latestTaskId}`)">打开分析任务</el-button>
+        </div>
       </section>
 
       <section v-else class="panel empty-panel">
@@ -86,15 +92,18 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { CircleCloseFilled, Document, Key, Search, Tickets, WarningFilled } from '@element-plus/icons-vue'
+import { CircleCloseFilled, Document, Key, Refresh, Search, Tickets, WarningFilled } from '@element-plus/icons-vue'
 import { collectQuerySession, getQueryStatus } from '@/api/log'
 
 const queryCode = ref('')
+const router = useRouter()
 const result = ref(null)
 const loading = ref(false)
 const inputError = ref('')
 const linked = ref(false)
+const linking = ref(false)
 const queryStateKey = 'logmaster.collector-query-state.v1'
 
 const progressPercent = computed(() => {
@@ -107,6 +116,7 @@ const progressText = computed(() => `${progressPercent.value}%`)
 const statusText = computed(() => ({ queued: '等待处理', parsing: '正在分析', completed: '分析完成', failed: '处理失败', uploading: '正在接收' }[result.value?.status] || '处理中'))
 const statusType = computed(() => ({ completed: 'success', failed: 'danger', parsing: 'primary', queued: 'warning', uploading: 'info' }[result.value?.status] || 'info'))
 const progressStatus = computed(() => result.value?.status === 'failed' ? 'exception' : result.value?.status === 'completed' ? 'success' : '')
+const latestTaskId = computed(() => result.value?.task_id || result.value?.batches?.findLast?.(item => item.task_id)?.task_id || '')
 
 function normalizeCode() {
   queryCode.value = queryCode.value.toUpperCase().replace(/[^A-Z0-9-]/g, '')
@@ -127,16 +137,24 @@ async function handleQuery() {
   try {
     result.value = await getQueryStatus(code)
     persistQueryState()
-    await collectQuerySession(code)
-    linked.value = true
-    persistQueryState()
-    ElMessage.success('采集日志已加入日志记录')
   } catch (error) {
-    if (result.value) ElMessage.warning('查询成功，但加入日志记录失败，请重试')
-    else inputError.value = error.response?.status === 404 ? '未找到对应的查询码，请确认后重试' : '查询暂时不可用，请稍后重试'
+    inputError.value = error.response?.status === 404 ? '未找到对应的查询码，请确认后重试' : '查询暂时不可用，请稍后重试'
   } finally {
     loading.value = false
   }
+}
+
+async function collectResult() {
+  if (!result.value || linking.value) return
+  linking.value = true
+  try {
+    await collectQuerySession(queryCode.value.trim())
+    linked.value = true
+    persistQueryState()
+    ElMessage.success('采集日志已加入日志记录')
+  } catch {
+    ElMessage.error('加入日志记录失败，请稍后重试')
+  } finally { linking.value = false }
 }
 
 function persistQueryState() {
@@ -214,6 +232,8 @@ html[data-log-theme="dark"] .query-page .summary-item{
   
   
 }
+.result-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:18px;padding-top:16px;border-top:1px solid rgba(127,145,160,.2)}
+@media(max-width:620px){.result-actions{align-items:stretch;flex-direction:column}.result-actions .el-button{width:100%;margin-left:0}}
 html[data-log-theme="dark"] .query-page .page-heading h1,
 html[data-log-theme="dark"] .query-page .result-heading h2,
 html[data-log-theme="dark"] .query-page .empty-panel h2,

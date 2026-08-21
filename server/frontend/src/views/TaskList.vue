@@ -4,6 +4,7 @@
       <div><h1>解析任务</h1><p>跟踪日志解析进度，并进入任务详情查看文件与结果</p></div>
       <div class="heading-actions">
         <el-tooltip content="刷新任务" placement="bottom"><el-button :icon="Refresh" :loading="loading" aria-label="刷新任务" @click="loadTasks" /></el-tooltip>
+        <el-button :type="autoRefresh ? 'success' : 'default'" @click="toggleAutoRefresh">{{ autoRefresh ? '自动刷新中' : '已暂停刷新' }}</el-button>
         <el-button type="primary" :icon="Upload" @click="router.push('/upload')">上传日志</el-button>
       </div>
     </header>
@@ -22,6 +23,7 @@
           <el-select v-model="project" clearable filterable placeholder="全部项目">
             <el-option v-for="name in projects" :key="name" :label="name" :value="name" />
           </el-select>
+          <el-select v-model="sortBy" placeholder="排序方式"><el-option label="最近更新" value="updated_desc" /><el-option label="最早更新" value="updated_asc" /><el-option label="错误最多" value="errors_desc" /><el-option label="文件最多" value="files_desc" /></el-select>
         </div>
         <el-segmented v-model="status" :options="statusOptions" />
       </div>
@@ -30,13 +32,15 @@
         <div><strong>任务列表</strong><span>{{ filteredTasks.length }} 个任务</span></div>
         <div class="refresh-state" :class="{ active: activeTaskCount }"><span class="state-dot" />{{ refreshStateText }}</div>
       </div>
+      <div v-if="selectedTaskIds.length" class="batch-toolbar"><span>已选择 {{ selectedTaskIds.length }} 个任务</span><el-button type="danger" size="small" @click="removeSelected">批量删除</el-button><el-button size="small" @click="selectedTaskIds = []">取消选择</el-button></div>
 
       <el-table ref="taskTable" class="desktop-table" :data="pagedTasks" row-key="id" @row-click="openTask">
+        <el-table-column width="48" align="center"><template #header><el-checkbox :model-value="pageSelected" :indeterminate="pagePartial" aria-label="选择当前页" @change="togglePageSelection" /></template><template #default="scope"><el-checkbox :model-value="selectedTaskIds.includes(scope.row.id)" aria-label="选择任务" @click.stop @change="(checked) => toggleTask(scope.row.id, checked)" /></template></el-table-column>
         <el-table-column label="任务" min-width="300">
           <template #default="scope"><div class="task-cell"><el-icon><Document /></el-icon><div><strong>{{ scope.row.name }}</strong><span>{{ scope.row.id }}</span></div></div></template>
         </el-table-column>
         <el-table-column label="项目 / 版本" min-width="170"><template #default="scope"><div class="project-cell"><strong>{{ scope.row.project || '-' }}</strong><span>{{ scope.row.version || '未填写版本' }}</span></div></template></el-table-column>
-        <el-table-column label="状态" width="105"><template #default="scope"><el-tag :type="statusMeta[scope.row.status].type" effect="plain">{{ statusMeta[scope.row.status].label }}</el-tag></template></el-table-column>
+        <el-table-column label="状态" width="125"><template #default="scope"><el-tag :type="statusMeta[scope.row.status].type" effect="plain">{{ statusMeta[scope.row.status].label }}</el-tag><small v-if="scope.row.errorCount" class="error-count">{{ scope.row.errorCount }} 个异常</small></template></el-table-column>
         <el-table-column label="解析进度" min-width="190">
           <template #default="scope"><div class="progress-cell"><el-progress :percentage="scope.row.progress" :status="progressStatus(scope.row)" :stroke-width="7" /><span>{{ scope.row.processedFiles }} / {{ scope.row.totalFiles }} 个文件</span></div></template>
         </el-table-column>
@@ -50,7 +54,7 @@
 
       <div class="mobile-list">
         <article v-for="task in pagedTasks" :key="task.id" class="task-card" @click="openTask(task)">
-          <div class="task-card-head"><div class="task-icon"><el-icon><Document /></el-icon></div><div class="task-title"><strong>{{ task.name }}</strong><span>{{ task.project || '-' }} · {{ task.version || '未填写版本' }}</span></div><el-tag :type="statusMeta[task.status].type" effect="plain">{{ statusMeta[task.status].label }}</el-tag></div>
+          <div class="task-card-head"><el-checkbox :model-value="selectedTaskIds.includes(task.id)" aria-label="选择任务" @click.stop @change="(checked) => toggleTask(task.id, checked)" /><div class="task-icon"><el-icon><Document /></el-icon></div><div class="task-title"><strong>{{ task.name }}</strong><span>{{ task.project || '-' }} · {{ task.version || '未填写版本' }}</span></div><el-tag :type="statusMeta[task.status].type" effect="plain">{{ statusMeta[task.status].label }}</el-tag></div>
           <div class="mobile-progress"><el-progress :percentage="task.progress" :status="progressStatus(task)" :stroke-width="7" /><span>{{ task.processedFiles }} / {{ task.totalFiles }} 个文件 · {{ task.lines.toLocaleString() }} 行</span></div>
           <div class="task-card-foot"><time>{{ task.updatedAt }}</time><div @click.stop><el-button type="primary" link :icon="View" @click="openTask(task)">查看</el-button><el-button type="danger" link :icon="Delete" @click="removeTask(task)">删除</el-button></div></div>
         </article>
@@ -65,7 +69,7 @@
 <script setup>
 import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import { CircleCheck, Delete, Document, Files, Loading, Refresh, Search, Upload, View, Warning } from '@element-plus/icons-vue'
 import { deleteTask, getTasks } from '@/api/task'
 import { getProjects } from '@/api/log'
@@ -77,7 +81,10 @@ const tasks = ref([])
 const loading = ref(false)
 const keyword = ref('')
 const project = ref('')
-const status = ref('all')
+const status = ref(['active', 'completed', 'failed'].includes(route.query.status) ? route.query.status : 'all')
+const sortBy = ref('updated_desc')
+const autoRefresh = ref(true)
+const selectedTaskIds = ref([])
 const page = ref(1)
 const lastUpdated = ref('')
 const projects = ref([])
@@ -85,6 +92,7 @@ const pageSize = 10
 let refreshTimer = null
 let stopped = false
 let focusedTaskId = ''
+const previousStatuses = new Map()
 
 const statusMeta = {
   queued: { label: '排队中', type: 'info' },
@@ -115,6 +123,8 @@ const mapTask = (item) => ({
   rawStatus: item.status,
   lines: item.total_lines || 0,
   updatedAt: formatDate(item.updated_at),
+  rawUpdatedAt: item.updated_at,
+  errorCount: Number(item.error_count || 0),
   searchable: `${item.original_name}${item.project_name}${item.task_id}`.toLowerCase()
 })
 
@@ -125,17 +135,27 @@ const summary = computed(() => [
   { label: '已完成', value: tasks.value.filter((item) => item.status === 'completed').length, tone: 'green', icon: markRaw(CircleCheck) },
   { label: '失败', value: tasks.value.filter((item) => item.status === 'failed').length, tone: 'red', icon: markRaw(Warning) }
 ])
-const refreshStateText = computed(() => activeTaskCount.value ? `自动刷新 · ${activeTaskCount.value} 个处理中` : lastUpdated.value ? `更新于 ${lastUpdated.value}` : '等待刷新')
+const refreshStateText = computed(() => autoRefresh.value && activeTaskCount.value ? `自动刷新 · ${activeTaskCount.value} 个处理中` : lastUpdated.value ? `更新于 ${lastUpdated.value}` : '等待刷新')
 const filteredTasks = computed(() => {
   const search = keyword.value.trim().toLowerCase()
-  return tasks.value.filter((item) => {
+  const filtered = tasks.value.filter((item) => {
     const matchesStatus = status.value === 'all' || (status.value === 'active' ? item.status === 'queued' || item.status === 'running' : item.status === status.value)
     return matchesStatus && (!project.value || item.project === project.value) && (!search || item.searchable.includes(search))
+  })
+  return filtered.sort((a, b) => {
+    if (sortBy.value === 'errors_desc') return b.errorCount - a.errorCount
+    if (sortBy.value === 'files_desc') return b.totalFiles - a.totalFiles
+    const left = Date.parse(a.rawUpdatedAt) || 0
+    const right = Date.parse(b.rawUpdatedAt) || 0
+    return sortBy.value === 'updated_asc' ? left - right : right - left
   })
 })
 const pagedTasks = computed(() => filteredTasks.value.slice((page.value - 1) * pageSize, page.value * pageSize))
 const hasFilters = computed(() => Boolean(keyword.value.trim() || project.value || status.value !== 'all'))
 const progressStatus = (task) => task.status === 'failed' ? 'exception' : task.status === 'completed' ? 'success' : ''
+const pageIds = computed(() => pagedTasks.value.map(item => item.id))
+const pageSelected = computed(() => pageIds.value.length > 0 && pageIds.value.every(id => selectedTaskIds.value.includes(id)))
+const pagePartial = computed(() => !pageSelected.value && pageIds.value.some(id => selectedTaskIds.value.includes(id)))
 async function focusRouteTask() {
 	const taskId = typeof route.query.task_id === 'string' ? route.query.task_id : ''
 	if (!taskId || focusedTaskId === taskId || !tasks.value.length) return
@@ -161,7 +181,17 @@ async function loadTasks() {
 	  ? await Promise.all(Array.from({ length: pages - 1 }, (_, index) => getTasks({ page: index + 2, page_size: 200 })))
 	  : []
 	const items = [first, ...remaining].flatMap((data) => data.list)
-	tasks.value = items.map(mapTask)
+	const mapped = items.map(mapTask)
+	if (previousStatuses.size) {
+	  mapped.forEach((item) => {
+	    const previous = previousStatuses.get(item.id)
+	    if (previous && previous !== item.status && (item.status === 'completed' || item.status === 'failed')) {
+	      ElNotification({ title: item.status === 'completed' ? '解析完成' : '解析失败', message: `${item.name}${item.status === 'completed' ? ' 已完成解析' : ' 解析失败，请查看任务详情'}`, type: item.status === 'completed' ? 'success' : 'error', duration: 5000 })
+	    }
+	  })
+	}
+	previousStatuses.clear(); mapped.forEach((item) => previousStatuses.set(item.id, item.status))
+	tasks.value = mapped
 	lastUpdated.value = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
 	await focusRouteTask()
   } catch {
@@ -174,8 +204,13 @@ async function refreshLoop() {
 	try {
 	  await loadTasks()
 	} finally {
-	  if (!stopped) refreshTimer = window.setTimeout(refreshLoop, activeTaskCount.value ? 2000 : 15000)
+	  if (!stopped && autoRefresh.value) refreshTimer = window.setTimeout(refreshLoop, activeTaskCount.value ? 2000 : 15000)
 	}
+}
+function toggleAutoRefresh() {
+  autoRefresh.value = !autoRefresh.value
+  window.clearTimeout(refreshTimer)
+  if (autoRefresh.value) refreshLoop()
 }
 function openTask(task) {
   const taskId = String(task?.id || task?.task_id || '').trim()
@@ -195,6 +230,22 @@ async function removeTask(task) {
     if (error !== 'cancel' && error !== 'close') ElMessage.error('删除失败，请稍后重试')
   }
 }
+function toggleTask(id, checked) {
+  selectedTaskIds.value = checked ? [...new Set([...selectedTaskIds.value, id])] : selectedTaskIds.value.filter(item => item !== id)
+}
+function togglePageSelection(checked) {
+  selectedTaskIds.value = checked ? [...new Set([...selectedTaskIds.value, ...pageIds.value])] : selectedTaskIds.value.filter(id => !pageIds.value.includes(id))
+}
+async function removeSelected() {
+  if (!selectedTaskIds.value.length) return
+  try {
+    await ElMessageBox.confirm(`将永久删除选中的 ${selectedTaskIds.value.length} 个任务及其分析结果。`, '批量删除任务', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' })
+    for (const id of selectedTaskIds.value) await deleteTask(id)
+    selectedTaskIds.value = []
+    ElMessage.success('选中任务已删除')
+    await loadTasks()
+  } catch (error) { if (error !== 'cancel' && error !== 'close') ElMessage.error('批量删除失败，请稍后重试') }
+}
 async function loadProjects() {
   try { projects.value = await getProjects() || [] }
   catch { projects.value = [] }
@@ -206,6 +257,10 @@ onMounted(() => {
 watch(() => route.query.task_id, () => {
 	focusedTaskId = ''
 	focusRouteTask()
+})
+watch(() => route.query.status, (value) => {
+  const next = typeof value === 'string' ? value : ''
+  status.value = ['active', 'completed', 'failed'].includes(next) ? next : 'all'
 })
 watch([keyword, project, status], () => { page.value = 1 })
 watch(() => filteredTasks.value.length, (length) => { page.value = Math.min(page.value, Math.max(1, Math.ceil(length / pageSize))) })
@@ -220,6 +275,7 @@ onBeforeUnmount(() => {
 .summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:16px}.summary-item{display:flex;min-height:78px;align-items:center;gap:14px;padding:16px 18px;border:1px solid var(--lm-border);border-radius:6px;background:#fff}.summary-item>.el-icon{display:grid;width:40px;height:40px;flex:0 0 40px;place-items:center;border-radius:5px;font-size:20px}.summary-item .blue{color:#3478dc;background:#edf4ff}.summary-item .gold{color:#bd7d19;background:#fff4df}.summary-item .green{color:#27936c;background:#e7f5ef}.summary-item .red{color:#cf4f4f;background:#fdecec}.summary-item div{display:flex;flex-direction:column;gap:4px}.summary-item span{color:#7a8493;font-size:12px}.summary-item strong{font-size:20px}
 .tasks-panel{min-height:390px;padding:18px;border:1px solid var(--lm-border);border-radius:6px;background:#fff}.panel-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px}.search-row{display:flex;min-width:0;flex:1;gap:10px}.search-row .el-input{width:min(380px,55%)}.search-row .el-select{width:180px}.list-meta{display:flex;align-items:center;justify-content:space-between;padding:0 2px 11px}.list-meta>div{display:flex;align-items:center;gap:9px}.list-meta strong{font-size:14px}.list-meta span,.refresh-state{color:#8a94a3;font-size:11px}.refresh-state{gap:7px}.state-dot{width:7px;height:7px;border-radius:50%;background:#a9b1bc}.refresh-state.active .state-dot{background:#2877e8;box-shadow:0 0 0 3px #e4effe}
 .desktop-table :deep(.el-table__row){cursor:pointer}.desktop-table :deep(.el-table__row:hover>td.el-table__cell){background:#f6f9fc}.desktop-table :deep(.current-row>td.el-table__cell){background:#edf4ff!important}.task-cell{display:flex;align-items:center;gap:11px}.task-cell>.el-icon,.task-icon{display:grid;width:36px;height:36px;flex:0 0 36px;place-items:center;border-radius:5px;background:#edf4ff;color:#3478dc;font-size:17px}.task-cell div,.project-cell,.progress-cell{display:flex;min-width:0;flex-direction:column;gap:4px}.task-cell strong,.project-cell strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.task-cell span{overflow:hidden;color:#8a94a3;font:10px Consolas,monospace;text-overflow:ellipsis;white-space:nowrap}.project-cell span,.progress-cell>span{color:#8a94a3;font-size:11px}.progress-cell .el-progress{width:100%}.row-actions{display:flex;justify-content:center;gap:7px}.row-actions .el-button{width:30px;height:30px;margin:0}.empty-state{padding:18px 0 30px}.empty-state .el-empty{padding-bottom:8px}
+.error-count{display:block;margin-top:3px;color:#c94b58;font-size:10px}
 .mobile-list{display:none}.task-card{padding:14px 0;border-bottom:1px solid #edf0f3}.task-card:first-child{padding-top:4px}.task-card-head{display:flex;align-items:center;gap:10px}.task-title{display:flex;min-width:0;flex:1;flex-direction:column;gap:4px}.task-title strong{overflow:hidden;font-size:13px;text-overflow:ellipsis;white-space:nowrap}.task-title span{color:#7a8493;font-size:11px}.mobile-progress{display:flex;flex-direction:column;gap:5px;margin:13px 0 11px;padding-left:46px}.mobile-progress>span{color:#7a8493;font-size:11px}.task-card-foot{display:flex;align-items:center;justify-content:space-between;padding-left:46px}.task-card-foot time{color:#8a94a3;font-size:10px}.task-card-foot .el-button{margin-left:8px}.mobile-empty{padding:20px 0}footer{display:flex;align-items:center;justify-content:space-between;padding-top:16px;color:#7a8493;font-size:12px}
 @media(max-width:1050px){.summary-grid{grid-template-columns:repeat(2,1fr)}.panel-toolbar{align-items:stretch;flex-direction:column}.search-row .el-input{width:min(460px,65%)}.search-row .el-select{flex:1}}
 @media(max-width:1180px){.page-heading{align-items:flex-start}.summary-grid{gap:10px}.summary-item{min-height:70px;padding:13px}.summary-item>.el-icon{width:34px;height:34px;flex-basis:34px;font-size:17px}.tasks-panel{padding:14px}.panel-toolbar{align-items:stretch;flex-direction:column}.search-row .el-input{width:min(460px,65%)}.search-row .el-select{flex:1}.panel-toolbar :deep(.el-segmented){width:100%}.panel-toolbar :deep(.el-segmented__item){flex:1}.desktop-table{display:none}.mobile-list{display:block}footer>span{display:none}}
