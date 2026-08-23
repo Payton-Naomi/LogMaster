@@ -6,11 +6,236 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
 
 type Repository struct{ db *sql.DB }
+
+type Notification struct {
+	ID        int64      `json:"id"`
+	TaskID    string     `json:"task_id,omitempty"`
+	UploadID  string     `json:"upload_id,omitempty"`
+	ResultID  int64      `json:"result_id,omitempty"`
+	Type      string     `json:"type"`
+	Title     string     `json:"title"`
+	Message   string     `json:"message"`
+	IsRead    bool       `json:"is_read"`
+	ReadAt    *time.Time `json:"read_at,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+}
+
+func (r *Repository) CreateTaskNotifications(ctx context.Context, taskID, notificationType, title, message string) error {
+	_, err := r.db.ExecContext(ctx, `INSERT INTO logmaster_api.notifications
+		(recipient_open_id, task_id, upload_id, type, title, message, dedupe_key)
+		SELECT DISTINCT recipient.open_id, task.id, upload.id, $2, $3, $4,
+			$2||':'||task.id::text||':'||task.attempt_no::text||':'||recipient.open_id
+		FROM logmaster_api.parse_tasks task JOIN logmaster_api.log_uploads upload ON upload.id=task.upload_id
+		CROSS JOIN LATERAL (
+			SELECT upload.created_by_open_id AS open_id
+			UNION SELECT access.user_open_id FROM logmaster_api.user_collected_upload_sessions access
+			WHERE access.upload_session_id=upload.upload_session_id
+		) recipient
+		LEFT JOIN logmaster_api.notification_settings settings ON settings.user_open_id=recipient.open_id
+		WHERE task.id=$1 AND recipient.open_id<>'' AND EXISTS (
+			SELECT 1 FROM logmaster_api.users user_record WHERE user_record.feishu_open_id=recipient.open_id)
+		AND COALESCE(CASE $2
+			WHEN 'task_completed' THEN settings.task_completed
+			WHEN 'task_failed' THEN settings.task_failed
+			WHEN 'task_cancelled' THEN settings.task_cancelled
+			ELSE TRUE END,TRUE)
+		ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`, taskID, notificationType, title, message)
+	return err
+}
+
+func (r *Repository) ListNotifications(ctx context.Context, recipient string, unreadOnly bool, limit, offset int) ([]Notification, int, int, error) {
+	filter := "recipient_open_id=$1"
+	if unreadOnly {
+		filter += " AND is_read=FALSE"
+	}
+	var total, unread int
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FILTER (WHERE `+filter+`), COUNT(*) FILTER (WHERE recipient_open_id=$1 AND is_read=FALSE) FROM logmaster_api.notifications`, recipient).Scan(&total, &unread); err != nil {
+		return nil, 0, 0, err
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT id, COALESCE(task_id::text,''), COALESCE(upload_id::text,''), COALESCE(result_id,0), type, title, message, is_read, read_at, created_at
+		FROM logmaster_api.notifications WHERE `+filter+` ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3`, recipient, limit, offset)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	defer rows.Close()
+	items := make([]Notification, 0)
+	for rows.Next() {
+		var item Notification
+		var readAt sql.NullTime
+		if err := rows.Scan(&item.ID, &item.TaskID, &item.UploadID, &item.ResultID, &item.Type, &item.Title, &item.Message, &item.IsRead, &readAt, &item.CreatedAt); err != nil {
+			return nil, 0, 0, err
+		}
+		if readAt.Valid {
+			item.ReadAt = &readAt.Time
+		}
+		items = append(items, item)
+	}
+	return items, total, unread, rows.Err()
+}
+
+func (r *Repository) MarkNotificationRead(ctx context.Context, id int64, recipient string) (Notification, error) {
+	var item Notification
+	var readAt sql.NullTime
+	err := r.db.QueryRowContext(ctx, `UPDATE logmaster_api.notifications SET is_read=TRUE, read_at=COALESCE(read_at,NOW())
+		WHERE id=$1 AND recipient_open_id=$2 RETURNING id, COALESCE(task_id::text,''), COALESCE(upload_id::text,''), COALESCE(result_id,0), type, title, message, is_read, read_at, created_at`, id, recipient).
+		Scan(&item.ID, &item.TaskID, &item.UploadID, &item.ResultID, &item.Type, &item.Title, &item.Message, &item.IsRead, &readAt, &item.CreatedAt)
+	if readAt.Valid {
+		item.ReadAt = &readAt.Time
+	}
+	return item, err
+}
+
+func (r *Repository) MarkAllNotificationsRead(ctx context.Context, recipient string) (int64, error) {
+	result, err := r.db.ExecContext(ctx, `UPDATE logmaster_api.notifications
+		SET is_read=TRUE,read_at=COALESCE(read_at,NOW()) WHERE recipient_open_id=$1 AND is_read=FALSE`, recipient)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func (r *Repository) NotificationsAfter(ctx context.Context, recipient string, afterID int64, limit int) ([]Notification, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id,COALESCE(task_id::text,''),COALESCE(upload_id::text,''),COALESCE(result_id,0),
+		type,title,message,is_read,read_at,created_at FROM logmaster_api.notifications
+		WHERE recipient_open_id=$1 AND id>$2 ORDER BY id LIMIT $3`, recipient, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]Notification, 0)
+	for rows.Next() {
+		var item Notification
+		var readAt sql.NullTime
+		if err := rows.Scan(&item.ID, &item.TaskID, &item.UploadID, &item.ResultID, &item.Type, &item.Title,
+			&item.Message, &item.IsRead, &readAt, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		if readAt.Valid {
+			item.ReadAt = &readAt.Time
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (r *Repository) LatestNotificationID(ctx context.Context, recipient string) (int64, error) {
+	var id int64
+	err := r.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(id),0) FROM logmaster_api.notifications WHERE recipient_open_id=$1`, recipient).Scan(&id)
+	return id, err
+}
+
+type NotificationSettings struct {
+	TaskCompleted   bool `json:"task_completed"`
+	TaskFailed      bool `json:"task_failed"`
+	TaskCancelled   bool `json:"task_cancelled"`
+	AICompleted     bool `json:"ai_completed"`
+	AIFailed        bool `json:"ai_failed"`
+	ResultAssigned  bool `json:"result_assigned"`
+	ResultCommented bool `json:"result_commented"`
+}
+
+func (r *Repository) GetNotificationSettings(ctx context.Context, userOpenID string) (NotificationSettings, error) {
+	settings := NotificationSettings{
+		TaskCompleted: true, TaskFailed: true, TaskCancelled: true,
+		AICompleted: true, AIFailed: true, ResultAssigned: true, ResultCommented: true,
+	}
+	err := r.db.QueryRowContext(ctx, `SELECT task_completed,task_failed,task_cancelled,ai_completed,ai_failed,result_assigned,result_commented
+		FROM logmaster_api.notification_settings WHERE user_open_id=$1`, userOpenID).Scan(
+		&settings.TaskCompleted, &settings.TaskFailed, &settings.TaskCancelled, &settings.AICompleted,
+		&settings.AIFailed, &settings.ResultAssigned, &settings.ResultCommented)
+	if errors.Is(err, sql.ErrNoRows) {
+		return settings, nil
+	}
+	return settings, err
+}
+
+func (r *Repository) SaveNotificationSettings(ctx context.Context, userOpenID string, settings NotificationSettings) (NotificationSettings, error) {
+	err := r.db.QueryRowContext(ctx, `INSERT INTO logmaster_api.notification_settings
+		(user_open_id,task_completed,task_failed,task_cancelled,ai_completed,ai_failed,result_assigned,result_commented)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		ON CONFLICT (user_open_id) DO UPDATE SET task_completed=EXCLUDED.task_completed,task_failed=EXCLUDED.task_failed,
+		task_cancelled=EXCLUDED.task_cancelled,ai_completed=EXCLUDED.ai_completed,ai_failed=EXCLUDED.ai_failed,
+		result_assigned=EXCLUDED.result_assigned,result_commented=EXCLUDED.result_commented,updated_at=NOW()
+		RETURNING task_completed,task_failed,task_cancelled,ai_completed,ai_failed,result_assigned,result_commented`,
+		userOpenID, settings.TaskCompleted, settings.TaskFailed, settings.TaskCancelled, settings.AICompleted,
+		settings.AIFailed, settings.ResultAssigned, settings.ResultCommented).Scan(
+		&settings.TaskCompleted, &settings.TaskFailed, &settings.TaskCancelled, &settings.AICompleted,
+		&settings.AIFailed, &settings.ResultAssigned, &settings.ResultCommented)
+	return settings, err
+}
+
+func (r *Repository) CreatePendingAINotifications(ctx context.Context, taskID string) error {
+	_, err := r.db.ExecContext(ctx, `INSERT INTO logmaster_api.notifications
+		(recipient_open_id,task_id,upload_id,type,title,message,dedupe_key)
+		SELECT DISTINCT recipient.open_id,task.id,upload.id,
+			CASE WHEN task.ai_status='completed' THEN 'ai_completed' ELSE 'ai_failed' END,
+			CASE WHEN task.ai_status='completed' THEN 'AI 分析完成' ELSE 'AI 分析存在失败' END,
+			CASE WHEN task.ai_status='completed' THEN '文件分析和任务总览已完成'
+				ELSE COALESCE(NULLIF(task.ai_error_message,''),'部分或全部 AI 作业执行失败') END,
+			'ai:'||task.id::text||':'||task.attempt_no::text||':'||task.ai_status||':'||recipient.open_id
+		FROM logmaster_api.parse_tasks task
+		JOIN logmaster_api.log_uploads upload ON upload.id=task.upload_id
+		CROSS JOIN LATERAL (
+			SELECT upload.created_by_open_id AS open_id
+			UNION SELECT access.user_open_id FROM logmaster_api.user_collected_upload_sessions access
+			WHERE access.upload_session_id=upload.upload_session_id
+		) recipient
+		LEFT JOIN logmaster_api.notification_settings settings ON settings.user_open_id=recipient.open_id
+		WHERE ($1='' OR task.id=NULLIF($1,'')::uuid) AND task.ai_status IN ('completed','partial_failed','failed') AND recipient.open_id<>''
+		AND EXISTS (SELECT 1 FROM logmaster_api.users user_record WHERE user_record.feishu_open_id=recipient.open_id)
+		AND CASE WHEN task.ai_status='completed' THEN COALESCE(settings.ai_completed,TRUE) ELSE COALESCE(settings.ai_failed,TRUE) END
+		ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`, taskID)
+	return err
+}
+
+func (r *Repository) CreateResultAssignmentNotification(ctx context.Context, resultID int64, actorOpenID string) error {
+	_, err := r.db.ExecContext(ctx, `INSERT INTO logmaster_api.notifications
+		(recipient_open_id,task_id,upload_id,result_id,type,title,message)
+		SELECT result.assigned_to_open_id,result.task_id,upload.id,result.id,'result_assigned','收到新的异常任务',
+			'异常结果已分配给你：'||file.relative_path||':'||result.line_number
+		FROM logmaster_api.parse_results result
+		JOIN logmaster_api.log_files file ON file.id=result.log_file_id
+		JOIN logmaster_api.log_uploads upload ON upload.id=file.upload_id
+		LEFT JOIN logmaster_api.notification_settings settings ON settings.user_open_id=result.assigned_to_open_id
+		WHERE result.id=$1 AND result.assigned_to_open_id IS NOT NULL AND result.assigned_to_open_id<>$2
+		AND COALESCE(settings.result_assigned,TRUE)`, resultID, actorOpenID)
+	return err
+}
+
+func (r *Repository) CreateResultCommentNotifications(ctx context.Context, resultID int64, actorOpenID string) error {
+	_, err := r.db.ExecContext(ctx, `INSERT INTO logmaster_api.notifications
+		(recipient_open_id,task_id,upload_id,result_id,type,title,message)
+		SELECT DISTINCT recipient.open_id,result.task_id,upload.id,result.id,'result_commented','异常结果有新备注',
+			file.relative_path||':'||result.line_number||' 添加了新备注'
+		FROM logmaster_api.parse_results result
+		JOIN logmaster_api.log_files file ON file.id=result.log_file_id
+		JOIN logmaster_api.log_uploads upload ON upload.id=file.upload_id
+		CROSS JOIN LATERAL (
+			SELECT upload.created_by_open_id AS open_id
+			UNION SELECT result.assigned_to_open_id
+			UNION SELECT access.user_open_id FROM logmaster_api.user_collected_upload_sessions access
+			WHERE access.upload_session_id=upload.upload_session_id
+		) recipient
+		LEFT JOIN logmaster_api.notification_settings settings ON settings.user_open_id=recipient.open_id
+		WHERE result.id=$1 AND recipient.open_id IS NOT NULL AND recipient.open_id<>'' AND recipient.open_id<>$2
+		AND EXISTS (SELECT 1 FROM logmaster_api.users user_record WHERE user_record.feishu_open_id=recipient.open_id)
+		AND COALESCE(settings.result_commented,TRUE)`, resultID, actorOpenID)
+	return err
+}
+
+type AgentRetryInput struct {
+	TaskID    string
+	UploadID  string
+	AttemptNo int
+	Files     []LogFile
+	Matches   map[string][]ParseResult
+}
 
 var (
 	ErrProjectNotFound          = errors.New("project not found")
@@ -20,6 +245,7 @@ var (
 	ErrUploaderEmailAmbiguous   = errors.New("uploader email matches multiple users")
 	ErrUploaderEmailMismatch    = errors.New("uploader name does not match uploader email")
 	ErrUploaderEmailNotInternal = errors.New("uploader email is not an active enterprise member")
+	ErrAssignedUserNotFound     = errors.New("assigned user not found")
 )
 
 func (r *Repository) UpsertCollectorIdentity(ctx context.Context, identity collectorIdentity) error {
@@ -28,6 +254,322 @@ func (r *Repository) UpsertCollectorIdentity(ctx context.Context, identity colle
 		ON CONFLICT (feishu_open_id) DO UPDATE SET name=EXCLUDED.name,email=EXCLUDED.email,updated_at=NOW()`,
 		identity.OpenID, identity.Name, identity.Email)
 	return err
+}
+
+// GrantCollectorSessionAccess makes a Feishu-verified uploader the owner-facing
+// viewer of a collector session without changing the collector's upload owner.
+func (r *Repository) GrantCollectorSessionAccess(ctx context.Context, sessionID, userOpenID string) error {
+	_, err := r.db.ExecContext(ctx, `INSERT INTO logmaster_api.user_collected_upload_sessions
+		(user_open_id, upload_session_id) VALUES ($1, $2)
+		ON CONFLICT (user_open_id, upload_session_id) DO UPDATE SET accessed_at = NOW()`, userOpenID, sessionID)
+	return err
+}
+
+// PrepareAgentRetry clears only AI output and advances the result generation.
+// Rule parse results and source files are intentionally left untouched.
+func (r *Repository) PrepareAgentRetry(ctx context.Context, taskID, ownerOpenID string) (AgentRetryInput, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AgentRetryInput{}, err
+	}
+	defer tx.Rollback()
+	var input AgentRetryInput
+	var status string
+	var retryRequested bool
+	err = tx.QueryRowContext(ctx, `SELECT task.id, task.upload_id, task.status, task.attempt_no, task.ai_retry_requested
+		FROM logmaster_api.parse_tasks task
+		JOIN logmaster_api.log_uploads upload ON upload.id = task.upload_id
+		WHERE task.id = $1 AND (upload.created_by_open_id = $2 OR EXISTS (
+			SELECT 1 FROM logmaster_api.user_collected_upload_sessions access
+			WHERE access.user_open_id = $2 AND access.upload_session_id = upload.upload_session_id
+		)) FOR UPDATE OF task`, taskID, ownerOpenID).Scan(&input.TaskID, &input.UploadID, &status, &input.AttemptNo, &retryRequested)
+	if err != nil {
+		return AgentRetryInput{}, err
+	}
+	if status != "completed" {
+		return AgentRetryInput{}, ErrAgentRetryNotReady
+	}
+	if retryRequested {
+		return AgentRetryInput{}, ErrAgentRetryQueued
+	}
+	input.AttemptNo++
+	if _, err = tx.ExecContext(ctx, `UPDATE logmaster_api.ai_jobs SET status='cancelled', completed_at=NOW(),
+		worker_id='', run_token=NULL, lease_expires_at=NULL, error_code='cancelled', error_message='已由新的 AI 重试代次替代', updated_at=NOW()
+		WHERE task_id=$1 AND status IN ('queued','running')`, taskID); err != nil {
+		return AgentRetryInput{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE logmaster_api.parse_tasks
+		SET attempt_no = $2, ai_retry_requested = TRUE, ai_cancel_requested = FALSE,
+			ai_status='queued', ai_error_message='', updated_at = NOW() WHERE id = $1`, taskID, input.AttemptNo); err != nil {
+		return AgentRetryInput{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM logmaster_api.task_ai_overviews WHERE task_id = $1`, taskID); err != nil {
+		return AgentRetryInput{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM logmaster_api.agent_analyses WHERE task_id = $1`, taskID); err != nil {
+		return AgentRetryInput{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return AgentRetryInput{}, err
+	}
+	_, input.Files, err = r.GetUploadByTask(ctx, taskID, ownerOpenID)
+	if err != nil {
+		_ = r.ClearAgentRetryRequested(context.Background(), taskID, input.AttemptNo)
+		return AgentRetryInput{}, err
+	}
+	results, err := r.Results(ctx, taskID, ownerOpenID, 100000, 0)
+	if err != nil {
+		_ = r.ClearAgentRetryRequested(context.Background(), taskID, input.AttemptNo)
+		return AgentRetryInput{}, err
+	}
+	input.Matches = make(map[string][]ParseResult)
+	for _, result := range results {
+		input.Matches[result.FilePath] = append(input.Matches[result.FilePath], result)
+	}
+	return input, nil
+}
+
+// PrepareAgentFileRetry replaces one file's AI output without advancing the
+// parse attempt, so all other current file results remain visible.
+func (r *Repository) PrepareAgentFileRetry(ctx context.Context, taskID, ownerOpenID string, fileID int64) (AgentRetryInput, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AgentRetryInput{}, err
+	}
+	defer tx.Rollback()
+	var input AgentRetryInput
+	var status string
+	var retryRequested bool
+	err = tx.QueryRowContext(ctx, `SELECT task.id, task.upload_id, task.status, task.attempt_no, task.ai_retry_requested
+		FROM logmaster_api.parse_tasks task
+		JOIN logmaster_api.log_uploads upload ON upload.id = task.upload_id
+		WHERE task.id = $1 AND (upload.created_by_open_id = $2 OR EXISTS (
+			SELECT 1 FROM logmaster_api.user_collected_upload_sessions access
+			WHERE access.user_open_id = $2 AND access.upload_session_id = upload.upload_session_id
+		)) FOR UPDATE OF task`, taskID, ownerOpenID).Scan(&input.TaskID, &input.UploadID, &status, &input.AttemptNo, &retryRequested)
+	if err != nil {
+		return AgentRetryInput{}, err
+	}
+	if status != "completed" {
+		return AgentRetryInput{}, ErrAgentRetryNotReady
+	}
+	if retryRequested {
+		return AgentRetryInput{}, ErrAgentRetryQueued
+	}
+	var file LogFile
+	err = tx.QueryRowContext(ctx, `SELECT id, relative_path, size_bytes, sha256, line_count
+		FROM logmaster_api.log_files WHERE id = $1 AND upload_id = $2`, fileID, input.UploadID).
+		Scan(&file.ID, &file.RelativePath, &file.SizeBytes, &file.SHA256, &file.LineCount)
+	if err != nil {
+		return AgentRetryInput{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE logmaster_api.parse_tasks
+		SET ai_retry_requested = TRUE, ai_cancel_requested = FALSE,
+			ai_status='queued', ai_error_message='', updated_at = NOW() WHERE id = $1`, taskID); err != nil {
+		return AgentRetryInput{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM logmaster_api.agent_analyses
+		WHERE task_id = $1 AND log_file_id = $2`, taskID, fileID); err != nil {
+		return AgentRetryInput{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return AgentRetryInput{}, err
+	}
+	input.Files = []LogFile{file}
+	input.Matches = map[string][]ParseResult{file.RelativePath: {}}
+	results, err := r.Results(ctx, taskID, ownerOpenID, 100000, 0)
+	if err != nil {
+		_ = r.ClearAgentRetryRequested(context.Background(), taskID, input.AttemptNo)
+		return AgentRetryInput{}, err
+	}
+	for _, result := range results {
+		if result.FilePath == file.RelativePath {
+			input.Matches[file.RelativePath] = append(input.Matches[file.RelativePath], result)
+		}
+	}
+	return input, nil
+}
+
+func (r *Repository) CancelAgentAnalysis(ctx context.Context, taskID, ownerOpenID string) (bool, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	var status string
+	var cancelled bool
+	err = tx.QueryRowContext(ctx, `SELECT task.status, task.ai_cancel_requested
+		FROM logmaster_api.parse_tasks task
+		JOIN logmaster_api.log_uploads upload ON upload.id = task.upload_id
+		WHERE task.id = $1 AND (upload.created_by_open_id = $2 OR EXISTS (
+			SELECT 1 FROM logmaster_api.user_collected_upload_sessions access
+			WHERE access.user_open_id = $2 AND access.upload_session_id = upload.upload_session_id
+		)) FOR UPDATE OF task`, taskID, ownerOpenID).Scan(&status, &cancelled)
+	if err != nil {
+		return false, err
+	}
+	if status != "completed" {
+		return false, ErrAgentNotCancellable
+	}
+	if cancelled {
+		return true, nil
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE logmaster_api.parse_tasks
+		SET ai_cancel_requested=TRUE,ai_retry_requested=FALSE,ai_status='cancelled',ai_error_message='',updated_at=NOW()
+		WHERE id=$1`, taskID); err != nil {
+		return false, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE logmaster_api.ai_jobs SET status='cancelled',completed_at=NOW(),
+		worker_id='',run_token=NULL,lease_expires_at=NULL,error_code='cancelled',error_message='AI 分析已由用户取消',updated_at=NOW()
+		WHERE task_id=$1 AND status IN ('queued','running')`, taskID); err != nil {
+		return false, err
+	}
+	return false, tx.Commit()
+}
+
+func (r *Repository) ClearAgentRetryRequested(ctx context.Context, taskID string, attemptNo int) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE logmaster_api.parse_tasks
+		SET ai_retry_requested = FALSE, updated_at = NOW()
+		WHERE id = $1 AND attempt_no = $2`, taskID, attemptNo)
+	return err
+}
+
+func (r *Repository) CancelTask(ctx context.Context, taskID, ownerOpenID string) (alreadyCancelled bool, err error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	var uploadID, taskStatus, uploadStatus, runToken string
+	err = tx.QueryRowContext(ctx, `SELECT task.upload_id, task.status, upload.status, COALESCE(task.run_token::text, '')
+		FROM logmaster_api.parse_tasks task
+		JOIN logmaster_api.log_uploads upload ON upload.id = task.upload_id
+		WHERE task.id = $1 AND (upload.created_by_open_id = $2 OR EXISTS (
+			SELECT 1 FROM logmaster_api.user_collected_upload_sessions access
+			WHERE access.user_open_id = $2 AND access.upload_session_id = upload.upload_session_id
+		)) FOR UPDATE OF task, upload`, taskID, ownerOpenID).Scan(&uploadID, &taskStatus, &uploadStatus, &runToken)
+	if err != nil {
+		return false, err
+	}
+	if taskStatus == "cancelled" {
+		return true, nil
+	}
+	if (taskStatus != "queued" && taskStatus != "running" && taskStatus != "paused") || (uploadStatus != "queued" && uploadStatus != "parsing" && uploadStatus != "paused") {
+		return false, ErrTaskNotCancellable
+	}
+	if runToken != "" {
+		if _, err = tx.ExecContext(ctx, `UPDATE logmaster_api.parse_task_attempts
+			SET status = 'interrupted', error_message = 'task cancelled by user', completed_at = NOW(), heartbeat_at = NOW()
+			WHERE task_id = $1 AND run_token = $2::uuid AND status = 'running'`, taskID, runToken); err != nil {
+			return false, err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE logmaster_api.parse_tasks
+		SET status = 'cancelled', error_message = 'task cancelled by user', completed_at = NOW(),
+			worker_id = '', run_token = NULL, lease_expires_at = NULL, ai_retry_requested = FALSE,
+			ai_cancel_requested=TRUE, ai_status='cancelled', ai_error_message='', updated_at = NOW()
+		WHERE id = $1`, taskID); err != nil {
+		return false, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE logmaster_api.ai_jobs SET status='cancelled',completed_at=NOW(),
+		worker_id='',run_token=NULL,lease_expires_at=NULL,error_code='cancelled',error_message='规则解析任务已取消',updated_at=NOW()
+		WHERE task_id=$1 AND status IN ('queued','running')`, taskID); err != nil {
+		return false, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE logmaster_api.log_uploads
+		SET status = 'cancelled', error_message = 'task cancelled by user', updated_at = NOW() WHERE id = $1`, uploadID); err != nil {
+		return false, err
+	}
+	if err = tx.Commit(); err != nil {
+		return false, err
+	}
+	_ = r.CreateTaskNotifications(ctx, taskID, "task_cancelled", "日志任务已取消", "日志解析任务已由用户取消")
+	return false, nil
+}
+
+func (r *Repository) PauseTask(ctx context.Context, taskID, ownerOpenID string) (alreadyPaused bool, err error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	var uploadID, taskStatus, runToken string
+	err = tx.QueryRowContext(ctx, `SELECT task.upload_id, task.status, COALESCE(task.run_token::text,'')
+		FROM logmaster_api.parse_tasks task JOIN logmaster_api.log_uploads upload ON upload.id=task.upload_id
+		WHERE task.id=$1 AND (upload.created_by_open_id=$2 OR EXISTS (
+			SELECT 1 FROM logmaster_api.user_collected_upload_sessions access
+			WHERE access.user_open_id=$2 AND access.upload_session_id=upload.upload_session_id))
+		FOR UPDATE OF task, upload`, taskID, ownerOpenID).Scan(&uploadID, &taskStatus, &runToken)
+	if err != nil {
+		return false, err
+	}
+	if taskStatus == "paused" {
+		return true, nil
+	}
+	if taskStatus != "queued" && taskStatus != "running" {
+		return false, ErrTaskNotPausable
+	}
+	if runToken != "" {
+		if _, err = tx.ExecContext(ctx, `UPDATE logmaster_api.parse_task_attempts SET status='interrupted', error_message='任务已暂停', completed_at=NOW(), heartbeat_at=NOW() WHERE task_id=$1 AND run_token=$2::uuid AND status='running'`, taskID, runToken); err != nil {
+			return false, err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE logmaster_api.parse_tasks SET status='paused', error_message='任务已暂停', worker_id='', run_token=NULL, lease_expires_at=NULL, completed_at=NULL, updated_at=NOW() WHERE id=$1`, taskID); err != nil {
+		return false, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE logmaster_api.log_uploads SET status='paused', error_message='任务已暂停', updated_at=NOW() WHERE id=$1`, uploadID); err != nil {
+		return false, err
+	}
+	return false, tx.Commit()
+}
+
+func (r *Repository) ResumeTask(ctx context.Context, taskID, ownerOpenID string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var uploadID, status string
+	err = tx.QueryRowContext(ctx, `SELECT task.upload_id,task.status FROM logmaster_api.parse_tasks task JOIN logmaster_api.log_uploads upload ON upload.id=task.upload_id
+		WHERE task.id=$1 AND (upload.created_by_open_id=$2 OR EXISTS (SELECT 1 FROM logmaster_api.user_collected_upload_sessions access WHERE access.user_open_id=$2 AND access.upload_session_id=upload.upload_session_id)) FOR UPDATE OF task,upload`, taskID, ownerOpenID).Scan(&uploadID, &status)
+	if err != nil {
+		return err
+	}
+	if status != "paused" {
+		return ErrTaskNotResumable
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE logmaster_api.parse_tasks SET status='queued',error_message='',manual_retry_requested=TRUE,worker_id='',run_token=NULL,lease_expires_at=NULL,completed_at=NULL,updated_at=NOW() WHERE id=$1`, taskID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE logmaster_api.log_uploads SET status='queued',error_message='',updated_at=NOW() WHERE id=$1`, uploadID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (r *Repository) UpdateTaskPriority(ctx context.Context, taskID, ownerOpenID string, priority int) error {
+	result, err := r.db.ExecContext(ctx, `UPDATE logmaster_api.parse_tasks task SET priority=$3,updated_at=NOW()
+		FROM logmaster_api.log_uploads upload WHERE task.id=$1 AND upload.id=task.upload_id
+		AND task.status IN ('queued','paused') AND (upload.created_by_open_id=$2 OR EXISTS (
+			SELECT 1 FROM logmaster_api.user_collected_upload_sessions access
+			WHERE access.user_open_id=$2 AND access.upload_session_id=upload.upload_session_id))`, taskID, ownerOpenID, priority)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrTaskPriorityNotEditable
+	}
+	return nil
+}
+
+func (r *Repository) IsParseTaskStopped(ctx context.Context, taskID string) (bool, error) {
+	var stopped bool
+	err := r.db.QueryRowContext(ctx, `SELECT status IN ('cancelled','paused') FROM logmaster_api.parse_tasks WHERE id = $1`, taskID).Scan(&stopped)
+	return stopped, err
 }
 
 type Upload struct {
@@ -55,6 +597,9 @@ type Upload struct {
 	ScenarioName     string     `json:"scenario_name,omitempty"`
 	SourceType       string     `json:"source_type"`
 	Status           string     `json:"status"`
+	Priority         int        `json:"priority"`
+	AIStatus         string     `json:"ai_status"`
+	AIErrorMessage   string     `json:"ai_error_message,omitempty"`
 	OriginalName     string     `json:"original_name"`
 	OriginalSize     int64      `json:"original_size"`
 	FileCount        int        `json:"file_count"`
@@ -168,6 +713,10 @@ type RelatedCause struct {
 }
 
 type ParseResult struct {
+	ID               int64          `json:"id,omitempty"`
+	Status           string         `json:"status"`
+	AssignedTo       string         `json:"assigned_to,omitempty"`
+	AssignedAt       *time.Time     `json:"assigned_at,omitempty"`
 	Level            string         `json:"level"`
 	MatchedText      string         `json:"matched_text"`
 	LineNumber       int64          `json:"line_number"`
@@ -184,6 +733,23 @@ type ParseResult struct {
 }
 
 func NewRepository(db *sql.DB) *Repository { return &Repository{db: db} }
+
+func (r *Repository) ArchivePasswords(ctx context.Context) ([]string, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT password FROM logmaster_api.archive_passwords ORDER BY updated_at DESC, id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	passwords := make([]string, 0)
+	for rows.Next() {
+		var password string
+		if err := rows.Scan(&password); err != nil {
+			return nil, err
+		}
+		passwords = append(passwords, password)
+	}
+	return passwords, rows.Err()
+}
 
 type scenarioSnapshot struct {
 	ID     string          `json:"id"`
@@ -324,7 +890,7 @@ func (r *Repository) GetPublicUploadByQueryCode(ctx context.Context, queryCode s
 	err := r.db.QueryRowContext(ctx, `SELECT s.id,s.query_code,s.project_name,s.version,s.test_task_name,s.uploader_name,s.created_at,
 		COALESCE(MAX(u.updated_at),s.updated_at),COUNT(u.id),COALESCE(SUM(t.total_files),0),COALESCE(SUM(t.processed_files),0),
 		COALESCE(SUM(t.total_lines),0),COALESCE(SUM(t.error_count),0),COALESCE(SUM(t.warning_count),0),
-		CASE WHEN COUNT(u.id)=0 THEN 'uploading' WHEN BOOL_OR(u.status='failed') THEN 'failed'
+		CASE WHEN COUNT(u.id)=0 THEN 'uploading' WHEN BOOL_OR(u.status='cancelled') THEN 'cancelled' WHEN BOOL_OR(u.status='failed') THEN 'failed'
 		     WHEN BOOL_AND(u.status='completed') THEN 'completed' WHEN BOOL_OR(u.status='parsing') THEN 'parsing' ELSE 'queued' END
 		FROM logmaster_api.upload_sessions s
 		LEFT JOIN logmaster_api.log_uploads u ON u.upload_session_id=s.id
@@ -776,6 +1342,7 @@ const uploadSelect = `SELECT u.id, t.id, u.project_id::text, p.name, u.version,
 	COALESCE(u.scenario_snapshot->>'name', ''),
 	CASE WHEN u.created_by_open_id = 'logmaster-internal-collector' THEN 'collector' ELSE 'uploaded' END,
 	u.status, u.original_name, u.original_size,
+	t.priority, t.ai_status, t.ai_error_message,
 	COUNT(DISTINCT f.id), COALESCE(t.total_files, 0), COALESCE(t.processed_files, 0),
 	COALESCE(t.total_bytes, 0), COALESCE(t.processed_bytes, 0),
 	COALESCE(t.total_lines, 0), COALESCE(t.error_count, 0), COALESCE(t.warning_count, 0),
@@ -790,7 +1357,7 @@ func scanUpload(row interface{ Scan(...any) error }) (Upload, error) {
 		&u.TestTaskID, &u.TestTaskName, &u.UploaderName, &u.UploaderID, &u.Remark,
 		&u.ClientRequestID, &u.QueryCode, &u.UploadSessionID, &u.UploadPosition, &u.CollectorVersion, &u.Timezone, &u.ClientCreatedAt, &u.StartedAt, &u.EndedAt,
 		&u.ScenarioID, &u.ScenarioName, &u.SourceType,
-		&u.Status, &u.OriginalName, &u.OriginalSize,
+		&u.Status, &u.OriginalName, &u.OriginalSize, &u.Priority, &u.AIStatus, &u.AIErrorMessage,
 		&u.FileCount, &u.TotalFiles, &u.ProcessedFiles, &u.TotalBytes, &u.ProcessedBytes,
 		&u.TotalLines, &u.ErrorCount, &u.WarningCount,
 		&u.ErrorMessage, &u.CreatedAt, &u.UpdatedAt, &u.UploaderEmail)
@@ -800,10 +1367,13 @@ func scanUpload(row interface{ Scan(...any) error }) (Upload, error) {
 
 func uploadProgress(u Upload) int {
 	switch u.Status {
-	case "completed":
+	case "completed", "failed", "cancelled":
 		return 100
-	case "failed":
-		return 100
+	case "paused":
+		if u.TotalBytes > 0 {
+			return 30 + int((u.ProcessedBytes*65)/u.TotalBytes)
+		}
+		return 25
 	case "uploading":
 		return 10
 	case "queued":
@@ -829,13 +1399,45 @@ func uploadProgress(u Upload) int {
 	}
 }
 
-func (r *Repository) ListTasks(ctx context.Context, ownerOpenID string, limit, offset int) ([]Upload, int, error) {
+func (r *Repository) ListTasks(ctx context.Context, ownerOpenID string, limit, offset int, status, aiStatus, project, version, sort string) ([]Upload, int, error) {
+	where := []string{"(u.created_by_open_id = $1 OR EXISTS (SELECT 1 FROM logmaster_api.user_collected_upload_sessions access WHERE access.user_open_id = $1 AND access.upload_session_id = u.upload_session_id))"}
+	args := []any{ownerOpenID}
+	add := func(condition string, value any) {
+		args = append(args, value)
+		where = append(where, fmt.Sprintf(condition, len(args)))
+	}
+	if status != "" {
+		add("u.status = $%d", status)
+	}
+	if aiStatus != "" {
+		add("t.ai_status = $%d", aiStatus)
+	}
+	if project != "" {
+		add("p.name = $%d", project)
+	}
+	if version != "" {
+		add("u.version = $%d", version)
+	}
+	whereSQL := strings.Join(where, " AND ")
 	var total int
-	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM logmaster_api.log_uploads WHERE created_by_open_id = $1`, ownerOpenID).Scan(&total); err != nil {
+	countQuery := `SELECT COUNT(*) FROM logmaster_api.log_uploads u JOIN logmaster_api.projects p ON p.id=u.project_id
+		JOIN logmaster_api.parse_tasks t ON t.upload_id=u.id WHERE ` + whereSQL
+	if err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := r.db.QueryContext(ctx, uploadSelect+` WHERE u.created_by_open_id = $1
-		GROUP BY u.id, t.id, p.name ORDER BY u.created_at DESC LIMIT $2 OFFSET $3`, ownerOpenID, limit, offset)
+	sortSQL := "u.created_at DESC"
+	switch sort {
+	case "updated_at":
+		sortSQL = "u.updated_at DESC"
+	case "errors":
+		sortSQL = "t.error_count DESC, u.updated_at DESC"
+	case "oldest":
+		sortSQL = "u.created_at ASC"
+	}
+	queryArgs := append([]any{}, args...)
+	queryArgs = append(queryArgs, limit, offset)
+	rows, err := r.db.QueryContext(ctx, uploadSelect+` WHERE `+whereSQL+`
+		GROUP BY u.id, t.id, p.name ORDER BY `+sortSQL+` LIMIT $`+strconv.Itoa(len(args)+1)+` OFFSET $`+strconv.Itoa(len(args)+2), queryArgs...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -899,6 +1501,63 @@ func (r *Repository) GetUploadByTask(ctx context.Context, taskID, ownerOpenID st
 		files = append(files, f)
 	}
 	return u, files, rows.Err()
+}
+
+// RequestTaskRetry atomically moves a failed task back to the durable queue.
+// The manual retry flag intentionally bypasses the automatic lease-recovery limit,
+// while preserving the monotonically increasing attempt history.
+func (r *Repository) RequestTaskRetry(ctx context.Context, taskID, ownerOpenID string) (alreadyQueued bool, err error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	var uploadID, status string
+	var manualRetryRequested bool
+	err = tx.QueryRowContext(ctx, `SELECT u.id, u.status, task.manual_retry_requested
+		FROM logmaster_api.parse_tasks task
+		JOIN logmaster_api.log_uploads u ON u.id = task.upload_id
+		WHERE task.id = $1 AND (u.created_by_open_id = $2 OR EXISTS (
+			SELECT 1 FROM logmaster_api.user_collected_upload_sessions access
+			WHERE access.user_open_id = $2 AND access.upload_session_id = u.upload_session_id
+		)) FOR UPDATE OF task, u`, taskID, ownerOpenID).Scan(&uploadID, &status, &manualRetryRequested)
+	if err != nil {
+		return false, err
+	}
+	alreadyQueued, err = taskRetryDisposition(status, manualRetryRequested)
+	if err != nil || alreadyQueued {
+		return alreadyQueued, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE logmaster_api.parse_tasks
+		SET status = 'queued', manual_retry_requested = TRUE, worker_id = '', run_token = NULL,
+			lease_expires_at = NULL, heartbeat_at = NOW(), completed_at = NULL,
+			error_message = '', ai_status='disabled', ai_error_message='', ai_cancel_requested=FALSE, updated_at = NOW()
+		WHERE id = $1`, taskID); err != nil {
+		return false, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE logmaster_api.ai_jobs SET status='cancelled',completed_at=NOW(),
+		worker_id='',run_token=NULL,lease_expires_at=NULL,error_code='cancelled',error_message='规则解析任务已重新开始',updated_at=NOW()
+		WHERE task_id=$1 AND status IN ('queued','running')`, taskID); err != nil {
+		return false, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE logmaster_api.log_uploads
+		SET status = 'queued', error_message = '', updated_at = NOW() WHERE id = $1`, uploadID); err != nil {
+		return false, err
+	}
+	if err = tx.Commit(); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+func taskRetryDisposition(status string, manualRetryRequested bool) (bool, error) {
+	if status == "queued" && manualRetryRequested {
+		return true, nil
+	}
+	if status != "failed" {
+		return false, ErrTaskNotRetryable
+	}
+	return false, nil
 }
 
 func (r *Repository) ListUploads(ctx context.Context, ownerOpenID, sourceType string, limit, offset int) ([]Upload, int, error) {
@@ -971,7 +1630,7 @@ func (r *Repository) LinkCollectedUploadSession(ctx context.Context, ownerOpenID
 }
 
 func (r *Repository) Results(ctx context.Context, taskID, ownerOpenID string, limit, offset int) ([]ParseResult, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT r.level, r.matched_text, r.line_number, r.content, f.relative_path,
+	rows, err := r.db.QueryContext(ctx, `SELECT r.id, r.status, COALESCE(r.assigned_to_open_id,''), r.assigned_at, r.level, r.matched_text, r.line_number, r.content, f.relative_path,
 		r.rule_id, r.rule_name, r.category, r.event_time, r.context_start_time, r.context_end_time,
 		r.context_lines, r.related_causes
 		FROM logmaster_api.parse_results r
@@ -990,15 +1649,19 @@ func (r *Repository) Results(ctx context.Context, taskID, ownerOpenID string, li
 	for rows.Next() {
 		var result ParseResult
 		var ruleID sql.NullInt64
+		var assignedAt sql.NullTime
 		var eventTime, contextStart, contextEnd sql.NullTime
 		var contextLines, relatedCauses []byte
-		if err := rows.Scan(&result.Level, &result.MatchedText, &result.LineNumber, &result.Content, &result.FilePath,
+		if err := rows.Scan(&result.ID, &result.Status, &result.AssignedTo, &assignedAt, &result.Level, &result.MatchedText, &result.LineNumber, &result.Content, &result.FilePath,
 			&ruleID, &result.RuleName, &result.Category, &eventTime, &contextStart, &contextEnd,
 			&contextLines, &relatedCauses); err != nil {
 			return nil, err
 		}
 		if ruleID.Valid {
 			result.RuleID = ruleID.Int64
+		}
+		if assignedAt.Valid {
+			result.AssignedAt = &assignedAt.Time
 		}
 		if eventTime.Valid {
 			result.EventTime = &eventTime.Time
@@ -1024,29 +1687,269 @@ func (r *Repository) Results(ctx context.Context, taskID, ownerOpenID string, li
 	return results, rows.Err()
 }
 
-func (r *Repository) SaveAgentAnalysis(ctx context.Context, taskID string, fileID int64, provider string, result AgentAnalysisResponse, analysisErr error) error {
+type ComparisonItem struct {
+	Key         string `json:"key"`
+	FilePath    string `json:"file_path"`
+	RuleName    string `json:"rule_name,omitempty"`
+	MatchedText string `json:"matched_text"`
+	Baseline    int    `json:"baseline"`
+	Current     int    `json:"current"`
+}
+
+type AnalysisComparison struct {
+	New        []ComparisonItem `json:"new"`
+	Resolved   []ComparisonItem `json:"resolved"`
+	Persistent []ComparisonItem `json:"persistent"`
+	Increased  []ComparisonItem `json:"increased"`
+	Decreased  []ComparisonItem `json:"decreased"`
+}
+
+func (r *Repository) CompareTasks(ctx context.Context, baselineTaskID, currentTaskID, ownerOpenID string) (AnalysisComparison, error) {
+	load := func(taskID string) (map[string]ComparisonItem, error) {
+		rows, err := r.db.QueryContext(ctx, `SELECT f.relative_path, COALESCE(r.rule_name,''), r.matched_text, COUNT(*)
+			FROM logmaster_api.parse_results r JOIN logmaster_api.log_files f ON f.id=r.log_file_id
+			JOIN logmaster_api.log_uploads u ON u.id=f.upload_id
+			WHERE r.task_id=$1 AND (u.created_by_open_id=$2 OR EXISTS (
+				SELECT 1 FROM logmaster_api.user_collected_upload_sessions access
+				WHERE access.user_open_id=$2 AND access.upload_session_id=u.upload_session_id))
+			GROUP BY f.relative_path, r.rule_name, r.matched_text`, taskID, ownerOpenID)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		items := make(map[string]ComparisonItem)
+		for rows.Next() {
+			var item ComparisonItem
+			if err := rows.Scan(&item.FilePath, &item.RuleName, &item.MatchedText, &item.Current); err != nil {
+				return nil, err
+			}
+			item.Key = item.FilePath + "\x00" + item.RuleName + "\x00" + item.MatchedText
+			items[item.Key] = item
+		}
+		return items, rows.Err()
+	}
+	baseline, err := load(baselineTaskID)
+	if err != nil {
+		return AnalysisComparison{}, err
+	}
+	current, err := load(currentTaskID)
+	if err != nil {
+		return AnalysisComparison{}, err
+	}
+	comparison := AnalysisComparison{}
+	for key, item := range current {
+		item.Baseline = baseline[key].Current
+		if item.Baseline == 0 {
+			comparison.New = append(comparison.New, item)
+			continue
+		}
+		if item.Current > item.Baseline {
+			comparison.Increased = append(comparison.Increased, item)
+		} else if item.Current < item.Baseline {
+			comparison.Decreased = append(comparison.Decreased, item)
+		} else {
+			comparison.Persistent = append(comparison.Persistent, item)
+		}
+	}
+	for key, item := range baseline {
+		if _, exists := current[key]; !exists {
+			item.Baseline = item.Current
+			item.Current = 0
+			comparison.Resolved = append(comparison.Resolved, item)
+		}
+	}
+	return comparison, nil
+}
+
+func (r *Repository) UpdateResultAssignment(ctx context.Context, resultID int64, ownerOpenID, assigneeOpenID string) (ParseResult, error) {
+	if assigneeOpenID != "" {
+		var exists bool
+		if err := r.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM logmaster_api.users WHERE feishu_open_id=$1)`, assigneeOpenID).Scan(&exists); err != nil {
+			return ParseResult{}, err
+		}
+		if !exists {
+			return ParseResult{}, ErrAssignedUserNotFound
+		}
+	}
+	var result ParseResult
+	var assignedAt sql.NullTime
+	err := r.db.QueryRowContext(ctx, `UPDATE logmaster_api.parse_results result
+		SET assigned_to_open_id=NULLIF($2,''), assigned_at=CASE WHEN $2='' THEN NULL ELSE NOW() END, assignment_updated_by=$3, updated_at=NOW()
+		FROM logmaster_api.log_files file JOIN logmaster_api.log_uploads upload ON upload.id=file.upload_id
+		WHERE result.id=$1 AND result.log_file_id=file.id AND (upload.created_by_open_id=$3 OR EXISTS (
+			SELECT 1 FROM logmaster_api.user_collected_upload_sessions access
+			WHERE access.user_open_id=$3 AND access.upload_session_id=upload.upload_session_id))
+		RETURNING result.id, result.status, COALESCE(result.assigned_to_open_id,''), result.assigned_at, result.level, result.matched_text, result.line_number, result.content, file.relative_path`, resultID, assigneeOpenID, ownerOpenID).
+		Scan(&result.ID, &result.Status, &result.AssignedTo, &assignedAt, &result.Level, &result.MatchedText, &result.LineNumber, &result.Content, &result.FilePath)
+	if assignedAt.Valid {
+		result.AssignedAt = &assignedAt.Time
+	}
+	return result, err
+}
+
+var validResultStatuses = map[string]bool{"pending": true, "confirmed": true, "false_positive": true, "fixed": true, "closed": true}
+
+func (r *Repository) UpdateResultStatus(ctx context.Context, resultID int64, ownerOpenID, status string) (ParseResult, error) {
+	if !validResultStatuses[status] {
+		return ParseResult{}, fmt.Errorf("invalid result status")
+	}
+	var result ParseResult
+	err := r.db.QueryRowContext(ctx, `UPDATE logmaster_api.parse_results r
+		SET status=$2, status_updated_by=$3, status_updated_at=NOW(), updated_at=NOW()
+		FROM logmaster_api.log_files f JOIN logmaster_api.log_uploads u ON u.id=f.upload_id
+		WHERE r.id=$1 AND r.log_file_id=f.id AND (u.created_by_open_id=$3 OR EXISTS (
+			SELECT 1 FROM logmaster_api.user_collected_upload_sessions access
+			WHERE access.user_open_id=$3 AND access.upload_session_id=u.upload_session_id))
+		RETURNING r.id, r.status, r.level, r.matched_text, r.line_number, r.content, f.relative_path`, resultID, status, ownerOpenID).
+		Scan(&result.ID, &result.Status, &result.Level, &result.MatchedText, &result.LineNumber, &result.Content, &result.FilePath)
+	return result, err
+}
+
+type ResultComment struct {
+	ID        int64     `json:"id"`
+	ResultID  int64     `json:"result_id"`
+	Comment   string    `json:"comment"`
+	DefectID  string    `json:"defect_id,omitempty"`
+	AuthorID  string    `json:"author_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (r *Repository) AddResultComment(ctx context.Context, resultID int64, ownerOpenID, comment, defectID string) (ResultComment, error) {
+	var result ResultComment
+	err := r.db.QueryRowContext(ctx, `INSERT INTO logmaster_api.parse_result_comments
+		(result_id, comment, defect_id, created_by_open_id)
+		SELECT $1,$2,$3,$4::text FROM logmaster_api.parse_results result
+		JOIN logmaster_api.log_files file ON file.id=result.log_file_id
+		JOIN logmaster_api.log_uploads upload ON upload.id=file.upload_id
+		WHERE result.id=$1 AND (upload.created_by_open_id=$4::text OR EXISTS (
+			SELECT 1 FROM logmaster_api.user_collected_upload_sessions access
+			WHERE access.user_open_id=$4::text AND access.upload_session_id=upload.upload_session_id))
+		RETURNING id, result_id, comment, defect_id, created_by_open_id, created_at`, resultID, comment, defectID, ownerOpenID).
+		Scan(&result.ID, &result.ResultID, &result.Comment, &result.DefectID, &result.AuthorID, &result.CreatedAt)
+	return result, err
+}
+
+func (r *Repository) ResultComments(ctx context.Context, resultID int64, ownerOpenID string) ([]ResultComment, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT comment.id, comment.result_id, comment.comment, comment.defect_id,
+		comment.created_by_open_id, comment.created_at
+		FROM logmaster_api.parse_result_comments comment
+		JOIN logmaster_api.parse_results result ON result.id=comment.result_id
+		JOIN logmaster_api.log_files file ON file.id=result.log_file_id
+		JOIN logmaster_api.log_uploads upload ON upload.id=file.upload_id
+		WHERE comment.result_id=$1 AND (upload.created_by_open_id=$2 OR EXISTS (
+			SELECT 1 FROM logmaster_api.user_collected_upload_sessions access
+			WHERE access.user_open_id=$2 AND access.upload_session_id=upload.upload_session_id))
+		ORDER BY comment.created_at DESC, comment.id DESC`, resultID, ownerOpenID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]ResultComment, 0)
+	for rows.Next() {
+		var item ResultComment
+		if err := rows.Scan(&item.ID, &item.ResultID, &item.Comment, &item.DefectID, &item.AuthorID, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+type ResultAuditLog struct {
+	ID        int64           `json:"id"`
+	ResultID  int64           `json:"result_id"`
+	Action    string          `json:"action"`
+	ActorID   string          `json:"actor_id"`
+	OldValue  json.RawMessage `json:"old_value"`
+	NewValue  json.RawMessage `json:"new_value"`
+	CreatedAt time.Time       `json:"created_at"`
+}
+
+func (r *Repository) ResultHistory(ctx context.Context, resultID int64, ownerOpenID string) ([]ResultAuditLog, error) {
+	var allowed bool
+	if err := r.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM logmaster_api.parse_results result
+		JOIN logmaster_api.log_files file ON file.id=result.log_file_id JOIN logmaster_api.log_uploads upload ON upload.id=file.upload_id
+		WHERE result.id=$1 AND (upload.created_by_open_id=$2 OR EXISTS (SELECT 1 FROM logmaster_api.user_collected_upload_sessions access WHERE access.user_open_id=$2 AND access.upload_session_id=upload.upload_session_id)))`, resultID, ownerOpenID).Scan(&allowed); err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return nil, sql.ErrNoRows
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT audit.id,audit.result_id,audit.action,audit.actor_open_id,audit.old_value,audit.new_value,audit.created_at
+		FROM logmaster_api.parse_result_audit_logs audit JOIN logmaster_api.parse_results result ON result.id=audit.result_id
+		JOIN logmaster_api.log_files file ON file.id=result.log_file_id JOIN logmaster_api.log_uploads upload ON upload.id=file.upload_id
+		WHERE audit.result_id=$1 AND (upload.created_by_open_id=$2 OR EXISTS (
+			SELECT 1 FROM logmaster_api.user_collected_upload_sessions access WHERE access.user_open_id=$2 AND access.upload_session_id=upload.upload_session_id))
+		ORDER BY audit.created_at DESC,audit.id DESC`, resultID, ownerOpenID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]ResultAuditLog, 0)
+	for rows.Next() {
+		var item ResultAuditLog
+		if err := rows.Scan(&item.ID, &item.ResultID, &item.Action, &item.ActorID, &item.OldValue, &item.NewValue, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (r *Repository) IsCurrentParseAttempt(ctx context.Context, taskID string, attemptNo int) (bool, error) {
+	var current bool
+	err := r.db.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM logmaster_api.parse_tasks WHERE id = $1 AND attempt_no = $2
+	)`, taskID, attemptNo).Scan(&current)
+	return current, err
+}
+
+func (r *Repository) IsAgentExecutionAllowed(ctx context.Context, taskID string, attemptNo int) (bool, error) {
+	var allowed bool
+	err := r.db.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM logmaster_api.parse_tasks
+		WHERE id = $1 AND attempt_no = $2 AND ai_cancel_requested = FALSE
+	)`, taskID, attemptNo).Scan(&allowed)
+	return allowed, err
+}
+
+func (r *Repository) SaveAgentAnalysis(ctx context.Context, taskID string, attemptNo int, fileID int64, provider string, result AgentAnalysisResponse, analysisErr error) error {
 	status, errorMessage := "completed", ""
 	if analysisErr != nil {
-		status, errorMessage = "failed", analysisErr.Error()
+		status, errorMessage = "failed", chineseErrorMessage("AI 分析失败："+analysisErr.Error())
 	}
+	errorCode := classifyAIError(analysisErr)
 	findings, err := json.Marshal(result.Findings)
 	if err != nil {
 		return fmt.Errorf("marshal agent findings: %w", err)
 	}
-	_, err = r.db.ExecContext(ctx, `INSERT INTO logmaster_api.agent_analyses
-		(task_id, log_file_id, provider, status, summary, findings, error_message)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	resultSet, err := r.db.ExecContext(ctx, `INSERT INTO logmaster_api.agent_analyses
+		(task_id, attempt_no, log_file_id, provider, status, summary, findings, error_message, error_code)
+		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9
+		FROM logmaster_api.parse_tasks task WHERE task.id = $1 AND task.attempt_no = $2 AND task.ai_cancel_requested = FALSE
+		FOR KEY SHARE
 		ON CONFLICT (task_id, log_file_id, provider) DO UPDATE SET
-		status = EXCLUDED.status, summary = EXCLUDED.summary, findings = EXCLUDED.findings,
-		error_message = EXCLUDED.error_message, updated_at = NOW()`,
-		taskID, fileID, provider, status, result.Summary, findings, errorMessage)
-	return err
+		attempt_no = EXCLUDED.attempt_no, status = EXCLUDED.status, summary = EXCLUDED.summary, findings = EXCLUDED.findings,
+		error_message = EXCLUDED.error_message, error_code = EXCLUDED.error_code, updated_at = NOW()`,
+		taskID, attemptNo, fileID, provider, status, result.Summary, findings, errorMessage, errorCode)
+	if err != nil {
+		return err
+	}
+	rows, err := resultSet.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrParseTaskLeaseLost
+	}
+	return nil
 }
 
 func (r *Repository) AgentResults(ctx context.Context, taskID, ownerOpenID string) ([]AgentAnalysisRecord, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT a.id, a.task_id, a.log_file_id, f.relative_path,
-		a.provider, a.status, a.summary, a.findings, a.error_message, a.created_at, a.updated_at
+		a.provider, a.status, a.summary, a.findings, a.error_message, a.error_code, a.created_at, a.updated_at
 		FROM logmaster_api.agent_analyses a JOIN logmaster_api.log_files f ON f.id = a.log_file_id
+		JOIN logmaster_api.parse_tasks task ON task.id = a.task_id AND task.attempt_no = a.attempt_no
 		JOIN logmaster_api.log_uploads u ON u.id = f.upload_id
 		WHERE a.task_id = $1 AND (u.created_by_open_id = $2 OR EXISTS (
 			SELECT 1 FROM logmaster_api.user_collected_upload_sessions access
@@ -1061,7 +1964,7 @@ func (r *Repository) AgentResults(ctx context.Context, taskID, ownerOpenID strin
 		var record AgentAnalysisRecord
 		var findings []byte
 		if err := rows.Scan(&record.ID, &record.TaskID, &record.LogFileID, &record.FilePath,
-			&record.Provider, &record.Status, &record.Summary, &findings, &record.ErrorMessage,
+			&record.Provider, &record.Status, &record.Summary, &findings, &record.ErrorMessage, &record.ErrorCode,
 			&record.CreatedAt, &record.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -1085,6 +1988,20 @@ type AIAnalysisSettings struct {
 	LLMMaxInputBytes   int
 	MaxTokensPerFile   int
 	DailyTokenQuota    int64
+}
+
+type TaskOverviewRecord struct {
+	TaskID       string
+	Provider     string
+	Status       string
+	Summary      string
+	RiskLevel    string
+	Risks        []TaskOverviewRisk
+	Actions      []string
+	ErrorMessage string
+	ErrorCode    string
+	GeneratedAt  time.Time
+	UpdatedAt    time.Time
 }
 
 func (r *Repository) AIAnalysisSettings(ctx context.Context, fallback AIAnalysisSettings) (AIAnalysisSettings, error) {
@@ -1114,6 +2031,114 @@ func (r *Repository) RecordAIUsage(ctx context.Context, userOpenID, taskID strin
 		(user_open_id, usage_date, prompt_tokens, completion_tokens, task_id, log_file_id)
 		VALUES ($1, CURRENT_DATE, $2, $3, $4, $5)`, userOpenID, promptTokens, completionTokens, taskID, fileID)
 	return err
+}
+
+func (r *Repository) RecordAITaskUsage(ctx context.Context, userOpenID, taskID string, promptTokens, completionTokens int) error {
+	_, err := r.db.ExecContext(ctx, `INSERT INTO logmaster_api.ai_usage
+		(user_open_id, usage_date, prompt_tokens, completion_tokens, task_id)
+		VALUES ($1, CURRENT_DATE, $2, $3, $4)`, userOpenID, promptTokens, completionTokens, taskID)
+	return err
+}
+
+func (r *Repository) SaveTaskOverview(ctx context.Context, taskID string, attemptNo int, provider string, overview TaskOverview, analysisErr error) error {
+	status, errorMessage := "completed", ""
+	if analysisErr != nil {
+		status, errorMessage = "failed", chineseErrorMessage("AI 分析失败："+analysisErr.Error())
+	}
+	errorCode := classifyAIError(analysisErr)
+	risks, err := json.Marshal(overview.Risks)
+	if err != nil {
+		return fmt.Errorf("marshal task overview risks: %w", err)
+	}
+	actions, err := json.Marshal(overview.Actions)
+	if err != nil {
+		return fmt.Errorf("marshal task overview actions: %w", err)
+	}
+	resultSet, err := r.db.ExecContext(ctx, `INSERT INTO logmaster_api.task_ai_overviews
+		(task_id, attempt_no, provider, status, summary, risk_level, risks, actions, error_message, error_code, generated_at)
+		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW()
+		FROM logmaster_api.parse_tasks task WHERE task.id = $1 AND task.attempt_no = $2 AND task.ai_cancel_requested = FALSE
+		FOR KEY SHARE
+		ON CONFLICT (task_id) DO UPDATE SET provider = EXCLUDED.provider, status = EXCLUDED.status,
+		attempt_no = EXCLUDED.attempt_no, summary = EXCLUDED.summary, risk_level = EXCLUDED.risk_level, risks = EXCLUDED.risks,
+		actions = EXCLUDED.actions, error_message = EXCLUDED.error_message, error_code = EXCLUDED.error_code, generated_at = NOW(), updated_at = NOW()`,
+		taskID, attemptNo, provider, status, overview.Summary, overview.RiskLevel, risks, actions, errorMessage, errorCode)
+	if err != nil {
+		return err
+	}
+	rows, err := resultSet.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrParseTaskLeaseLost
+	}
+	if _, err = r.db.ExecContext(ctx, `UPDATE logmaster_api.parse_tasks
+		SET ai_retry_requested = FALSE, updated_at = NOW()
+		WHERE id = $1 AND attempt_no = $2`, taskID, attemptNo); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r *Repository) TaskOverview(ctx context.Context, taskID, ownerOpenID string) (TaskOverviewRecord, error) {
+	var record TaskOverviewRecord
+	var risks, actions []byte
+	err := r.db.QueryRowContext(ctx, `SELECT overview.task_id, overview.provider, overview.status,
+		overview.summary, overview.risk_level, overview.risks, overview.actions, overview.error_message, overview.error_code,
+		overview.generated_at, overview.updated_at
+		FROM logmaster_api.task_ai_overviews overview
+		JOIN logmaster_api.parse_tasks task ON task.id = overview.task_id
+		JOIN logmaster_api.log_uploads upload ON upload.id = task.upload_id
+		WHERE overview.task_id = $1 AND overview.attempt_no = task.attempt_no
+		AND (upload.created_by_open_id = $2 OR EXISTS (
+			SELECT 1 FROM logmaster_api.user_collected_upload_sessions access
+			WHERE access.user_open_id = $2 AND access.upload_session_id = upload.upload_session_id
+		))`, taskID, ownerOpenID).Scan(&record.TaskID, &record.Provider, &record.Status,
+		&record.Summary, &record.RiskLevel, &risks, &actions, &record.ErrorMessage, &record.ErrorCode, &record.GeneratedAt, &record.UpdatedAt)
+	if err != nil {
+		return TaskOverviewRecord{}, err
+	}
+	if err := json.Unmarshal(risks, &record.Risks); err != nil {
+		return TaskOverviewRecord{}, fmt.Errorf("decode task overview risks: %w", err)
+	}
+	if err := json.Unmarshal(actions, &record.Actions); err != nil {
+		return TaskOverviewRecord{}, fmt.Errorf("decode task overview actions: %w", err)
+	}
+	if record.Risks == nil {
+		record.Risks = []TaskOverviewRisk{}
+	}
+	if record.Actions == nil {
+		record.Actions = []string{}
+	}
+	return record, nil
+}
+
+func (record TaskOverviewRecord) AsAgentAnalysisRecord() AgentAnalysisRecord {
+	findings := make([]AgentFinding, 0, len(record.Risks)+1)
+	for _, risk := range record.Risks {
+		findings = append(findings, AgentFinding{
+			Category:   "task_overview",
+			Severity:   risk.Severity,
+			RootCause:  risk.Title,
+			Evidence:   risk.Evidence,
+			Impact:     risk.Impact,
+			Suggestion: risk.Suggestion,
+			Confidence: risk.Confidence,
+			FilePath:   strings.Join(risk.Files, ", "),
+		})
+	}
+	if len(record.Actions) > 0 {
+		findings = append(findings, AgentFinding{
+			Category: "task_overview", Severity: "info", RootCause: "建议操作",
+			Suggestion: strings.Join(record.Actions, "\n"),
+		})
+	}
+	return AgentAnalysisRecord{
+		TaskID: record.TaskID, FilePath: "任务级 AI 总览", Provider: record.Provider,
+		Status: record.Status, Summary: record.Summary, Findings: findings,
+		ErrorMessage: record.ErrorMessage, ErrorCode: record.ErrorCode, CreatedAt: record.GeneratedAt, UpdatedAt: record.UpdatedAt,
+	}
 }
 
 func (r *Repository) DeleteTask(ctx context.Context, taskID, ownerOpenID string) (string, error) {

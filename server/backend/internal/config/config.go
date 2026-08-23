@@ -16,6 +16,13 @@ type Config struct {
 	MaxUploadBytes        int64
 	MaxFilesPerUpload     int
 	MaxExtractBytes       int64
+	MaxParseWorkers       int
+	MaxAIWorkers          int
+	MaxParseAttempts      int
+	MaxParsePerUser       int
+	MaxParsePerProject    int
+	MaxFilesPerParseTask  int
+	MaxBytesPerParseTask  int64
 	AgentAnalysisURL      string
 	AgentAnalysisToken    string
 	AgentAnalysisTimeout  time.Duration
@@ -52,6 +59,13 @@ func Load() Config {
 		MaxUploadBytes:        envInt64("MAX_UPLOAD_BYTES", 2<<30),
 		MaxFilesPerUpload:     envInt("MAX_FILES_PER_UPLOAD", 100),
 		MaxExtractBytes:       envInt64("MAX_EXTRACT_BYTES", 8<<30),
+		MaxParseWorkers:       envInt("MAX_PARSE_WORKERS", 2),
+		MaxAIWorkers:          envInt("MAX_AI_WORKERS", 1),
+		MaxParseAttempts:      envInt("MAX_PARSE_ATTEMPTS", 3),
+		MaxParsePerUser:       envInt("MAX_PARSE_PER_USER", 1),
+		MaxParsePerProject:    envInt("MAX_PARSE_PER_PROJECT", 2),
+		MaxFilesPerParseTask:  envInt("MAX_FILES_PER_PARSE_TASK", 10000),
+		MaxBytesPerParseTask:  envInt64("MAX_BYTES_PER_PARSE_TASK", 8<<30),
 		AgentAnalysisURL:      os.Getenv("AGENT_ANALYSIS_URL"),
 		AgentAnalysisToken:    os.Getenv("AGENT_ANALYSIS_TOKEN"),
 		AgentAnalysisTimeout:  time.Duration(envInt64("AGENT_ANALYSIS_TIMEOUT_SECONDS", 60)) * time.Second,

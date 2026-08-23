@@ -146,7 +146,24 @@ func (s *Service) uploadSessionHandler(w http.ResponseWriter, r *http.Request) {
 	if !created && session.StorageRoot != root {
 		os.RemoveAll(root)
 	}
+	if s.isCollectorUploadOwner(owner) {
+		if !created && session.UploaderID != request.UploaderID {
+			writeError(w, http.StatusConflict, "client request id belongs to another uploader")
+			return
+		}
+		if err := s.repo.GrantCollectorSessionAccess(r.Context(), session.ID, request.UploaderID); err != nil {
+			writeError(w, http.StatusInternalServerError, "grant uploader log access failed")
+			return
+		}
+	}
 	response.JSONStatus(w, http.StatusCreated, response.APIResponse{Code: 0, Message: "upload session created", Data: session})
+}
+
+func (s *Service) isCollectorUploadOwner(owner string) bool {
+	if owner == builtinUploadOwnerOpenID {
+		return true
+	}
+	return s.uploadToken != "" && s.uploadOwnerOpenID != "" && owner == s.uploadOwnerOpenID
 }
 
 func (s *Service) completeUploadSessionHandler(w http.ResponseWriter, r *http.Request) {
