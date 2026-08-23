@@ -1,6 +1,33 @@
 # LogMaster 后端 API 文档
 
-本文档是 `server/backend` 当前全部 HTTP API 的统一说明，更新日期为 2026-08-15。前端专用说明见 [`api-to-frontend.md`](api-to-frontend.md)，采集端专用说明见 [`api-to-collector.md`](api-to-collector.md)。
+> **最新：823 调整（2026-08-23）**：完善持久化通知中心和下载接口。通知覆盖任务、AI、负责人分配和备注事件，支持列表、单条/全部已读、用户开关和 SSE；下载支持单文件、解析批次、原始上传包和分析结果包。
+新增迁移 `042_persistent_ai_queue.sql`，AI 文件分析和任务总览使用 PostgreSQL `ai_jobs` 持久化队列、租约、心跳和最多 3 次异常恢复。`MAX_AI_WORKERS` 控制单实例 AI Worker 数，默认 1。任务返回独立的 `ai_status`、`ai_error_message`，`GET /api/tasks` 支持 `ai_status` 筛选。
+新增 `POST /api/tasks/{task_id}/agent-retry/{file_id}` 单独重试一个文件的 AI 分析，新增 `POST /api/tasks/{task_id}/agent-cancel` 取消未完成的 AI 作业。AI 失败结果新增结构化 `error_code`，迁移为 `041_ai_job_controls.sql`。
+`POST /api/tasks/{task_id}/pause` 暂停排队或运行中的任务；`POST /api/tasks/{task_id}/resume` 将暂停任务恢复为 `queued`。暂停状态为 `paused`，暂停任务仍可取消。
+`PUT /api/tasks/{task_id}/priority` 设置排队或暂停任务优先级；`PUT /api/admin/projects/{id}/priority` 由管理员设置项目调度优先级。Worker 按两者之和调度。
+`POST /api/tasks/batch` 批量执行 `retry`、`cancel`、`delete`；`PUT /api/results/batch/assignment` 批量设置负责人。接口返回逐项处理结果。
+解析调度支持单用户、单项目并发限制以及单任务文件数、总字节数限制。并发超限保持排队，任务容量超限进入失败并返回中文原因。
+`GET /api/results/{id}/history` 查询异常状态、负责人和备注操作历史，返回操作人、旧值、新值和时间。
+`GET /api/tasks/{task_id}/export?format=csv|json|report` 下载规则结果、包含 AI 结论的 JSON 数据包或 Markdown 任务分析报告。
+
+> **最新：822 调整（2026-08-22）**：采集端上传会话继续使用飞书 `tenant_access_token` 校验 `uploader_email`；校验通过后自动注册或更新本地用户，并将采集会话幂等授权给该用户。HTTP 接口和采集端字段不变。
+
+`POST /api/tasks/{task_id}/agent-retry` 只重新执行 AI 分析，不重新解析日志。仅已完成规则解析的任务可调用，成功返回 `202`；解析未完成返回 `409`，AI 未配置返回 `503`。
+`POST /api/tasks/{task_id}/cancel` 取消解析任务。`queued` 或 `running` 可取消并返回 `202`、`status=cancelled`；已完成或失败返回 `409`，重复取消已取消任务幂等返回 `202`。取消保留原始文件、解析结果和运行日志，不修改采集端上传协议。
+`GET /api/logs/{upload_id}/search` 按关键字搜索原始日志，支持 `file_id`、`case_sensitive`、`page`、`page_size`，返回命中总数和行号、路径、内容。
+`GET /api/logs/{upload_id}/download` 的 `type` 可选 `file`、`batch`、`original`、`results`；单文件需传 `file_id` 并支持 HTTP Range，结果包包含 CSV、JSON、Markdown。不传 `type` 时兼容旧行为。
+上传、解压和解析失败统一返回中文 `message`，后台任务的 `error_message` 和运行日志也使用中文。管理员可通过 `GET/POST /api/admin/archive-passwords` 管理解压密码，通过 `DELETE /api/admin/archive-passwords/{id}` 删除；普通管理员使用现有关键字管理权限即可操作。
+`PATCH /api/results/{id}/status` 更新异常结果状态，允许值为 `pending`、`confirmed`、`false_positive`、`fixed`、`closed`，只允许结果有权访问者操作。
+`POST /api/results/{id}/comments` 添加异常备注，JSON 为 `{ "comment": "...", "defect_id": "BUG-123" }`；`GET /api/results/{id}/comments` 查询备注历史。
+`PUT /api/results/{id}/assignment` 分配或取消负责人，JSON 为 `{ "assigned_to": "用户 open_id" }`，空字符串表示取消分配。
+`GET /api/analysis/compare?baseline_task_id=...&current_task_id=...` 对比两个任务的异常聚合结果，返回新增、解决、持续、增加和减少五类数据。
+`GET /api/tasks` 支持服务端 `page`、`page_size`、`status`、`ai_status`、`project`、`version`、`sort` 筛选和排序，`sort` 可选 `updated_at`、`errors`、`oldest`。
+
+通知接口为：`GET /api/notifications`、`PATCH /api/notifications/{id}/read`、`POST /api/notifications/read-all`、`GET /api/notifications/stream`、`GET/PUT /api/notification-settings`。SSE 事件名为 `notification`，支持 `Last-Event-ID` 或 `after_id`；设置 PUT 是完整替换，包含七个布尔开关。通知类型为 `task_completed`、`task_failed`、`task_cancelled`、`ai_completed`、`ai_failed`、`result_assigned`、`result_commented`。
+
+本文档是 `server/backend` 当前全部 HTTP API 的统一说明，更新日期为 2026-08-23。前端专用说明见 [`api-to-frontend.md`](api-to-frontend.md)，采集端专用说明见 [`api-to-collector.md`](api-to-collector.md)。
+
+> **最新：821 调整（2026-08-21）**：解析任务改为 PostgreSQL 持久化队列，由受控 Worker 领取；上传接口仍返回 `status=queued`，没有新增 HTTP API。直连大模型模式同时新增任务级 AI 总览，现有 `GET /api/tasks/{task_id}/agent-results` 将总览作为数组第一条返回。
 
 > **最新：818 调整（2026-08-18）**：`POST /api/upload-sessions` 必须提交 `uploader_email`；后端通过飞书通讯录校验企业成员身份并同步用户资料，`uploader_name` 可选。
 
@@ -9,6 +36,12 @@
 > **819 调整**：超级管理员可通过 `/api/admin/ai-analysis-settings` 修改大模型地址、模型、超时、命中采样上限、输入字节上限和输出 token/配额。API Key 只接收写入，不返回明文，并使用 `LOGMASTER_CONFIG_ENCRYPTION_KEY` 加密保存；数据库配置优先于环境变量。
 
 AI 分析命中日志采用按规则/关键词分组轮询采样，避免重复关键词占满输入；采样上限和输入字节保护由后端固定执行。
+
+### 821 任务队列说明
+
+`parse_tasks` 是服务端解析任务的持久化队列。上传完成后任务先处于 `queued`，Worker 领取后内部任务进入 `running`，完成后进入 `completed`，不可恢复的错误进入 `failed`。准备阶段对外上传状态仍为 `queued`，规则解析阶段为 `parsing`。任务准备/解压和规则解析由同一任务的不同阶段执行；数据库保存 Worker 租约和执行代次，租约过期后可自动接管未完成任务，AI 结果也只接受当前执行代次写入。
+
+`POST /api/tasks/{task_id}/retry` 允许有权限的用户重新解析失败任务，返回 `202` 和 `status=queued`。同一次人工重试仍在排队时重复调用也返回 `202`，不会重复执行；初始排队、解析中或已完成状态返回 `409`。人工重试保留执行代次历史，并不受自动租约接管次数上限限制。`MAX_PARSE_WORKERS`（默认 `2`）控制单个后端实例的解析并发数，`MAX_PARSE_ATTEMPTS`（默认 `3`）控制租约过期后的最大自动接管次数。
 
 ## 1. 全部 API 清单
 
@@ -44,13 +77,22 @@ AI 分析命中日志采用按规则/关键词分组轮询采样，避免重复�
 | `GET` | `/api/logs` | 飞书 Session | 查询上传记录 | 8/16之前 |
 | `GET` | `/api/logs/{upload_id}` | 飞书 Session | 查询上传详情 | 8/16之前 |
 | `GET` | `/api/logs/{upload_id}/preview` | 飞书 Session | 预览上传日志文本 | 8/16之前 |
+| `GET` | `/api/logs/{upload_id}/download` | 飞书 Session | 下载单文件、解析批次、原始上传包或结果包 | 8/23调整 |
 | `GET` | `/api/tasks` | 飞书 Session | 查询解析任务 | 8/16之前 |
 | `GET` | `/api/tasks/{task_id}` | 飞书 Session | 查询任务详情 | 8/16之前 |
 | `DELETE` | `/api/tasks/{task_id}` | 飞书 Session | 删除任务和存储文件 | 8/16之前 |
 | `GET` | `/api/tasks/{task_id}/results` | 飞书 Session | 查询规则解析结果 | 8/16之前 |
-| `GET` | `/api/tasks/{task_id}/agent-results` | 飞书 Session | 查询 AI/Agent 分析结果 | 8/16之前 |
+| `GET` | `/api/tasks/{task_id}/agent-results` | 飞书 Session | 查询任务级总览和逐文件 AI/Agent 分析结果 | 8/21调整 |
+| `POST` | `/api/tasks/{task_id}/agent-retry` | 飞书 Session | 重试整个任务的 AI 分析 | 8/22调整 |
+| `POST` | `/api/tasks/{task_id}/agent-retry/{file_id}` | 飞书 Session | 只重试指定文件并刷新任务总览 | 8/23调整 |
+| `POST` | `/api/tasks/{task_id}/agent-cancel` | 飞书 Session | 取消该任务尚未完成的 AI 作业 | 8/23调整 |
 | `GET` | `/api/dashboard/stats` | 飞书 Session | 查询仪表板统计 | 8/16之前 |
 | `GET` | `/api/projects` | 飞书 Session | 查询可上传项目名称 | 8/16之前 |
+| `GET` | `/api/notifications` | 飞书 Session | 分页查询通知和未读数 | 8/23调整 |
+| `PATCH` | `/api/notifications/{id}/read` | 飞书 Session | 标记当前用户单条通知已读 | 8/23调整 |
+| `POST` | `/api/notifications/read-all` | 飞书 Session | 标记当前用户全部通知已读 | 8/23调整 |
+| `GET` | `/api/notifications/stream` | 飞书 Session | SSE 实时通知流 | 8/23调整 |
+| `GET/PUT` | `/api/notification-settings` | 飞书 Session | 当前用户通知开关 | 8/23调整 |
 
 ### 1.3 规则与测试场景
 
@@ -429,14 +471,14 @@ state 无效返回 `400`；飞书换取令牌或用户信息失败返回 `502`�
 
 ### 5.4 `GET /api/tasks`
 
-使用通用分页参数，返回 `{total, list}`。
+使用通用分页参数，返回 `{total, page, page_size, list}`。支持 `status`、`ai_status`、`project`、`version`、`sort`；其中 `ai_status` 可选 `disabled`、`queued`、`running`、`completed`、`partial_failed`、`failed`、`cancelled`。
 
 ### 5.5 `GET /api/tasks/{task_id}`
 
-返回任务、文件列表以及是否启用了外部 Agent：
+返回任务、文件列表以及是否启用了外部 Agent。`task` 中的规则解析 `status` 与 `ai_status` 相互独立，AI 失败不会修改解析状态：
 
 ```json
-{"code":0,"message":"success","data":{"task":{},"files":[],"agent_enabled":false}}
+{"code":0,"message":"success","data":{"task":{"status":"completed","ai_status":"partial_failed","ai_error_message":"部分文件 AI 分析失败"},"files":[],"agent_enabled":true}}
 ```
 
 ### 5.6 `DELETE /api/tasks/{task_id}`
@@ -449,9 +491,33 @@ state 无效返回 `400`；飞书换取令牌或用户信息失败返回 `502`�
 
 ### 5.8 `GET /api/tasks/{task_id}/agent-results`
 
-返回 AI/外部 Agent 对各日志文件的分析记录数组。每条记录包含 `id`、`task_id`、`log_file_id`、`file_path`、`provider`、`status`、`summary`、`findings`、`error_message`、`created_at`、`updated_at`。
+返回 AI/外部 Agent 对各日志文件的分析记录数组。每条记录包含 `id`、`task_id`、`log_file_id`、`file_path`、`provider`、`status`、`summary`、`findings`、`error_message`、`error_code`、`created_at`、`updated_at`。`error_code` 仅失败时返回，可选值为 `authentication`、`rate_limit`、`quota`、`timeout`、`invalid_response`、`upstream`、`cancelled`、`unknown`。
+
+直连大模型模式下，新任务完成全部文件级分析后，后端会再生成一条任务级总览，并将它放在返回数组第一条。任务级记录的兼容字段如下：
+
+| 字段 | 任务级总览值 |
+| --- | --- |
+| `log_file_id` | `0`，不对应单个文件 |
+| `file_path` | `任务级 AI 总览` |
+| `provider` | `llm` |
+| `summary` | 跨文件总体结论 |
+| `findings` | 去重后的风险、证据、影响、建议和汇总操作 |
+
+任务级总览只输入已完成的文件级 `summary/findings`，不会重新读取原始日志。输入最多包含 50 个文件和 100 条诊断，受 `llm_max_input_bytes` 保护，输出上限为 4000 token，并写入 `ai_usage`。结果保存在 `task_ai_overviews` 表，由迁移 `029_task_ai_overviews.sql` 创建。
 
 `provider` 取值：直连大模型为 `llm`，转调外部 Agent 为 `http-agent`；`status` 为 `completed` 或 `failed`。
+
+#### 5.8.1 `POST /api/tasks/{task_id}/agent-retry`
+
+重新执行整个任务的 AI 分析，不重复规则解析。接口清理当前 AI 结果、递增 AI 结果代次并将全部文件重新排队。成功返回 `202`；规则解析未完成返回 `409`；AI 未配置返回 `503`。
+
+#### 5.8.2 `POST /api/tasks/{task_id}/agent-retry/{file_id}`
+
+仅清理并重新分析指定文件，保留同一任务其他文件的 AI 结果。文件分析结束后自动重新生成任务级总览。成功返回 `202` 和 `{task_id,file_id,status:"queued"}`；文件不属于任务时返回 `404`；已有 AI 重试在执行时幂等返回 `202`。
+
+#### 5.8.3 `POST /api/tasks/{task_id}/agent-cancel`
+
+设置任务级 AI 取消标记。尚未执行的文件和总览作业会跳过，正在进行的模型请求由 Worker 最迟约 1 秒发现并取消。接口保留规则结果、原始日志及已经完成的 AI 结果，成功或重复取消均返回 `202`。再次发起整任务或单文件 AI 重试会清除取消标记。
 
 `findings` 每项字段：
 

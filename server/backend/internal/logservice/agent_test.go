@@ -54,3 +54,23 @@ func TestHTTPAgentAnalyzerFailure(t *testing.T) {
 		t.Fatal("expected agent error")
 	}
 }
+
+func TestParseTaskOverviewResponse(t *testing.T) {
+	overview, err := parseTaskOverviewResponse("```json\n{\"summary\":\"storage degraded\",\"risk_level\":\"high\",\"risks\":[{\"title\":\"disk full\",\"severity\":\"error\",\"files\":[\"a.log\"]}],\"actions\":[\"check disk\"]}\n```")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overview.RiskLevel != "high" || len(overview.Risks) != 1 || len(overview.Actions) != 1 {
+		t.Fatalf("unexpected overview: %+v", overview)
+	}
+}
+
+func TestParseTaskOverviewResponseNormalizesRisk(t *testing.T) {
+	overview, err := parseTaskOverviewResponse(`{"summary":"unknown","risk_level":"invalid","risks":null,"actions":null}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overview.RiskLevel != "unknown" || overview.Risks == nil || overview.Actions == nil {
+		t.Fatalf("unexpected normalized overview: %+v", overview)
+	}
+}

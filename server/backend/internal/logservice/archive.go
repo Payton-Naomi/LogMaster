@@ -19,10 +19,14 @@ const defaultArchivePassword = "70M_dashcam_^"
 const maxArchiveFiles = 10000
 
 func collectLogFiles(sourcePath, uploadRoot string, maxExtractBytes int64) ([]LogFile, error) {
+	return collectLogFilesWithPasswords(sourcePath, uploadRoot, maxExtractBytes, nil)
+}
+
+func collectLogFilesWithPasswords(sourcePath, uploadRoot string, maxExtractBytes int64, passwords []string) ([]LogFile, error) {
 	lower := strings.ToLower(filepath.Base(sourcePath))
 	switch {
 	case strings.HasSuffix(lower, ".zip"):
-		return extractZIP(sourcePath, filepath.Join(uploadRoot, "extracted"), maxExtractBytes)
+		return extractZIP(sourcePath, filepath.Join(uploadRoot, "extracted"), maxExtractBytes, passwords)
 	case strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz"):
 		return extractTarGZ(sourcePath, filepath.Join(uploadRoot, "extracted"), maxExtractBytes)
 	case strings.HasSuffix(lower, ".gz"):
@@ -35,7 +39,7 @@ func collectLogFiles(sourcePath, uploadRoot string, maxExtractBytes int64) ([]Lo
 	}
 }
 
-func extractZIP(sourcePath, destination string, maxBytes int64) ([]LogFile, error) {
+func extractZIP(sourcePath, destination string, maxBytes int64, passwords []string) ([]LogFile, error) {
 	reader, err := zip.OpenReader(sourcePath)
 	if err != nil {
 		return nil, fmt.Errorf("open zip: %w", err)
@@ -68,17 +72,9 @@ func extractZIP(sourcePath, destination string, maxBytes int64) ([]LogFile, erro
 		if err != nil {
 			return nil, err
 		}
-		if entry.IsEncrypted() {
-			entry.SetPassword(defaultArchivePassword)
-		}
-		source, err := entry.Open()
+		size, digest, err := extractZipEntry(entry, target, maxBytes-written, passwords)
 		if err != nil {
-			return nil, fmt.Errorf("open zip entry %q: %w", entry.Name, err)
-		}
-		size, digest, err := writeExtracted(target, source, maxBytes-written)
-		source.Close()
-		if err != nil {
-			return nil, fmt.Errorf("extract zip entry %q: %w", entry.Name, err)
+			return nil, fmt.Errorf("无法解压压缩包文件 %q：%w", entry.Name, err)
 		}
 		written += size
 		if isLogFile(relative) {
@@ -89,6 +85,38 @@ func extractZIP(sourcePath, destination string, maxBytes int64) ([]LogFile, erro
 		return nil, fmt.Errorf("archive contains no supported log files")
 	}
 	return files, nil
+}
+
+func extractZipEntry(entry *zip.File, target string, maxBytes int64, passwords []string) (int64, string, error) {
+	candidates := append([]string{}, passwords...)
+	candidates = append(candidates, defaultArchivePassword)
+	if !entry.IsEncrypted() {
+		candidates = []string{""}
+	}
+	var lastErr error
+	for _, password := range candidates {
+		_ = os.Remove(target)
+		entry.SetPassword(password)
+		source, err := entry.Open()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		size, digest, writeErr := writeExtracted(target, source, maxBytes)
+		closeErr := source.Close()
+		if writeErr == nil && closeErr == nil {
+			return size, digest, nil
+		}
+		if writeErr != nil {
+			lastErr = writeErr
+		} else {
+			lastErr = closeErr
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("没有可用的解压密码")
+	}
+	return 0, "", fmt.Errorf("解压密码不正确或压缩包已损坏")
 }
 
 func extractTarGZ(sourcePath, destination string, maxBytes int64) ([]LogFile, error) {
