@@ -55,6 +55,48 @@ type AgentAnalysisResponse struct {
 	Findings []AgentFinding `json:"findings"`
 }
 
+// TaskOverviewRequest is built from completed file-level analyses. The
+// original log files are deliberately not sent again for a task overview.
+type TaskOverviewRequest struct {
+	TaskID       string             `json:"task_id"`
+	ProjectName  string             `json:"project_name"`
+	Version      string             `json:"version"`
+	TotalFiles   int                `json:"total_files"`
+	TotalLines   int64              `json:"total_lines"`
+	ErrorCount   int64              `json:"error_count"`
+	WarningCount int64              `json:"warning_count"`
+	Files        []TaskOverviewFile `json:"files"`
+}
+
+type TaskOverviewFile struct {
+	FilePath string         `json:"file_path"`
+	Status   string         `json:"status"`
+	Summary  string         `json:"summary,omitempty"`
+	Findings []AgentFinding `json:"findings,omitempty"`
+}
+
+type TaskOverviewRisk struct {
+	Title       string   `json:"title"`
+	Severity    string   `json:"severity"`
+	Evidence    string   `json:"evidence"`
+	Impact      string   `json:"impact"`
+	Suggestion  string   `json:"suggestion"`
+	Files       []string `json:"files,omitempty"`
+	Occurrences int      `json:"occurrences,omitempty"`
+	Confidence  float64  `json:"confidence,omitempty"`
+}
+
+type TaskOverview struct {
+	TaskID      string             `json:"task_id"`
+	Provider    string             `json:"provider"`
+	Summary     string             `json:"summary"`
+	RiskLevel   string             `json:"risk_level"`
+	Risks       []TaskOverviewRisk `json:"risks"`
+	Actions     []string           `json:"actions"`
+	GeneratedAt time.Time          `json:"generated_at"`
+	Cached      bool               `json:"cached"`
+}
+
 type HTTPAgentAnalyzer struct {
 	endpoint string
 	token    string
@@ -115,6 +157,7 @@ type AgentAnalysisRecord struct {
 	Summary      string         `json:"summary"`
 	Findings     []AgentFinding `json:"findings"`
 	ErrorMessage string         `json:"error_message,omitempty"`
+	ErrorCode    string         `json:"error_code,omitempty"`
 	CreatedAt    time.Time      `json:"created_at"`
 	UpdatedAt    time.Time      `json:"updated_at"`
 }

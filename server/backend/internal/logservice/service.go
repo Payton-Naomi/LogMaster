@@ -2,12 +2,16 @@ package logservice
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,8 +24,12 @@ type Service struct {
 	config              config.Config
 	repo                *Repository
 	agent               AgentAnalyzer
-	agentJobs           chan agentJob
+	agentQueueWake      chan struct{}
 	agentWg             sync.WaitGroup
+	agentWorkerID       string
+	parseQueueWake      chan struct{}
+	parseWg             sync.WaitGroup
+	parseWorkerID       string
 	notifier            AnalysisNotifier
 	currentUserResolver func(*http.Request) (string, bool)
 	uploadToken         string
@@ -50,7 +58,10 @@ func NewService(cfg config.Config, repo *Repository) *Service {
 	if service.agent != nil {
 		service.startAgentWorkers()
 	}
-	service.startStaleTaskMonitor()
+	if cfg.MaxParseWorkers > 0 {
+		service.startParseWorkers()
+		service.startStaleTaskMonitor()
+	}
 	return service
 }
 
@@ -62,34 +73,314 @@ func NewServiceWithAgent(cfg config.Config, repo *Repository, analyzer AgentAnal
 	if service.agent != nil {
 		service.startAgentWorkers()
 	}
+	if cfg.MaxParseWorkers > 0 {
+		service.startParseWorkers()
+		service.startStaleTaskMonitor()
+	}
 	return service
 }
 
 type agentJob struct {
-	taskID      string
-	uploadID    string
-	ownerOpenID string
-	file        LogFile
-	totalLines  int64
-	matches     []ParseResult
+	taskID          string
+	uploadID        string
+	ownerOpenID     string
+	attemptNo       int
+	file            LogFile
+	totalLines      int64
+	matches         []ParseResult
+	overview        bool
+	refreshOverview bool
+	queueID         int64
+	runToken        string
 }
 
 func (s *Service) startAgentWorkers() {
-	s.agentJobs = make(chan agentJob, 64)
-	s.agentWg.Add(1)
-	go s.runAgentWorker()
+	if s.repo == nil {
+		return
+	}
+	s.agentQueueWake = make(chan struct{}, 1)
+	s.agentWorkerID = fmt.Sprintf("ai-%d-%s", os.Getpid(), newID())
+	if err := s.repo.ReconcileAIQueue(context.Background()); err != nil {
+		log.Printf("reconcile AI queue failed: %v", err)
+	}
+	workerCount := s.config.MaxAIWorkers
+	if workerCount < 1 {
+		workerCount = 1
+	}
+	for index := 0; index < workerCount; index++ {
+		s.agentWg.Add(1)
+		go s.runAgentWorker(fmt.Sprintf("%s-%d", s.agentWorkerID, index+1))
+	}
 }
 
-func (s *Service) runAgentWorker() {
+func (s *Service) startParseWorkers() {
+	if s.repo == nil {
+		return
+	}
+	workerCount := s.config.MaxParseWorkers
+	if workerCount < 1 {
+		workerCount = 1
+	}
+	maxAttempts := s.config.MaxParseAttempts
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+	s.parseQueueWake = make(chan struct{}, 1)
+	s.parseWorkerID = fmt.Sprintf("backend-%d-%s", os.Getpid(), newID())
+	if err := s.repo.ReconcileParseQueue(context.Background(), maxAttempts); err != nil {
+		log.Printf("reconcile parse queue failed: %v", err)
+	}
+	for index := 0; index < workerCount; index++ {
+		s.parseWg.Add(1)
+		go s.runParseWorker(fmt.Sprintf("%s-%d", s.parseWorkerID, index+1), maxAttempts)
+	}
+}
+
+func (s *Service) signalParseQueue() {
+	if s.parseQueueWake == nil {
+		return
+	}
+	select {
+	case s.parseQueueWake <- struct{}{}:
+	default:
+	}
+}
+
+func (s *Service) runParseWorker(workerID string, maxAttempts int) {
+	defer s.parseWg.Done()
+	for {
+		job, err := s.repo.ClaimParseTask(context.Background(), workerID, maxAttempts, s.config.MaxParsePerUser, s.config.MaxParsePerProject)
+		if err == nil {
+			s.executeParseTask(job)
+			continue
+		}
+		if err != sql.ErrNoRows {
+			log.Printf("claim parse task failed: %v", err)
+		}
+		timer := time.NewTimer(500 * time.Millisecond)
+		if s.parseQueueWake != nil {
+			select {
+			case <-s.parseQueueWake:
+				if !timer.Stop() {
+					<-timer.C
+				}
+				continue
+			case <-timer.C:
+			}
+		} else {
+			<-timer.C
+		}
+	}
+}
+
+func (s *Service) executeParseTask(task ClaimedParseTask) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			log.Printf("parse worker panic for task %s: %v", task.TaskID, recovered)
+		}
+	}()
+	s.processParseTask(task)
+}
+
+func (s *Service) processParseTask(task ClaimedParseTask) {
+	done := make(chan struct{})
+	go s.keepParseTaskAlive(task.TaskID, task.RunToken, done)
+	defer close(done)
+	if task.Phase == "prepare" {
+		s.prepareParseTask(task)
+		return
+	}
+	s.processUpload(task)
+}
+
+func (s *Service) prepareParseTask(task ClaimedParseTask) {
+	ctx := context.Background()
+	items, err := storedUploadItems(task.StoragePath)
+	if err != nil {
+		s.failClaimedTask(task, "locate uploaded files", err.Error())
+		return
+	}
+	var logFiles []LogFile
+	var extractedSize int64
+	var totalParseBytes int64
+	archivePasswords, passwordErr := s.repo.ArchivePasswords(ctx)
+	if passwordErr != nil {
+		// Keep existing deployments usable before migration 033 is applied.
+		log.Printf("load archive passwords failed: %v", passwordErr)
+	}
+	for _, item := range items {
+		cancelled, cancelErr := s.repo.IsParseTaskStopped(ctx, task.TaskID)
+		if cancelErr != nil {
+			s.failClaimedTask(task, "check task cancellation", cancelErr.Error())
+			return
+		}
+		if cancelled {
+			return
+		}
+		if err := os.RemoveAll(filepath.Join(item.itemRoot, "extracted")); err != nil {
+			s.failClaimedTask(task, "clean incomplete archive extraction", err.Error())
+			return
+		}
+		files, extractErr := collectLogFilesWithPasswords(item.storedPath, item.itemRoot, s.config.MaxExtractBytes-extractedSize, archivePasswords)
+		if extractErr != nil {
+			s.failClaimedTask(task, "extract uploaded archive", extractErr.Error())
+			return
+		}
+		for i := range files {
+			totalParseBytes += files[i].SizeBytes
+			path := filepath.ToSlash(files[i].RelativePath)
+			if strings.Contains(path, "/extracted/") || strings.HasPrefix(path, "extracted/") {
+				extractedSize += files[i].SizeBytes
+			}
+			files[i].RelativePath = filepath.ToSlash(filepath.Join("items", strconv.Itoa(item.index), filepath.FromSlash(files[i].RelativePath)))
+		}
+		logFiles = append(logFiles, files...)
+		if len(logFiles) > s.config.MaxFilesPerParseTask {
+			s.failClaimedTask(task, "validate parse task capacity", fmt.Sprintf("解析任务文件数量超过限制，最多允许 %d 个文件", s.config.MaxFilesPerParseTask))
+			return
+		}
+		if totalParseBytes > s.config.MaxBytesPerParseTask {
+			s.failClaimedTask(task, "validate parse task capacity", fmt.Sprintf("解析任务总大小超过限制，最多允许 %d 字节", s.config.MaxBytesPerParseTask))
+			return
+		}
+	}
+	if cancelled, cancelErr := s.repo.IsParseTaskStopped(ctx, task.TaskID); cancelErr != nil {
+		s.failClaimedTask(task, "check task cancellation", cancelErr.Error())
+		return
+	} else if cancelled {
+		return
+	}
+	if err := s.repo.QueuePreparedUpload(ctx, task, logFiles); err != nil {
+		s.failClaimedTask(task, "queue prepared upload", err.Error())
+		return
+	}
+	s.repo.RecordUploadRuntimeLog(ctx, task.UploadID, "archive", "prepare uploaded files", "success", fmt.Sprintf("prepared %d log files", len(logFiles)))
+	task.Phase = "parse"
+	s.processUpload(task)
+}
+
+func storedUploadItems(storagePath string) ([]storedUploadItem, error) {
+	entries, err := os.ReadDir(filepath.Join(storagePath, "items"))
+	if err != nil {
+		return nil, fmt.Errorf("read uploaded items: %w", err)
+	}
+	items := make([]storedUploadItem, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		index, parseErr := strconv.Atoi(entry.Name())
+		if parseErr != nil || index < 1 {
+			continue
+		}
+		itemRoot := filepath.Join(storagePath, "items", entry.Name())
+		originalDir := filepath.Join(itemRoot, "original")
+		originals, readErr := os.ReadDir(originalDir)
+		if readErr != nil {
+			return nil, fmt.Errorf("read uploaded item %d: %w", index, readErr)
+		}
+		found := false
+		for _, original := range originals {
+			if original.IsDir() {
+				continue
+			}
+			items = append(items, storedUploadItem{index: index, itemRoot: itemRoot, storedPath: filepath.Join(originalDir, original.Name())})
+			found = true
+			break
+		}
+		if !found {
+			return nil, fmt.Errorf("uploaded item %d contains no source file", index)
+		}
+	}
+	if len(items) == 0 {
+		return nil, fmt.Errorf("uploaded task contains no source files")
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].index < items[j].index })
+	return items, nil
+}
+
+func (s *Service) runAgentWorker(workerID string) {
 	defer s.agentWg.Done()
-	for job := range s.agentJobs {
-		s.processAgentJob(job)
+	lastReconcile := time.Now()
+	for {
+		job, err := s.repo.ClaimAgentJob(context.Background(), workerID)
+		if err == nil {
+			done := make(chan struct{})
+			go s.keepAgentJobAlive(job.queueID, job.runToken, done)
+			s.processAgentJob(job)
+			close(done)
+			if err := s.repo.FinalizeAgentJob(context.Background(), job.queueID, job.runToken); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				log.Printf("finalize AI job %d: %v", job.queueID, err)
+			}
+			if err := s.repo.CreatePendingAINotifications(context.Background(), job.taskID); err != nil {
+				log.Printf("create AI completion notification: %v", err)
+			}
+			continue
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			log.Printf("claim AI job failed: %v", err)
+		}
+		if time.Since(lastReconcile) >= 5*time.Second {
+			if reconcileErr := s.repo.ReconcileAIQueue(context.Background()); reconcileErr != nil {
+				log.Printf("reconcile AI queue failed: %v", reconcileErr)
+			}
+			if notifyErr := s.repo.CreatePendingAINotifications(context.Background(), ""); notifyErr != nil {
+				log.Printf("create recovered AI notification: %v", notifyErr)
+			}
+			lastReconcile = time.Now()
+		}
+		timer := time.NewTimer(500 * time.Millisecond)
+		select {
+		case <-s.agentQueueWake:
+			if !timer.Stop() {
+				<-timer.C
+			}
+		case <-timer.C:
+		}
+	}
+}
+
+func (s *Service) keepAgentJobAlive(jobID int64, runToken string, done <-chan struct{}) {
+	ticker := time.NewTicker(agentJobLeaseDuration / 3)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if err := s.repo.RenewAgentJobLease(context.Background(), jobID, runToken); err != nil {
+				if !errors.Is(err, ErrParseTaskLeaseLost) {
+					log.Printf("renew AI job lease %d: %v", jobID, err)
+				}
+				return
+			}
+		case <-done:
+			return
+		}
 	}
 }
 
 func (s *Service) processAgentJob(job agentJob) {
+	if job.overview {
+		s.processTaskOverviewJob(job)
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
+	current, err := s.repo.IsAgentExecutionAllowed(ctx, job.taskID, job.attemptNo)
+	if err != nil {
+		log.Printf("validate parse attempt for %s: %v", job.file.RelativePath, err)
+		return
+	}
+	if !current {
+		return
+	}
+	refreshQueued := false
+	if job.refreshOverview {
+		defer func() {
+			if !refreshQueued {
+				_ = s.repo.ClearAgentRetryRequested(context.Background(), job.taskID, job.attemptNo)
+			}
+		}()
+	}
 
 	settings, settingsErr := s.repo.AIAnalysisSettings(ctx, s.fallbackAISettings())
 	if settingsErr != nil {
@@ -114,8 +405,12 @@ func (s *Service) processAgentJob(job agentJob) {
 			used, usageErr := s.repo.UserDailyTokenUsage(ctx, job.ownerOpenID)
 			if usageErr == nil && used >= settings.DailyTokenQuota {
 				quotaErr := fmt.Errorf("daily AI token quota exceeded (%d/%d)", used, settings.DailyTokenQuota)
-				if err := s.repo.SaveAgentAnalysis(ctx, job.taskID, job.file.ID, analyzer.Provider(), AgentAnalysisResponse{}, quotaErr); err != nil {
-					log.Printf("save agent analysis for %s: %v", job.file.RelativePath, err)
+				saveErr := s.repo.SaveAgentAnalysis(ctx, job.taskID, job.attemptNo, job.file.ID, analyzer.Provider(), AgentAnalysisResponse{}, quotaErr)
+				if saveErr != nil {
+					log.Printf("save agent analysis for %s: %v", job.file.RelativePath, saveErr)
+				}
+				if job.refreshOverview && saveErr == nil {
+					refreshQueued = s.finishAgentFileRetry(job)
 				}
 				return
 			}
@@ -128,11 +423,13 @@ func (s *Service) processAgentJob(job agentJob) {
 	}
 	var result AgentAnalysisResponse
 	var agentErr error
+	stopCancellationWatch := s.watchAgentCancellation(ctx, cancel, job.taskID, job.attemptNo)
 	if limited, ok := analyzer.(TokenLimitedAnalyzer); ok {
 		result, agentErr = limited.AnalyzeWithTokenLimit(ctx, request, settings.MaxTokensPerFile)
 	} else {
 		result, agentErr = analyzer.Analyze(ctx, request)
 	}
+	stopCancellationWatch()
 
 	if reporter, ok := analyzer.(TokenUsageReporter); ok && agentErr == nil {
 		prompt, completion := reporter.LastUsage()
@@ -143,9 +440,53 @@ func (s *Service) processAgentJob(job agentJob) {
 		}
 	}
 
-	if err := s.repo.SaveAgentAnalysis(ctx, job.taskID, job.file.ID, analyzer.Provider(), result, agentErr); err != nil {
-		log.Printf("save agent analysis for %s: %v", job.file.RelativePath, err)
+	saveErr := s.repo.SaveAgentAnalysis(ctx, job.taskID, job.attemptNo, job.file.ID, analyzer.Provider(), result, agentErr)
+	if saveErr != nil {
+		log.Printf("save agent analysis for %s: %v", job.file.RelativePath, saveErr)
 	}
+	if job.refreshOverview && saveErr == nil {
+		refreshQueued = s.finishAgentFileRetry(job)
+	}
+}
+
+func (s *Service) finishAgentFileRetry(job agentJob) bool {
+	if !s.dynamicLLM {
+		_ = s.repo.ClearAgentRetryRequested(context.Background(), job.taskID, job.attemptNo)
+		return true
+	}
+	queued := s.enqueueAgentAnalysis(agentJob{
+		taskID: job.taskID, uploadID: job.uploadID, ownerOpenID: job.ownerOpenID,
+		attemptNo: job.attemptNo, overview: true,
+	})
+	if !queued {
+		_ = s.repo.ClearAgentRetryRequested(context.Background(), job.taskID, job.attemptNo)
+	}
+	return queued
+}
+
+func (s *Service) watchAgentCancellation(ctx context.Context, cancel context.CancelFunc, taskID string, attemptNo int) func() {
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				checkCtx, stopCheck := context.WithTimeout(context.Background(), 2*time.Second)
+				allowed, err := s.repo.IsAgentExecutionAllowed(checkCtx, taskID, attemptNo)
+				stopCheck()
+				if err == nil && !allowed {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return func() { close(done) }
 }
 
 func (s *Service) fallbackAISettings() AIAnalysisSettings {
@@ -168,12 +509,20 @@ func (s *Service) analysisEnabled(ctx context.Context) bool {
 	return err == nil && strings.TrimSpace(settings.LLMAPIBaseURL) != ""
 }
 
-func (s *Service) enqueueAgentAnalysis(job agentJob) {
-	select {
-	case s.agentJobs <- job:
-	default:
-		log.Printf("agent analysis queue full, dropping job for %s", job.file.RelativePath)
+func (s *Service) enqueueAgentAnalysis(job agentJob) bool {
+	if err := s.repo.EnqueueAgentJob(context.Background(), job); err != nil {
+		if job.overview {
+			log.Printf("enqueue task AI overview %s: %v", job.taskID, err)
+		} else {
+			log.Printf("enqueue AI analysis for %s: %v", job.file.RelativePath, err)
+		}
+		return false
 	}
+	select {
+	case s.agentQueueWake <- struct{}{}:
+	default:
+	}
+	return true
 }
 
 func (s *Service) SetAnalysisNotifier(notifier AnalysisNotifier) {
@@ -200,6 +549,11 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/logs/inspect", s.inspectHandler)
 	mux.HandleFunc("/api/logs", s.listUploadsHandler)
 	mux.HandleFunc("/api/logs/", s.logDetailHandler)
+	mux.HandleFunc("/api/results/", s.resultHandler)
+	mux.HandleFunc("/api/analysis/compare", s.compareHandler)
+	mux.HandleFunc("/api/notifications", s.notificationsHandler)
+	mux.HandleFunc("/api/notifications/", s.notificationsHandler)
+	mux.HandleFunc("/api/notification-settings", s.notificationSettingsHandler)
 	mux.HandleFunc("/api/tasks", s.listTasksHandler)
 	mux.HandleFunc("/api/tasks/", s.taskHandler)
 	mux.HandleFunc("/api/dashboard/stats", s.dashboardHandler)
@@ -216,8 +570,7 @@ func (s *Service) startStaleTaskMonitor() {
 		return
 	}
 	check := func() {
-		const message = "解析任务长时间无进度，后台进程可能已中断，请重新上传解析"
-		if err := s.repo.FailStaleTasks(context.Background(), message, time.Now().Add(-5*time.Minute)); err != nil {
+		if err := s.repo.ReconcileParseQueue(context.Background(), max(1, s.config.MaxParseAttempts)); err != nil {
 			log.Printf("mark stale parsing tasks failed: %v", err)
 		}
 	}
@@ -231,14 +584,17 @@ func (s *Service) startStaleTaskMonitor() {
 	}()
 }
 
-func (s *Service) keepTaskAlive(uploadID string, done <-chan struct{}) {
+func (s *Service) keepParseTaskAlive(taskID, runToken string, done <-chan struct{}) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
-			if err := s.repo.TouchTask(context.Background(), uploadID); err != nil {
-				log.Printf("update task heartbeat %s: %v", uploadID, err)
+			if err := s.repo.RenewParseTaskLease(context.Background(), taskID, runToken); err != nil {
+				if err != ErrParseTaskLeaseLost {
+					log.Printf("update task heartbeat %s: %v", taskID, err)
+				}
+				return
 			}
 		case <-done:
 			return
@@ -266,78 +622,120 @@ func (r *parsingProgressReader) Read(buffer []byte) (int, error) {
 	return n, err
 }
 
-func (s *Service) processUpload(uploadID string) {
+func (s *Service) processUpload(task ClaimedParseTask) {
 	ctx := context.Background()
 	fail := func(event, message string) {
-		s.repo.MarkFailed(ctx, uploadID, message)
-		s.repo.RecordUploadRuntimeLog(ctx, uploadID, "parsing", event, "failed", message)
+		s.failClaimedTask(task, event, message)
 	}
-	storagePath, err := s.repo.UploadStoragePath(ctx, uploadID)
-	if err != nil {
-		fail("resolve upload storage", "resolve upload storage failed")
-		return
-	}
-	ownerOpenID, err := s.repo.UploadOwner(ctx, uploadID)
+	storagePath := task.StoragePath
+	ownerOpenID, err := s.repo.UploadOwner(ctx, task.UploadID)
 	if err != nil || ownerOpenID == "" {
 		fail("resolve upload owner", "resolve upload owner failed")
 		return
 	}
-	taskID, files, err := s.repo.StartParsing(ctx, uploadID)
+	taskID, files, err := s.repo.BeginClaimedParsing(ctx, task)
 	if err != nil {
 		fail("start parsing", err.Error())
 		return
 	}
-	rules, err := s.repo.RulesForUpload(ctx, uploadID, ownerOpenID)
+	rules, err := s.repo.RulesForUpload(ctx, task.UploadID, ownerOpenID)
 	if err != nil {
 		fail("load parsing rules", fmt.Sprintf("load parsing rules: %v", err))
 		return
 	}
 	var processedBytes int64
+	allAgentJobsQueued := true
 	for _, file := range files {
+		cancelled, cancelErr := s.repo.IsParseTaskStopped(ctx, task.TaskID)
+		if cancelErr != nil {
+			fail("check task cancellation", cancelErr.Error())
+			return
+		}
+		if cancelled {
+			return
+		}
 		path := filepath.Join(storagePath, filepath.FromSlash(file.RelativePath))
 		input, err := os.Open(path)
 		if err != nil {
 			fail("open log file", fmt.Sprintf("open %s: %v", file.RelativePath, err))
 			return
 		}
+		progressCancelled := false
 		progressInput := &parsingProgressReader{
 			reader: input,
 			base:   processedBytes,
 			report: func(current int64) {
-				if err := s.repo.UpdateParsingProgress(ctx, taskID, current); err != nil {
+				if err := s.repo.UpdateClaimedParsingProgress(ctx, taskID, task.RunToken, current); err != nil {
+					if err == ErrParseTaskLeaseLost {
+						progressCancelled = true
+						return
+					}
 					log.Printf("update parsing progress %s: %v", taskID, err)
 				}
 			},
 		}
 		summary, parseErr := parseLogWithRules(progressInput, rules, time.Now())
 		input.Close()
+		if progressCancelled {
+			return
+		}
 		if parseErr != nil {
 			fail("parse log file", fmt.Sprintf("parse %s: %v", file.RelativePath, parseErr))
 			return
 		}
-		if err := s.repo.SaveFileResults(ctx, taskID, file.ID, summary.Lines, summary.Errors, summary.Warnings, summary.Results); err != nil {
+		if err := s.repo.SaveClaimedFileResults(ctx, task, file.ID, summary.Lines, summary.Errors, summary.Warnings, summary.Results); err != nil {
 			fail("save parsing result", err.Error())
 			return
 		}
 		processedBytes += file.SizeBytes
-		if err := s.repo.UpdateParsingProgress(ctx, taskID, processedBytes); err != nil {
+		if err := s.repo.UpdateClaimedParsingProgress(ctx, taskID, task.RunToken, processedBytes); err != nil {
 			log.Printf("finalize parsing progress %s: %v", taskID, err)
 		}
 		if s.analysisEnabled(ctx) {
 			file.LineCount = summary.Lines
-			s.enqueueAgentAnalysis(agentJob{
-				taskID: taskID, uploadID: uploadID, ownerOpenID: ownerOpenID, file: file,
+			if !s.enqueueAgentAnalysis(agentJob{
+				taskID: taskID, uploadID: task.UploadID, ownerOpenID: ownerOpenID, attemptNo: task.AttemptNo, file: file,
 				totalLines: summary.Lines, matches: summary.Results,
-			})
+			}) {
+				allAgentJobsQueued = false
+			}
 		}
 	}
-	if err := s.repo.CompleteParsing(ctx, uploadID); err != nil {
-		log.Printf("complete log parsing %s: %v", uploadID, err)
-		s.repo.RecordUploadRuntimeLog(ctx, uploadID, "parsing", "complete parsing", "failed", err.Error())
+	if err := s.repo.CompleteClaimedParsing(ctx, task); err != nil {
+		log.Printf("complete log parsing %s: %v", task.UploadID, err)
+		s.repo.RecordUploadRuntimeLog(ctx, task.UploadID, "parsing", "complete parsing", "failed", err.Error())
 		return
 	}
-	s.repo.RecordUploadRuntimeLog(ctx, uploadID, "parsing", "complete parsing", "success", fmt.Sprintf("parsed %d log files", len(files)))
-	s.sendAnalysisNotification(uploadID)
+	if err := s.repo.CreateTaskNotifications(ctx, task.TaskID, "task_completed", "日志解析完成", "日志解析任务已完成，可查看分析结果"); err != nil {
+		log.Printf("create completion notification %s: %v", task.TaskID, err)
+	}
+	if s.dynamicLLM && s.analysisEnabled(ctx) && allAgentJobsQueued {
+		s.enqueueAgentAnalysis(agentJob{taskID: taskID, uploadID: task.UploadID, ownerOpenID: ownerOpenID, attemptNo: task.AttemptNo, overview: true})
+	}
+	s.repo.RecordUploadRuntimeLog(ctx, task.UploadID, "parsing", "complete parsing", "success", fmt.Sprintf("parsed %d log files", len(files)))
+	s.sendAnalysisNotification(task.UploadID)
+}
+
+func (s *Service) failClaimedTask(task ClaimedParseTask, event, message string) {
+	ctx := context.Background()
+	message = chineseErrorMessage(message)
+	if err := s.repo.FailClaimedParseTask(ctx, task, message); err != nil {
+		if err != ErrParseTaskLeaseLost {
+			log.Printf("mark parse task failed %s: %v", task.TaskID, err)
+		}
+		return
+	}
+	s.repo.RecordUploadRuntimeLog(ctx, task.UploadID, task.Phase, event, "failed", message)
+	if err := s.repo.CreateTaskNotifications(ctx, task.TaskID, "task_failed", "日志处理失败", message); err != nil {
+		log.Printf("create failure notification %s: %v", task.TaskID, err)
+	}
+}
+
+func max(left, right int) int {
+	if left > right {
+		return left
+	}
+	return right
 }
 
 func (s *Service) sendAnalysisNotification(uploadID string) {

@@ -1,12 +1,45 @@
 # LogMaster 后端与前端 API 文档
 
-本文档记录 `server/frontend` 使用的 Web API，更新日期为 2026-08-15。后端全部接口见 [`backend-api.md`](backend-api.md)。
+> **823 调整（2026-08-23）**：通知中心增加全部已读、用户开关和 SSE 实时推送；任务、AI、负责人分配和备注事件均可产生持久化通知。日志下载扩展为单文件、解析批次、原始上传包和分析结果包四类。
+AI 作业现已使用 PostgreSQL 持久化队列。任务列表和任务详情新增 `ai_status`、`ai_error_message`；AI 状态为 `disabled`、`queued`、`running`、`completed`、`partial_failed`、`failed`、`cancelled`。`GET /api/tasks` 可传 `ai_status` 进行服务端筛选。规则解析状态与 AI 状态互不覆盖。
+AI 支持整任务重试 `POST /api/tasks/{task_id}/agent-retry`、单文件重试 `POST /api/tasks/{task_id}/agent-retry/{file_id}` 和取消 `POST /api/tasks/{task_id}/agent-cancel`。单文件重试保留其他文件结果并在完成后刷新任务总览；取消仅停止 AI，不影响规则结果和原始日志。
+`GET /api/tasks/{task_id}/agent-results` 的失败记录新增 `error_code`，可选值为 `authentication`、`rate_limit`、`quota`、`timeout`、`invalid_response`、`upstream`、`cancelled`、`unknown`；界面展示使用中文 `error_message`，业务分支使用稳定的 `error_code`。
+任务暂停和恢复分别调用 `POST /api/tasks/{task_id}/pause`、`POST /api/tasks/{task_id}/resume`；任务列表需要识别 `paused` 状态。
+任务优先级使用 `PUT /api/tasks/{task_id}/priority`，项目优先级使用 `PUT /api/admin/projects/{id}/priority`。任务详情返回 `priority`，管理员项目列表返回 `scheduling_priority`。
+批量任务操作调用 `POST /api/tasks/batch`，请求为 `{ "action": "retry|cancel|delete", "task_ids": [] }`；批量负责人调用 `PUT /api/results/batch/assignment`。
+任务因文件数或总字节数超过限制时状态为 `failed`，前端直接展示中文 `error_message`；因用户或项目并发达到上限时保持 `queued`。
+异常操作历史通过 `GET /api/results/{id}/history` 查询，`action` 为 `status_changed`、`assignment_changed` 或 `comment_added`。
+任务导出调用 `GET /api/tasks/{task_id}/export`，`format` 可选 `csv`、`json`、`report`；JSON 数据包包含 AI 结果。
+
+> **822 调整（2026-08-22）**：采集端上传的会话在邮箱通过飞书校验后会自动关联到对应用户；该用户登录后可通过现有日志和任务接口查看记录，前端无需新增接口或字段。
+
+失败或缺失 AI 结果时，前端可调用 `POST /api/tasks/{task_id}/agent-retry`。该接口只重跑 AI，不会重新解析规则；成功返回 `202`，任务尚未完成规则解析返回 `409`。
+
+本文档记录 `server/frontend` 使用的 Web API，更新日期为 2026-08-23。后端全部接口见 [`backend-api.md`](backend-api.md)。
+
+> **最新：821 调整（2026-08-21）**：后端新增持久化解析任务队列和受控 Worker，上传接口仍返回 `202 + status=queued`，前端请求方式不变；同时为新完成的 AI 任务生成任务级总览，并兼容地作为 `GET /api/tasks/{task_id}/agent-results` 数组第一条返回。本次没有新增前端必须调用的接口。
 
 > **最新：818 调整（2026-08-18）**：采集端连续上传会话新增飞书通讯录 `uploader_email` 校验；前端普通文件上传保持 `uploader_name` 契约不变。
 
 > **818 补充**：修复 AI 分析用量记录的数据库权限问题，前端接口和返回结构不变。
 
 ## 1. 前端 API 清单
+
+### 1.0 任务调度兼容说明
+
+新增取消接口：`POST /api/tasks/{task_id}/cancel`。任务处于 `queued` 或解析中时可取消，成功返回 `202` 和 `status=cancelled`；已完成或失败任务返回 `409`，重复取消已取消任务幂等返回 `202`。取消不会删除原始日志或已有解析结果。
+新增原始日志搜索：`GET /api/logs/{upload_id}/search`，前端可传 `file_id`、`keyword`、`case_sensitive`、`page`、`page_size`，后端返回分页命中行。
+日志下载统一使用 `GET /api/logs/{upload_id}/download`：`type=file&file_id=...` 下载单文件，`type=batch` 下载解析日志 ZIP，`type=original` 下载最初上传文件 ZIP，`type=results` 下载分析结果 ZIP。单文件支持 `Range`；不传 `type` 兼容原调用方式。结果包包含 `results.csv`、`data.json`、`report.md`。
+上传、解压或解析失败时，前端应展示响应中的中文 `message`；任务详情可读取中文 `error_message`。管理员密码维护接口为 `GET/POST /api/admin/archive-passwords` 和 `DELETE /api/admin/archive-passwords/{id}`。
+异常结果状态通过 `PATCH /api/results/{id}/status` 更新，状态值为 `pending`、`confirmed`、`false_positive`、`fixed`、`closed`。
+异常结果备注通过 `POST /api/results/{id}/comments` 添加，通过 `GET /api/results/{id}/comments` 查询；备注内容必填，缺陷单号可选。
+异常结果负责人通过 `PUT /api/results/{id}/assignment` 设置，传入用户 `open_id`；传空字符串取消分配。
+版本对比通过 `GET /api/analysis/compare` 调用，必须传 `baseline_task_id` 和 `current_task_id`；同一异常按文件路径、规则名称和命中文本判定。
+任务列表可将状态、项目、版本、页码和排序条件直接传给 `GET /api/tasks`，后端返回 `total`、`page`、`page_size` 和当前页列表。
+
+解析任务和 AI 作业现在都由服务端持久化队列执行。前端通过现有 `GET /api/tasks`、`GET /api/tasks/{task_id}` 分别读取规则解析 `status` 和独立的 `ai_status`。失败解析任务可调用 `POST /api/tasks/{task_id}/retry`；解析任务取消调用 `POST /api/tasks/{task_id}/cancel`，AI 单独取消调用 `POST /api/tasks/{task_id}/agent-cancel`。
+
+通知列表使用 `GET /api/notifications?page=1&page_size=20&unread_only=false`；单条已读使用 `PATCH /api/notifications/{id}/read`，全部已读使用 `POST /api/notifications/read-all`。用户通知开关通过 `GET/PUT /api/notification-settings` 维护，PUT 必须提交 `task_completed`、`task_failed`、`task_cancelled`、`ai_completed`、`ai_failed`、`result_assigned`、`result_commented` 七个布尔字段。实时通知连接 `GET /api/notifications/stream`，事件名为 `notification`，断线重连可传 `Last-Event-ID`；通知对象可包含 `task_id`、`upload_id`、`result_id`。
 
 > **8/16新增**：`GET` / `PUT` `/api/admin/ai-analysis-settings`
 > **8/16之前**：其余全部接口
@@ -35,13 +68,22 @@
 | `GET` | `/api/logs` | 飞书 Session | 上传记录列表 | 8/16之前 |
 | `GET` | `/api/logs/{upload_id}` | 飞书 Session | 上传详情 | 8/16之前 |
 | `GET` | `/api/logs/{upload_id}/preview` | 飞书 Session | 日志文本预览 | 8/16之前 |
+| `GET` | `/api/logs/{upload_id}/download` | 飞书 Session | 下载单文件、解析批次、原始上传包或结果包 | 8/23调整 |
 | `GET` | `/api/tasks` | 飞书 Session | 解析任务列表 | 8/16之前 |
 | `GET` | `/api/tasks/{task_id}` | 飞书 Session | 任务详情 | 8/16之前 |
 | `DELETE` | `/api/tasks/{task_id}` | 飞书 Session | 删除任务 | 8/16之前 |
 | `GET` | `/api/tasks/{task_id}/results` | 飞书 Session | 规则解析结果 | 8/16之前 |
-| `GET` | `/api/tasks/{task_id}/agent-results` | 飞书 Session | Agent 分析结果 | 8/16之前 |
+| `GET` | `/api/tasks/{task_id}/agent-results` | 飞书 Session | 文件级分析结果；新任务还会在第一条返回任务级 AI 总览 | 8/21调整 |
+| `POST` | `/api/tasks/{task_id}/agent-retry` | 飞书 Session | 重试整个任务的 AI 分析 | 8/22调整 |
+| `POST` | `/api/tasks/{task_id}/agent-retry/{file_id}` | 飞书 Session | 只重试指定文件并刷新任务总览 | 8/23调整 |
+| `POST` | `/api/tasks/{task_id}/agent-cancel` | 飞书 Session | 取消该任务尚未完成的 AI 分析 | 8/23调整 |
 | `GET` | `/api/dashboard/stats` | 飞书 Session | 仪表板统计 | 8/16之前 |
 | `GET` | `/api/projects` | 飞书 Session | 上传项目选项 | 8/16之前 |
+| `GET` | `/api/notifications` | 飞书 Session | 分页查询通知和未读数 | 8/23调整 |
+| `PATCH` | `/api/notifications/{id}/read` | 飞书 Session | 单条通知已读 | 8/23调整 |
+| `POST` | `/api/notifications/read-all` | 飞书 Session | 全部通知已读 | 8/23调整 |
+| `GET` | `/api/notifications/stream` | 飞书 Session | SSE 实时通知 | 8/23调整 |
+| `GET/PUT` | `/api/notification-settings` | 飞书 Session | 查询或保存当前用户通知开关 | 8/23调整 |
 
 ### 1.3 规则与测试场景
 
@@ -202,6 +244,10 @@ Axios 响应拦截器返回 `data` 字段，因此页面通常直接获得业务
 ### 4.13 `GET /api/tasks/{task_id}/agent-results`
 
 返回 AI/Agent 分析记录数组。未启用 AI/Agent 时为空数组。每条记录含 `provider`（`llm` 为直连大模型、`http-agent` 为外部 Agent）、`status`、`summary`、`findings` 和 `error_message`。
+
+821 调整后，新完成的直连大模型任务会在数组第一条返回任务级聚合记录。该记录的 `file_path` 为 `任务级 AI 总览`、`log_file_id` 为 `0`，`summary` 是整个任务的结论，`findings` 是跨文件聚合后的风险和建议。其余数组项仍保持逐文件结构。
+
+本次没有修改前端代码。当前解析结果页本来就遍历整个返回数组，因此任务级总览会作为第一条 AI 结果显示。前端不需要调用新接口，也不需要提交新字段。
 
 `findings` 每项包含：`category`、`severity`、`root_cause`、`evidence`、`impact`（影响）、`suggestion`、`confidence`、`line_number`（关联命中的行号）和 `file_path`（关联文件）。
 
