@@ -46,7 +46,7 @@
         </div>
         <div class="header-right">
           <div class="service-status" :class="serviceStatus"><span class="status-dot" /><span>{{ serviceStatusText }}</span></div>
-          <span class="header-divider" />
+          <el-popover placement="bottom-end" :width="340" trigger="click" @show="loadNotifications"><template #reference><el-badge :value="unreadCount" :hidden="!unreadCount" class="notification-badge"><button class="icon-button" type="button" aria-label="通知"><el-icon><Bell /></el-icon></button></el-badge></template><div class="notification-popover"><div class="notification-head"><strong>通知</strong><div><el-button link @click="openNotificationSettings">通知设置</el-button><el-button link :disabled="!unreadCount" @click="readAll">全部已读</el-button></div></div><button v-for="item in notifications" :key="item.id" type="button" class="notification-item" :class="{ unread: !item.is_read }" @click="openNotification(item)"><strong>{{ item.title || '系统通知' }}</strong><span v-if="item.task_id || item.task_name || item.original_name" class="notification-task">解析任务：{{ notificationTaskName(item) }}</span><span>{{ item.message || item.content }}</span></button><el-empty v-if="!notifications.length" description="暂无通知" :image-size="45" /></div></el-popover><span class="header-divider" />
           <el-dropdown trigger="click" @command="handleUserCommand">
             <button class="user-menu" type="button">
               <span class="avatar">{{ userInitial }}</span><span class="user-name">{{ userInfo.name || '未登录' }}</span><el-icon class="chevron"><ArrowDown /></el-icon>
@@ -72,24 +72,38 @@
         <el-icon><Sunny v-if="themeMode === 'dark'" /><Moon v-else /></el-icon>
       </button>
     </el-tooltip>
+    <el-dialog v-model="notificationSettingsOpen" title="通知设置" width="420px" append-to-body>
+      <div class="notification-settings" v-loading="notificationSettingsLoading"><el-switch v-for="item in notificationSettingItems" :key="item.key" v-model="notificationSettings[item.key]" :active-text="item.label" /></div>
+      <template #footer><el-button @click="notificationSettingsOpen = false">取消</el-button><el-button type="primary" :loading="notificationSettingsSaving" @click="saveNotificationSettings">保存</el-button></template>
+    </el-dialog>
   </el-container>
 </template>
 
 <script setup>
 import { computed, markRaw, onBeforeUnmount, onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, ArrowRight, DataAnalysis, DataBoard, Expand, FolderOpened, Fold, Key, List, Menu, Moon, Operation, Search, Setting, Sunny, SwitchButton, Upload } from '@element-plus/icons-vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
+import { ArrowDown, ArrowRight, Bell, DataAnalysis, DataBoard, Expand, FolderOpened, Fold, Key, List, Menu, Moon, Operation, Search, Setting, Sunny, SwitchButton, Upload } from '@element-plus/icons-vue'
+import { getNotificationSettings, getNotifications, markAllNotificationsRead, markNotificationRead, updateNotificationSettings } from '@/api/notification'
 import { getCurrentUser, logout } from '@/api/auth'
 import { useTheme } from '@/utils/theme'
 
 const route = useRoute()
+const router = useRouter()
 const isCollapsed = ref(false)
 const isMobile = ref(false)
 const mobileMenuOpen = ref(false)
 const { themeMode, toggleTheme } = useTheme()
 const serviceStatus = ref('checking')
 const userInfo = ref({ name: '加载中...' })
+const notifications = ref([])
+const unreadCount = ref(0)
+const notificationSettingsOpen = ref(false)
+const notificationSettingsLoading = ref(false)
+const notificationSettingsSaving = ref(false)
+const notificationSettings = ref({ task_completed: true, task_failed: true, task_cancelled: true, ai_completed: true, ai_failed: true, result_assigned: true, result_commented: true })
+const notificationSettingItems = [{ key: 'task_completed', label: '任务完成' }, { key: 'task_failed', label: '任务失败' }, { key: 'task_cancelled', label: '任务取消' }, { key: 'ai_completed', label: 'AI 分析完成' }, { key: 'ai_failed', label: 'AI 分析失败' }, { key: 'result_assigned', label: '异常结果被分配' }, { key: 'result_commented', label: '异常结果新增备注' }]
+let notificationStream = null
 const loginURL = import.meta.env.VITE_FEISHU_LOGIN_URL || '/api/auth/feishu-login'
 const baseNavGroups = [
   { label: '日志', items: [{ path: '/upload', label: '日志上传', icon: markRaw(Upload) }, { path: '/query', label: '采集日志查询', icon: markRaw(Search) }] },
@@ -106,6 +120,7 @@ const navGroups = computed(() => baseNavGroups.map(group => ({
 const serviceStatusText = computed(() => ({ checking: '状态检测中', online: '服务正常', offline: '服务异常' }[serviceStatus.value]))
 const userInitial = computed(() => (userInfo.value.name || '用户').trim().charAt(0).toUpperCase())
 const roleLabel = computed(() => ({ user: '普通用户', developer: '开发', admin: '普通管理员', super_admin: '超级管理员' })[userInfo.value.role] || '普通用户')
+const notificationTaskName = (item) => item.task_name || item.original_name || item.task_original_name || item.name || item.task_id || '未命名任务'
 
 function updateViewport() {
   isMobile.value = window.innerWidth < 768
@@ -130,6 +145,12 @@ async function checkService() {
     serviceStatus.value = response.ok ? 'online' : 'offline'
   } catch { serviceStatus.value = 'offline' }
 }
+async function loadNotifications() { try { const data = await getNotifications({ page: 1, page_size: 10 }); notifications.value = data.list || []; unreadCount.value = Number(data.unread || 0) } catch { /* Notification center is optional during backend rollout. */ } }
+async function readAll() { try { await markAllNotificationsRead(); notifications.value = notifications.value.map(item => ({ ...item, is_read: true, read_at: item.read_at || new Date().toISOString() })); unreadCount.value = 0 } catch { ElMessage.error('通知标记失败') } }
+async function openNotification(item) { try { if (!item.is_read) { await markNotificationRead(item.id); item.is_read = true; item.read_at = item.read_at || new Date().toISOString(); unreadCount.value = Math.max(0, unreadCount.value - 1) } if (item.task_id) await router.push({ name: 'TaskDetail', params: { taskId: item.task_id } }) } catch { ElMessage.error('通知处理失败') } }
+async function openNotificationSettings() { notificationSettingsOpen.value = true; notificationSettingsLoading.value = true; try { notificationSettings.value = { ...notificationSettings.value, ...await getNotificationSettings() } } catch { ElMessage.error('通知设置加载失败') } finally { notificationSettingsLoading.value = false } }
+async function saveNotificationSettings() { notificationSettingsSaving.value = true; try { await updateNotificationSettings(notificationSettings.value); notificationSettingsOpen.value = false; ElMessage.success('通知设置已保存') } catch { ElMessage.error('通知设置保存失败') } finally { notificationSettingsSaving.value = false } }
+function startNotificationStream() { if (!window.EventSource) return; notificationStream = new EventSource('/api/notifications/stream', { withCredentials: true }); notificationStream.addEventListener('notification', event => { try { const item = JSON.parse(event.data); notifications.value = [item, ...notifications.value.filter(value => value.id !== item.id)].slice(0, 10); if (!item.is_read) unreadCount.value += 1; ElNotification({ title: item.title || '系统通知', message: item.message || '你有一条新通知', type: 'info', duration: 5000 }) } catch { /* Ignore malformed SSE payload. */ } }) }
 
 async function handleUserCommand(command) {
   if (command !== 'logout') return
@@ -147,9 +168,12 @@ onMounted(() => {
   window.addEventListener('resize', updateViewport)
   loadUser()
   checkService()
+  loadNotifications()
+  startNotificationStream()
 })
 onBeforeUnmount(() => {
   window.removeEventListener('resize', updateViewport)
+  notificationStream?.close()
 })
 </script>
 
@@ -168,6 +192,7 @@ onBeforeUnmount(() => {
 .breadcrumb{min-width:0;gap:7px;color:#8a94a3;font-size:13px;white-space:nowrap}.breadcrumb .el-icon{font-size:11px}.breadcrumb strong{overflow:hidden;color:#26313e;font-weight:600;text-overflow:ellipsis}
 .service-status{gap:7px;color:#657180;font-size:12px}.status-dot{width:7px;height:7px;border-radius:50%;background:#a9b1bc}.online .status-dot{background:#27936c;box-shadow:0 0 0 3px #e3f3ed}.offline .status-dot{background:#cf4f4f;box-shadow:0 0 0 3px #fbe8e8}.header-divider{width:1px;height:22px;background:#e7eaee}
 .user-menu{max-width:210px;gap:9px;padding:4px 5px;border-radius:6px;color:#344152}.user-menu:hover{background:#f5f7f9}.avatar{display:grid;width:30px;height:30px;flex:0 0 30px;place-items:center;border-radius:50%;background:#e7effb;color:#286dc8;font-size:12px;font-weight:700}.user-name{overflow:hidden;font-size:13px;font-weight:500;text-overflow:ellipsis;white-space:nowrap}.chevron{flex:0 0 auto;color:#8a94a3;font-size:11px}
+.notification-badge{display:flex}.notification-popover{display:grid;max-height:420px;gap:4px;overflow:auto}.notification-head{display:flex;align-items:center;justify-content:space-between;padding-bottom:8px;border-bottom:1px solid rgba(255,255,255,.12)}.notification-head>div{display:flex;gap:6px}.notification-item{display:flex;width:100%;flex-direction:column;gap:4px;padding:10px 8px;border:0;border-radius:5px;background:transparent;color:inherit;text-align:left;cursor:pointer}.notification-item:hover,.notification-item.unread{background:rgba(6,182,212,.12)}.notification-item strong{font-size:12px}.notification-item span{overflow:hidden;color:#8b9099;font-size:11px;text-overflow:ellipsis;white-space:nowrap}.notification-item .notification-task{color:#67e8f9;font-size:11px}.notification-settings{display:grid;gap:16px}.notification-settings :deep(.el-switch){justify-content:space-between}
 .main{height:calc(100dvh - 64px);min-width:0;overflow:hidden;padding:20px 22px;background:var(--lm-surface-page)}.main>*,.main :deep(>*){min-width:0}.mobile-brand{color:#fff}
 :global(.mobile-drawer.el-drawer){background:#171c24}:global(.mobile-drawer .el-drawer__body){display:flex;overflow:hidden;flex-direction:column;padding:0}
 @media(max-width:1439px) and (min-width:768px){.main{padding:14px 16px}.header{padding:0 16px}.service-status span:last-child,.header-divider{display:none}.header-right{gap:10px}}

@@ -33,6 +33,8 @@ export const uploadLogs = (files, metadata, scenarioIds = [], options = {}) => {
 export const getLogs = (params) => service.get('/logs', { params })
 export const getLogDetail = (uploadId) => service.get(`/logs/${uploadId}`)
 export const getLogPreview = (uploadId, fileId) => service.get(`/logs/${uploadId}/preview`, { params: fileId ? { file_id: fileId } : {} })
+export const searchLog = (uploadId, params) => service.get(`/logs/${uploadId}/search`, { params })
+export const downloadLog = (uploadId, params = {}) => service.get(`/logs/${uploadId}/download`, { params, responseType: 'blob' })
 export const getQueryStatus = (queryCode) => service.get(`/query/${encodeURIComponent(queryCode)}`, { skipAuthRedirect: true })
 export const collectQuerySession = (queryCode) => service.post(`/query/${encodeURIComponent(queryCode)}/collect`)
 export const getProjects = () => service.get('/projects')

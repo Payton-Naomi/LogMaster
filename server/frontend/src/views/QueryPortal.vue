@@ -21,7 +21,7 @@
               <template #prefix><el-icon><Key /></el-icon></template>
             </el-input>
             <el-button type="primary" size="large" native-type="submit" :loading="loading">
-              <el-icon v-if="!loading"><Search /></el-icon>查询
+              <el-icon v-if="!loading"><Search /></el-icon>查询进度
             </el-button>
           </div>
           <p v-if="inputError" class="form-error"><el-icon><WarningFilled /></el-icon>{{ inputError }}</p>
@@ -74,10 +74,10 @@
           </div>
         </div>
         <div class="result-actions">
-          <el-button :icon="Refresh" :loading="loading" @click="handleQuery">刷新进度</el-button>
+          <el-button :icon="Refresh" :loading="loading" @click="handleQuery">查询进度</el-button>
           <el-button v-if="!linked" type="primary" :loading="linking" @click="collectResult">加入我的日志</el-button>
           <el-button v-else type="primary" @click="router.push('/log-records')">打开日志记录</el-button>
-          <el-button v-if="latestTaskId" @click="router.push(`/task/${latestTaskId}`)">打开分析任务</el-button>
+          <el-button v-if="latestTaskId" @click="router.push(`/analysis/${latestTaskId}`)">打开分析结果</el-button>
         </div>
       </section>
 
