@@ -1,5 +1,11 @@
 # LogMaster 后端 API 文档
 
+> **最新：824 调整（2026-08-24）**：`POST /api/upload-sessions` 成功响应新增 `data.uploader_job_title`。后端使用飞书 `tenant_access_token` 查询用户详情并同步 `users.job_title`；该字段为后端解析的只读展示字段，采集端请求不需要新增字段。
+
+飞书自动角色固定按职位匹配：`主任` → `super_admin`，`高级` → `admin`，`软件工程师` / `硬件工程师` → `developer`，其他 → `user`。人工设置的角色不被自动同步覆盖。
+
+迁移 `044_fixed_feishu_job_title_roles.sql` 会重算现有飞书自动角色用户；重新启动后端后自动执行。
+
 > **最新：823 调整（2026-08-23）**：完善持久化通知中心和下载接口。通知覆盖任务、AI、负责人分配和备注事件，支持列表、单条/全部已读、用户开关和 SSE；下载支持单文件、解析批次、原始上传包和分析结果包。
 新增迁移 `042_persistent_ai_queue.sql`，AI 文件分析和任务总览使用 PostgreSQL `ai_jobs` 持久化队列、租约、心跳和最多 3 次异常恢复。`MAX_AI_WORKERS` 控制单实例 AI Worker 数，默认 1。任务返回独立的 `ai_status`、`ai_error_message`，`GET /api/tasks` 支持 `ai_status` 筛选。
 新增 `POST /api/tasks/{task_id}/agent-retry/{file_id}` 单独重试一个文件的 AI 分析，新增 `POST /api/tasks/{task_id}/agent-cancel` 取消未完成的 AI 作业。AI 失败结果新增结构化 `error_code`，迁移为 `041_ai_job_controls.sql`。

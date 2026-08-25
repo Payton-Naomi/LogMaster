@@ -1,5 +1,9 @@
 # LogMaster 后端与前端 API 文档
 
+> **824 调整（2026-08-24）**：采集端上传人经飞书校验后，后端同步 `users.job_title`；管理员用户接口已有 `job_title` 字段，因此前端无需新增接口。
+
+飞书自动角色规则调整为：职位含 `主任` 为 `super_admin`，含 `高级` 为 `admin`，含 `软件工程师` 或 `硬件工程师` 为 `developer`，其他为 `user`。手工分配角色保持优先；前端继续读取现有 `role` 控制权限。
+
 > **823 调整（2026-08-23）**：通知中心增加全部已读、用户开关和 SSE 实时推送；任务、AI、负责人分配和备注事件均可产生持久化通知。日志下载扩展为单文件、解析批次、原始上传包和分析结果包四类。
 AI 作业现已使用 PostgreSQL 持久化队列。任务列表和任务详情新增 `ai_status`、`ai_error_message`；AI 状态为 `disabled`、`queued`、`running`、`completed`、`partial_failed`、`failed`、`cancelled`。`GET /api/tasks` 可传 `ai_status` 进行服务端筛选。规则解析状态与 AI 状态互不覆盖。
 AI 支持整任务重试 `POST /api/tasks/{task_id}/agent-retry`、单文件重试 `POST /api/tasks/{task_id}/agent-retry/{file_id}` 和取消 `POST /api/tasks/{task_id}/agent-cancel`。单文件重试保留其他文件结果并在完成后刷新任务总览；取消仅停止 AI，不影响规则结果和原始日志。

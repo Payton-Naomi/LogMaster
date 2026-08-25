@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"logmaster-agent/internal/config"
+	"logmaster-agent/internal/rolepolicy"
 )
 
 type Service struct {
@@ -81,30 +82,10 @@ func (s *Service) saveUser(ctx context.Context, user UserInfo) (string, error) {
 }
 
 func (s *Service) roleForJobTitle(jobTitle string) string {
-	for _, rule := range strings.Split(s.config.FeishuRoleTitleRules, ";") {
-		parts := strings.SplitN(rule, "=", 2)
-		if len(parts) != 2 || !strings.Contains(strings.ToLower(jobTitle), strings.ToLower(strings.TrimSpace(parts[0]))) {
-			continue
-		}
-		role := strings.TrimSpace(parts[1])
-		if role == "developer" || role == "admin" || role == "user" {
-			return role
-		}
-	}
-	return "user"
+	return rolepolicy.ForJobTitle(jobTitle)
 }
 
 func (s *Service) roleForFeishuUser(openID, name, jobTitle string) string {
-	for _, id := range strings.Split(s.config.FeishuSuperAdminIDs, ",") {
-		if strings.TrimSpace(id) == openID && openID != "" {
-			return "super_admin"
-		}
-	}
-	for _, configuredName := range strings.Split(s.config.FeishuSuperAdminNames, ",") {
-		if strings.TrimSpace(configuredName) != "" && strings.TrimSpace(configuredName) == strings.TrimSpace(name) {
-			return "super_admin"
-		}
-	}
 	return s.roleForJobTitle(jobTitle)
 }
 

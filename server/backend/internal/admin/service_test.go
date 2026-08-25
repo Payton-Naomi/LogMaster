@@ -36,3 +36,18 @@ func TestOnlySuperAdminCanReviewPermissionRequests(t *testing.T) {
 		t.Fatal("super admin must be able to review permission requests")
 	}
 }
+
+func TestAutomaticRoleUsesFixedJobTitlePolicy(t *testing.T) {
+	service := &Service{}
+	tests := map[string]string{
+		"主任软件测试工程师": roleSuperAdmin,
+		"高级硬件工程师":   roleAdmin,
+		"软件工程师":     roleDeveloper,
+		"助理软件测试工程师": roleUser,
+	}
+	for title, want := range tests {
+		if got := service.automaticRole("ou_any", title); got != want {
+			t.Errorf("automaticRole(%q) = %q, want %q", title, got, want)
+		}
+	}
+}

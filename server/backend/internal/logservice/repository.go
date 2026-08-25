@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"logmaster-agent/internal/rolepolicy"
 )
 
 type Repository struct{ db *sql.DB }
@@ -249,10 +251,14 @@ var (
 )
 
 func (r *Repository) UpsertCollectorIdentity(ctx context.Context, identity collectorIdentity) error {
-	_, err := r.db.ExecContext(ctx, `INSERT INTO logmaster_api.users (feishu_open_id, name, email, role, role_source)
-		VALUES ($1,$2,$3,'user','feishu')
-		ON CONFLICT (feishu_open_id) DO UPDATE SET name=EXCLUDED.name,email=EXCLUDED.email,updated_at=NOW()`,
-		identity.OpenID, identity.Name, identity.Email)
+	role := rolepolicy.ForJobTitle(identity.JobTitle)
+	_, err := r.db.ExecContext(ctx, `INSERT INTO logmaster_api.users (feishu_open_id, name, email, job_title, role, role_source)
+		VALUES ($1,$2,$3,$4,$5,'feishu')
+		ON CONFLICT (feishu_open_id) DO UPDATE SET name=EXCLUDED.name,email=EXCLUDED.email,
+			job_title=EXCLUDED.job_title,
+			role=CASE WHEN logmaster_api.users.role_source='feishu' THEN EXCLUDED.role ELSE logmaster_api.users.role END,
+			updated_at=NOW()`,
+		identity.OpenID, identity.Name, identity.Email, identity.JobTitle, role)
 	return err
 }
 

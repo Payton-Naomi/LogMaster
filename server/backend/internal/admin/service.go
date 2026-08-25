@@ -15,6 +15,7 @@ import (
 
 	"logmaster-agent/internal/config"
 	"logmaster-agent/internal/response"
+	"logmaster-agent/internal/rolepolicy"
 )
 
 var projectNamePattern = regexp.MustCompile(`^[A-Z0-9][A-Z0-9-]{1,127}$`)
@@ -506,22 +507,7 @@ func roleHasPermission(role, permission string) bool {
 }
 
 func (s *Service) automaticRole(openID, jobTitle string) string {
-	for _, id := range strings.Split(s.config.FeishuSuperAdminIDs, ",") {
-		if openID != "" && strings.TrimSpace(id) == openID {
-			return roleSuperAdmin
-		}
-	}
-	for _, rule := range strings.Split(s.config.FeishuRoleTitleRules, ";") {
-		parts := strings.SplitN(rule, "=", 2)
-		if len(parts) != 2 || !strings.Contains(strings.ToLower(jobTitle), strings.ToLower(strings.TrimSpace(parts[0]))) {
-			continue
-		}
-		role := strings.TrimSpace(parts[1])
-		if role == roleUser || role == roleDeveloper || role == roleAdmin {
-			return role
-		}
-	}
-	return roleUser
+	return rolepolicy.ForJobTitle(jobTitle)
 }
 
 func isUniqueViolation(err error) bool {
