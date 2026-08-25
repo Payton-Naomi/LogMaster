@@ -46,7 +46,7 @@
         </div>
         <div class="header-right">
           <div class="service-status" :class="serviceStatus"><span class="status-dot" /><span>{{ serviceStatusText }}</span></div>
-          <el-popover placement="bottom-end" :width="340" trigger="click" @show="loadNotifications"><template #reference><el-badge :value="unreadCount" :hidden="!unreadCount" class="notification-badge"><button class="icon-button" type="button" aria-label="通知"><el-icon><Bell /></el-icon></button></el-badge></template><div class="notification-popover"><div class="notification-head"><strong>通知</strong><div><el-button link @click="openNotificationSettings">通知设置</el-button><el-button link :disabled="!unreadCount" @click="readAll">全部已读</el-button></div></div><button v-for="item in notifications" :key="item.id" type="button" class="notification-item" :class="{ unread: !item.is_read }" @click="openNotification(item)"><strong>{{ item.title || '系统通知' }}</strong><span v-if="item.task_id || item.task_name || item.original_name" class="notification-task">解析任务：{{ notificationTaskName(item) }}</span><span>{{ item.message || item.content }}</span></button><el-empty v-if="!notifications.length" description="暂无通知" :image-size="45" /></div></el-popover><span class="header-divider" />
+          <el-popover placement="bottom-end" :width="340" trigger="click" @show="loadNotifications"><template #reference><el-badge :value="unreadCount" :hidden="!unreadCount" class="notification-badge"><button class="icon-button" type="button" aria-label="通知"><el-icon><Bell /></el-icon></button></el-badge></template><div class="notification-popover"><div class="notification-head"><strong>通知</strong><div><el-button link @click="openNotificationSettings">通知设置</el-button><el-button link :disabled="!unreadCount" @click="readAll">全部已读</el-button></div></div><button v-for="item in notifications" :key="item.id" type="button" class="notification-item" :class="{ unread: !item.is_read }" @click="openNotification(item)"><strong>{{ item.title || '系统通知' }}</strong><span v-if="notificationTaskName(item)" class="notification-task">解析任务：{{ notificationTaskName(item) }}</span><span>{{ item.message || item.content }}</span></button><el-empty v-if="!notifications.length" description="暂无通知" :image-size="45" /></div></el-popover><span class="header-divider" />
           <el-dropdown trigger="click" @command="handleUserCommand">
             <button class="user-menu" type="button">
               <span class="avatar">{{ userInitial }}</span><span class="user-name">{{ userInfo.name || '未登录' }}</span><el-icon class="chevron"><ArrowDown /></el-icon>
@@ -85,6 +85,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import { ArrowDown, ArrowRight, Bell, DataAnalysis, DataBoard, Expand, FolderOpened, Fold, Key, List, Menu, Moon, Operation, Search, Setting, Sunny, SwitchButton, Upload } from '@element-plus/icons-vue'
 import { getNotificationSettings, getNotifications, markAllNotificationsRead, markNotificationRead, updateNotificationSettings } from '@/api/notification'
+import { getTaskDetail } from '@/api/task'
 import { getCurrentUser, logout } from '@/api/auth'
 import { useTheme } from '@/utils/theme'
 
@@ -120,7 +121,7 @@ const navGroups = computed(() => baseNavGroups.map(group => ({
 const serviceStatusText = computed(() => ({ checking: '状态检测中', online: '服务正常', offline: '服务异常' }[serviceStatus.value]))
 const userInitial = computed(() => (userInfo.value.name || '用户').trim().charAt(0).toUpperCase())
 const roleLabel = computed(() => ({ user: '普通用户', developer: '开发', admin: '普通管理员', super_admin: '超级管理员' })[userInfo.value.role] || '普通用户')
-const notificationTaskName = (item) => item.task_name || item.original_name || item.task_original_name || item.name || item.task_id || '未命名任务'
+const notificationTaskName = (item) => item.task_name || item.original_name || item.task_original_name || item.name || item.project_name || ''
 
 function updateViewport() {
   isMobile.value = window.innerWidth < 768
@@ -145,7 +146,7 @@ async function checkService() {
     serviceStatus.value = response.ok ? 'online' : 'offline'
   } catch { serviceStatus.value = 'offline' }
 }
-async function loadNotifications() { try { const data = await getNotifications({ page: 1, page_size: 10 }); notifications.value = data.list || []; unreadCount.value = Number(data.unread || 0) } catch { /* Notification center is optional during backend rollout. */ } }
+async function loadNotifications() { try { const data = await getNotifications({ page: 1, page_size: 10 }); const items = await Promise.all((data.list || []).map(async item => { if (!item.task_id || notificationTaskName(item)) return item; try { const detail = await getTaskDetail(item.task_id); const task = detail?.task || detail; if (task) return { ...item, task_name: task.original_name || task.project_name || '', project_name: task.project_name, version: task.version } } catch { /* A notification remains usable when its task was removed. */ } return item })); notifications.value = items; unreadCount.value = Number(data.unread || 0) } catch { /* Notification center is optional during backend rollout. */ } }
 async function readAll() { try { await markAllNotificationsRead(); notifications.value = notifications.value.map(item => ({ ...item, is_read: true, read_at: item.read_at || new Date().toISOString() })); unreadCount.value = 0 } catch { ElMessage.error('通知标记失败') } }
 async function openNotification(item) { try { if (!item.is_read) { await markNotificationRead(item.id); item.is_read = true; item.read_at = item.read_at || new Date().toISOString(); unreadCount.value = Math.max(0, unreadCount.value - 1) } if (item.task_id) await router.push({ name: 'TaskDetail', params: { taskId: item.task_id } }) } catch { ElMessage.error('通知处理失败') } }
 async function openNotificationSettings() { notificationSettingsOpen.value = true; notificationSettingsLoading.value = true; try { notificationSettings.value = { ...notificationSettings.value, ...await getNotificationSettings() } } catch { ElMessage.error('通知设置加载失败') } finally { notificationSettingsLoading.value = false } }
@@ -193,10 +194,26 @@ onBeforeUnmount(() => {
 .service-status{gap:7px;color:#657180;font-size:12px}.status-dot{width:7px;height:7px;border-radius:50%;background:#a9b1bc}.online .status-dot{background:#27936c;box-shadow:0 0 0 3px #e3f3ed}.offline .status-dot{background:#cf4f4f;box-shadow:0 0 0 3px #fbe8e8}.header-divider{width:1px;height:22px;background:#e7eaee}
 .user-menu{max-width:210px;gap:9px;padding:4px 5px;border-radius:6px;color:#344152}.user-menu:hover{background:#f5f7f9}.avatar{display:grid;width:30px;height:30px;flex:0 0 30px;place-items:center;border-radius:50%;background:#e7effb;color:#286dc8;font-size:12px;font-weight:700}.user-name{overflow:hidden;font-size:13px;font-weight:500;text-overflow:ellipsis;white-space:nowrap}.chevron{flex:0 0 auto;color:#8a94a3;font-size:11px}
 .notification-badge{display:flex}.notification-popover{display:grid;max-height:420px;gap:4px;overflow:auto}.notification-head{display:flex;align-items:center;justify-content:space-between;padding-bottom:8px;border-bottom:1px solid rgba(255,255,255,.12)}.notification-head>div{display:flex;gap:6px}.notification-item{display:flex;width:100%;flex-direction:column;gap:4px;padding:10px 8px;border:0;border-radius:5px;background:transparent;color:inherit;text-align:left;cursor:pointer}.notification-item:hover,.notification-item.unread{background:rgba(6,182,212,.12)}.notification-item strong{font-size:12px}.notification-item span{overflow:hidden;color:#8b9099;font-size:11px;text-overflow:ellipsis;white-space:nowrap}.notification-item .notification-task{color:#67e8f9;font-size:11px}.notification-settings{display:grid;gap:16px}.notification-settings :deep(.el-switch){justify-content:space-between}
+.notification-badge :deep(.el-badge__content){z-index:auto}
+:global(.el-popover:has(.notification-popover)){width:min(420px,calc(100vw - 24px))!important;max-width:calc(100vw - 24px)!important}
+.notification-popover{min-width:0}.notification-item{min-width:0}.notification-item strong,.notification-item span{overflow-wrap:anywhere;white-space:normal}.notification-item span{line-height:1.5}
 .main{height:calc(100dvh - 64px);min-width:0;overflow:hidden;padding:20px 22px;background:var(--lm-surface-page)}.main>*,.main :deep(>*){min-width:0}.mobile-brand{color:#fff}
 :global(.mobile-drawer.el-drawer){background:#171c24}:global(.mobile-drawer .el-drawer__body){display:flex;overflow:hidden;flex-direction:column;padding:0}
 @media(max-width:1439px) and (min-width:768px){.main{padding:14px 16px}.header{padding:0 16px}.service-status span:last-child,.header-divider{display:none}.header-right{gap:10px}}
 @media(max-width:767px){.desktop-aside{display:none}.header{padding:0 14px}.breadcrumb>span,.breadcrumb>.el-icon,.service-status span:last-child,.header-divider,.user-name,.chevron{display:none}.header-right{gap:12px}.service-status{padding:0 5px}.main{padding:14px}}
+</style>
+<style scoped>
+.workspace, .main, .main > *, .main :deep(.page) { min-width: 0; }
+.main :deep(.page) { max-width: 100%; overflow-x: hidden; }
+.main :deep(.page-heading), .main :deep(.page-header), .main :deep(.panel-heading), .main :deep(.heading-actions) { min-width: 0; }
+.main :deep(.page-heading > *), .main :deep(.page-header > *), .main :deep(.panel-heading > *) { min-width: 0; }
+.main :deep(.el-table) { width: 100%; max-width: 100%; }
+.main :deep(.el-table__body-wrapper), .main :deep(.el-table__header-wrapper) { max-width: 100%; }
+.main :deep(img), .main :deep(svg), .main :deep(video) { max-width: 100%; }
+@media (max-width: 760px) {
+  .main :deep(.page-heading), .main :deep(.page-header) { overflow-wrap: anywhere; }
+  .main :deep(.heading-actions), .main :deep(.header-actions) { max-width: 100%; flex-wrap: wrap; }
+}
 </style>
 
 <style scoped>
@@ -387,6 +404,58 @@ onBeforeUnmount(() => {
 :global(html[data-log-theme="light"] .el-dialog),
 :global(html[data-log-theme="light"] .el-message-box),
 :global(html[data-log-theme="light"] .el-drawer) { background: rgba(244,250,251,.96) !important; border-color: rgba(67,98,112,.24) !important; color: #17303b !important; }
+:global(html[data-log-theme="light"] .shared-particle-surface.tasks-page),
+:global(html[data-log-theme="light"] .shared-particle-surface.dashboard-page),
+:global(html[data-log-theme="light"] .tasks-page) { background:radial-gradient(circle at 50% 8%,rgba(255,255,255,.64),transparent 34%),linear-gradient(145deg,rgba(215,231,235,.82),rgba(239,246,247,.72) 48%,rgba(198,217,223,.84)) !important; color:#17303b !important; }
+:global(html[data-log-theme="light"] .tasks-page .page-heading),
+:global(html[data-log-theme="light"] .tasks-page .summary-item),
+:global(html[data-log-theme="light"] .tasks-page .tasks-panel),
+:global(html[data-log-theme="light"] .tasks-page .task-card) { background:linear-gradient(145deg,rgba(255,255,255,.5),rgba(224,240,244,.28)) !important; border-color:rgba(67,98,112,.24) !important; box-shadow:inset 0 1px rgba(255,255,255,.82),0 18px 48px rgba(35,67,83,.16) !important; }
+:global(html[data-log-theme="light"] .tasks-page .page-heading h1),
+:global(html[data-log-theme="light"] .tasks-page .summary-item strong),
+:global(html[data-log-theme="light"] .tasks-page .list-meta strong),
+:global(html[data-log-theme="light"] .tasks-page .task-cell strong),
+:global(html[data-log-theme="light"] .tasks-page .project-cell strong),
+:global(html[data-log-theme="light"] .tasks-page .task-title strong) { color:#17303b !important; }
+:global(html[data-log-theme="light"] .tasks-page .page-heading p),
+:global(html[data-log-theme="light"] .tasks-page .summary-item span),
+:global(html[data-log-theme="light"] .tasks-page .task-cell span),
+:global(html[data-log-theme="light"] .tasks-page .project-cell span),
+:global(html[data-log-theme="light"] .tasks-page .progress-cell>span),
+:global(html[data-log-theme="light"] .tasks-page .list-meta span),
+:global(html[data-log-theme="light"] .tasks-page .refresh-state),
+:global(html[data-log-theme="light"] .tasks-page footer),
+:global(html[data-log-theme="light"] .tasks-page .task-card-foot time) { color:#55727d !important; }
+:global(html[data-log-theme="light"] .tasks-page .panel-toolbar) { background:rgba(218,236,240,.32) !important; border-bottom-color:rgba(67,98,112,.18) !important; }
+:global(html[data-log-theme="light"] .tasks-page .search-row .el-input__wrapper),
+:global(html[data-log-theme="light"] .tasks-page .search-row .el-select__wrapper) { background:rgba(255,255,255,.82) !important; box-shadow:0 0 0 1px rgba(67,98,112,.24) inset !important; }
+:global(html[data-log-theme="light"] .tasks-page .search-row input) { color:#17303b !important; }
+:global(html[data-log-theme="light"] .tasks-page .search-row input::placeholder) { color:#718894 !important; }
+:global(html[data-log-theme="light"] .tasks-page .desktop-table) { --el-table-text-color:#263d47; --el-table-header-text-color:#55727d; --el-table-header-bg-color:rgba(67,98,112,.08); --el-table-border-color:rgba(67,98,112,.16); }
+:global(html[data-log-theme="light"] .tasks-page .desktop-table th.el-table__cell) { background:rgba(67,98,112,.08) !important; color:#55727d !important; }
+:global(html[data-log-theme="light"] .tasks-page .desktop-table td.el-table__cell) { color:#263d47 !important; border-bottom-color:rgba(67,98,112,.14) !important; }
+:global(html[data-log-theme="light"] .tasks-page .desktop-table .current-row>td.el-table__cell),
+:global(html[data-log-theme="light"] .tasks-page .desktop-table .el-table__row:hover>td.el-table__cell) { color:#17303b !important; background:rgba(6,150,180,.12) !important; }
+:global(html[data-log-theme="light"] .tasks-page .row-actions .el-button) { background:rgba(255,255,255,.72) !important; border-color:rgba(67,98,112,.22) !important; color:#416574 !important; }
+:global(html[data-log-theme="light"] .task-detail-page) { background:radial-gradient(circle at 50% 8%,rgba(255,255,255,.64),transparent 34%),linear-gradient(145deg,rgba(215,231,235,.82),rgba(239,246,247,.72) 48%,rgba(198,217,223,.84)) !important; color:#17303b !important; }
+:global(html[data-log-theme="light"] .task-detail-page>header),
+:global(html[data-log-theme="light"] .task-detail-page .panel) { background:linear-gradient(145deg,rgba(255,255,255,.5),rgba(224,240,244,.28)) !important; border-color:rgba(67,98,112,.24) !important; box-shadow:inset 0 1px rgba(255,255,255,.82),0 18px 48px rgba(35,67,83,.16) !important; }
+:global(html[data-log-theme="light"] .task-detail-page .title h1),
+:global(html[data-log-theme="light"] .task-detail-page .counts h2),
+:global(html[data-log-theme="light"] .task-detail-page .panel-heading h2),
+:global(html[data-log-theme="light"] .task-detail-page .meta dd),
+:global(html[data-log-theme="light"] .task-detail-page .counts strong) { color:#17303b !important; }
+:global(html[data-log-theme="light"] .task-detail-page .title p),
+:global(html[data-log-theme="light"] .task-detail-page .status),
+:global(html[data-log-theme="light"] .task-detail-page .meta dt),
+:global(html[data-log-theme="light"] .task-detail-page .counts small),
+:global(html[data-log-theme="light"] .task-detail-page .panel-heading p),
+:global(html[data-log-theme="light"] .task-detail-page .panel-heading>span) { color:#55727d !important; }
+:global(html[data-log-theme="light"] .task-detail-page .meta dl>div),
+:global(html[data-log-theme="light"] .task-detail-page .counts>div>span) { background:rgba(244,250,251,.82) !important; border-color:rgba(67,98,112,.16) !important; }
+:global(html[data-log-theme="light"] .task-detail-page .panel .el-table) { --el-table-text-color:#263d47; --el-table-header-text-color:#55727d; --el-table-header-bg-color:rgba(67,98,112,.08); --el-table-border-color:rgba(67,98,112,.16); }
+:global(html[data-log-theme="light"] .task-detail-page .panel th.el-table__cell) { background:rgba(67,98,112,.08) !important; color:#55727d !important; }
+:global(html[data-log-theme="light"] .task-detail-page .panel td.el-table__cell) { color:#263d47 !important; border-bottom-color:rgba(67,98,112,.14) !important; }
 @media(max-width: 760px) {
   .global-theme-toggle { right: 16px; bottom: 16px; left: auto; width: 44px; height: 44px; }
   :global(.shared-particle-surface.tasks-page),

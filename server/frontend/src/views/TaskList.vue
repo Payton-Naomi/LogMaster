@@ -1,7 +1,7 @@
 <template>
   <div class="tasks-page">
     <header class="page-heading">
-      <div><h1>解析任务</h1><p>跟踪日志解析进度，并进入任务详情查看文件与结果</p></div>
+      <div><h1>分析任务</h1><p>跟踪日志解析进度，并进入任务详情查看文件与结果</p></div>
       <div class="heading-actions">
         <el-tooltip content="刷新任务" placement="bottom"><el-button :icon="Refresh" :loading="loading" aria-label="刷新任务" @click="loadTasks" /></el-tooltip>
         <el-button :type="autoRefresh ? 'success' : 'default'" @click="toggleAutoRefresh">{{ autoRefresh ? '自动刷新中' : '已暂停刷新' }}</el-button>
@@ -50,7 +50,7 @@
         <el-table-column label="操作" width="104" align="center">
           <template #default="scope"><div class="row-actions" @click.stop><el-tooltip content="查看详情" placement="top"><el-button circle :icon="View" aria-label="查看详情" @click="openTask(scope.row)" /></el-tooltip><el-tooltip v-if="scope.row.status === 'failed'" content="重新解析" placement="top"><el-button circle type="warning" plain :icon="Refresh" aria-label="重新解析" @click="runTaskAction('retry', scope.row)" /></el-tooltip><el-tooltip v-if="['queued', 'running', 'paused'].includes(scope.row.status)" :content="scope.row.status === 'paused' ? '恢复任务' : '暂停任务'" placement="top"><el-button circle plain :icon="scope.row.status === 'paused' ? VideoPlay : VideoPause" :aria-label="scope.row.status === 'paused' ? '恢复任务' : '暂停任务'" @click="runTaskAction(scope.row.status === 'paused' ? 'resume' : 'pause', scope.row)" /></el-tooltip><el-tooltip content="删除任务" placement="top"><el-button circle type="danger" plain :icon="Delete" aria-label="删除任务" @click="removeTask(scope.row)" /></el-tooltip></div></template>
         </el-table-column>
-        <template #empty><div class="empty-state"><el-empty :description="hasFilters ? '没有符合条件的解析任务' : '还没有解析任务'" /><el-button v-if="!hasFilters" type="primary" :icon="Upload" @click="router.push('/upload')">上传第一份日志</el-button></div></template>
+        <template #empty><div class="empty-state"><el-empty :description="hasFilters ? '没有符合条件的分析任务' : '还没有分析任务'" /><el-button v-if="!hasFilters" type="primary" :icon="Upload" @click="router.push('/upload')">上传第一份日志</el-button></div></template>
       </el-table>
 
       <div class="mobile-list">
@@ -59,7 +59,7 @@
           <div class="mobile-progress"><el-progress :percentage="task.progress" :status="progressStatus(task)" :stroke-width="7" /><span>{{ task.processedFiles }} / {{ task.totalFiles }} 个文件 · {{ task.lines.toLocaleString() }} 行</span></div>
           <div class="task-card-foot"><time>{{ task.updatedAt }}</time><div @click.stop><el-button type="primary" link :icon="View" @click="openTask(task)">查看</el-button><el-button v-if="task.status === 'failed'" type="warning" link :icon="Refresh" @click="runTaskAction('retry', task)">重试</el-button><el-button type="danger" link :icon="Delete" @click="removeTask(task)">删除</el-button></div></div>
         </article>
-        <div v-if="!pagedTasks.length" class="mobile-empty"><el-empty :description="hasFilters ? '没有符合条件的解析任务' : '还没有解析任务'" /></div>
+        <div v-if="!pagedTasks.length" class="mobile-empty"><el-empty :description="hasFilters ? '没有符合条件的分析任务' : '还没有分析任务'" /></div>
       </div>
 
       <footer v-if="totalTasks"><span>共 {{ totalTasks }} 个任务</span><el-pagination v-model:current-page="page" :page-size="pageSize" :total="totalTasks" :pager-count="5" layout="prev, pager, next" @current-change="loadTasks" /></footer>
@@ -237,9 +237,9 @@ function openTask(task) {
 }
 async function removeTask(task) {
   try {
-    await ElMessageBox.confirm(`将永久删除“${task.name}”、关联日志文件及全部分析结果。`, '删除解析任务', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' })
+    await ElMessageBox.confirm(`将永久删除“${task.name}”、关联日志文件及全部分析结果。`, '删除分析任务', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' })
     await deleteTask(task.id)
-    ElMessage.success('解析任务已删除')
+    ElMessage.success('分析任务已删除')
     await loadTasks()
   } catch (error) {
     if (error !== 'cancel' && error !== 'close') ElMessage.error('删除失败，请稍后重试')
@@ -347,6 +347,47 @@ html[data-log-theme="light"] .tasks-page .panel-toolbar .el-segmented__item.is-s
 html[data-log-theme="light"] .tasks-page .panel-toolbar .el-segmented__item.is-selected .el-segmented__item-label {
   color: #064f60 !important;
 }
+</style>
+
+<style>
+html[data-log-theme="light"] .tasks-page {
+  background: radial-gradient(circle at 50% 8%, rgba(255,255,255,.64), transparent 34%), linear-gradient(145deg, rgba(215,231,235,.82), rgba(239,246,247,.72) 48%, rgba(198,217,223,.84)) !important;
+  color: #17303b !important;
+}
+html[data-log-theme="light"] .tasks-page .page-heading,
+html[data-log-theme="light"] .tasks-page .summary-item,
+html[data-log-theme="light"] .tasks-page .tasks-panel,
+html[data-log-theme="light"] .tasks-page .task-card {
+  background: linear-gradient(145deg, rgba(255,255,255,.5), rgba(224,240,244,.28)) !important;
+  border-color: rgba(67,98,112,.24) !important;
+  box-shadow: inset 0 1px rgba(255,255,255,.82), 0 18px 48px rgba(35,67,83,.16) !important;
+}
+html[data-log-theme="light"] .tasks-page .page-heading h1,
+html[data-log-theme="light"] .tasks-page .summary-item strong,
+html[data-log-theme="light"] .tasks-page .list-meta strong,
+html[data-log-theme="light"] .tasks-page .task-cell strong,
+html[data-log-theme="light"] .tasks-page .project-cell strong,
+html[data-log-theme="light"] .tasks-page .task-title strong { color: #17303b !important; }
+html[data-log-theme="light"] .tasks-page .page-heading p,
+html[data-log-theme="light"] .tasks-page .summary-item span,
+html[data-log-theme="light"] .tasks-page .task-cell span,
+html[data-log-theme="light"] .tasks-page .project-cell span,
+html[data-log-theme="light"] .tasks-page .progress-cell > span,
+html[data-log-theme="light"] .tasks-page .list-meta span,
+html[data-log-theme="light"] .tasks-page .refresh-state,
+html[data-log-theme="light"] .tasks-page footer,
+html[data-log-theme="light"] .tasks-page .task-card-foot time { color: #55727d !important; }
+html[data-log-theme="light"] .tasks-page .panel-toolbar { background: rgba(218,236,240,.32) !important; border-bottom-color: rgba(67,98,112,.18) !important; }
+html[data-log-theme="light"] .tasks-page .search-row .el-input__wrapper,
+html[data-log-theme="light"] .tasks-page .search-row .el-select__wrapper { background: rgba(255,255,255,.82) !important; box-shadow: 0 0 0 1px rgba(67,98,112,.24) inset !important; }
+html[data-log-theme="light"] .tasks-page .search-row input { color: #17303b !important; }
+html[data-log-theme="light"] .tasks-page .search-row input::placeholder { color: #718894 !important; }
+html[data-log-theme="light"] .tasks-page .desktop-table { --el-table-text-color: #263d47; --el-table-header-text-color: #55727d; --el-table-header-bg-color: rgba(67,98,112,.08); --el-table-border-color: rgba(67,98,112,.16); }
+html[data-log-theme="light"] .tasks-page .desktop-table th.el-table__cell { background: rgba(67,98,112,.08) !important; color: #55727d !important; }
+html[data-log-theme="light"] .tasks-page .desktop-table td.el-table__cell { color: #263d47 !important; border-bottom-color: rgba(67,98,112,.14) !important; }
+html[data-log-theme="light"] .tasks-page .desktop-table .current-row > td.el-table__cell,
+html[data-log-theme="light"] .tasks-page .desktop-table .el-table__row:hover > td.el-table__cell { color: #17303b !important; background: rgba(6,150,180,.12) !important; }
+html[data-log-theme="light"] .tasks-page .row-actions .el-button { background: rgba(255,255,255,.72) !important; border-color: rgba(67,98,112,.22) !important; color: #416574 !important; }
 </style>
 
 <style scoped>

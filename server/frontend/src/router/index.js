@@ -58,7 +58,7 @@ const routes = [
         path: 'tasks', 
         name: 'TaskList', 
         component: () => import('@/views/TaskList.vue'), 
-        meta: { title: '任务列表' } 
+        meta: { title: '分析任务' }
       },
       
       // 任务详情
