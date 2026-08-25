@@ -1,6 +1,6 @@
 # LogMaster 后端 API 文档
 
-> **825 调整（2026-08-25）**：新增外包账号密码注册与登录。外包账号固定为 `role=user`、`role_source=external`、`identity_type=external`，不使用飞书职位自动授权规则。迁移 `045_external_password_accounts.sql` 新增凭证表，密码只以 Argon2id 哈希保存；本期不包含邮箱验证、邀请码、账号禁用或有效期。
+> **825 调整（2026-08-25）**：新增外包账号密码注册与登录。外包账号固定为 `role=user`、`role_source=external`、`identity_type=external`，不使用飞书职位自动授权规则。迁移 `045_external_password_accounts.sql` 新增凭证表，`047_external_role_source.sql` 将用户角色来源约束扩展为 `external`，两者均需在后端重启时自动执行；密码只以 Argon2id 哈希保存；本期不包含邮箱验证、邀请码、账号禁用或有效期。
 
 `POST /api/auth/external/register` 公开注册，JSON 为 `{ "name": "...", "email": "...", "company": "...", "password": "非空字符串", "confirm_password": "..." }`。邮箱全局不可重复，成功返回 `201` 并写入登录 Cookie。
 
