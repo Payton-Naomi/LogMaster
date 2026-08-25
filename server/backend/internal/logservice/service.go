@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"logmaster-agent/internal/config"
-	"logmaster-agent/internal/securevalue"
 )
 
 type Service struct {
@@ -36,6 +35,7 @@ type Service struct {
 	uploadOwnerOpenID   string
 	directory           *feishuDirectory
 	dynamicLLM          bool
+	searchCache         *logSearchCache
 }
 
 const (
@@ -44,7 +44,7 @@ const (
 )
 
 func NewService(cfg config.Config, repo *Repository) *Service {
-	service := &Service{config: cfg, repo: repo}
+	service := &Service{config: cfg, repo: repo, searchCache: newLogSearchCache()}
 	if cfg.FeishuAppID != "" && cfg.FeishuAppSecret != "" {
 		service.directory = newFeishuDirectory(cfg.FeishuAppID, cfg.FeishuAppSecret)
 	}
@@ -66,7 +66,7 @@ func NewService(cfg config.Config, repo *Repository) *Service {
 }
 
 func NewServiceWithAgent(cfg config.Config, repo *Repository, analyzer AgentAnalyzer) *Service {
-	service := &Service{config: cfg, repo: repo, agent: analyzer}
+	service := &Service{config: cfg, repo: repo, agent: analyzer, searchCache: newLogSearchCache()}
 	if cfg.FeishuAppID != "" && cfg.FeishuAppSecret != "" {
 		service.directory = newFeishuDirectory(cfg.FeishuAppID, cfg.FeishuAppSecret)
 	}
@@ -389,15 +389,7 @@ func (s *Service) processAgentJob(job agentJob) {
 	}
 	analyzer := s.agent
 	if s.dynamicLLM {
-		apiKey := s.config.LLMAPIKey
-		if settings.LLMAPIKeyEncrypted != "" {
-			apiKey, settingsErr = securevalue.Decrypt(settings.LLMAPIKeyEncrypted, s.config.ConfigEncryptionKey)
-			if settingsErr != nil {
-				log.Printf("decrypt LLM API key for %s: %v", job.file.RelativePath, settingsErr)
-				return
-			}
-		}
-		analyzer = NewLLMAnalyzer(settings.LLMAPIBaseURL, apiKey, settings.LLMModel,
+		analyzer = NewLLMAnalyzer(settings.LLMAPIBaseURL, s.config.LLMAPIKey, settings.LLMModel,
 			time.Duration(settings.LLMTimeoutSeconds)*time.Second, settings.LLMMaxMatches, settings.LLMMaxInputBytes)
 	}
 	if job.ownerOpenID != "" {

@@ -34,7 +34,6 @@ type Config struct {
 	LLMMaxInputBytes      int
 	AIMaxTokensPerFile    int
 	AIDailyTokenQuota     int64
-	ConfigEncryptionKey   string
 	FrontendDistDir       string
 	PublicBaseURL         string
 	FeishuRoleTitleRules  string
@@ -42,6 +41,11 @@ type Config struct {
 	FeishuSuperAdminNames string
 	UploadToken           string
 	UploadOwnerOpenID     string
+	HTTPReadHeaderTimeout time.Duration
+	HTTPReadTimeout       time.Duration
+	HTTPWriteTimeout      time.Duration
+	HTTPIdleTimeout       time.Duration
+	HTTPShutdownTimeout   time.Duration
 }
 
 func Load() Config {
@@ -51,40 +55,45 @@ func Load() Config {
 	}
 
 	return Config{
-		FeishuAppID:           firstNonEmpty(os.Getenv("FEISHU_APP_ID"), "cli_aac4efb073789bd0"),
-		FeishuAppSecret:       os.Getenv("FEISHU_APP_SECRET"),
-		FeishuRedirectURI:     redirectURI,
-		DatabaseURL:           os.Getenv("DATABASE_URL"),
-		StorageDir:            firstNonEmpty(os.Getenv("LOG_STORAGE_DIR"), "data/logs"),
-		MaxUploadBytes:        envInt64("MAX_UPLOAD_BYTES", 2<<30),
-		MaxFilesPerUpload:     envInt("MAX_FILES_PER_UPLOAD", 100),
-		MaxExtractBytes:       envInt64("MAX_EXTRACT_BYTES", 8<<30),
-		MaxParseWorkers:       envInt("MAX_PARSE_WORKERS", 2),
-		MaxAIWorkers:          envInt("MAX_AI_WORKERS", 1),
-		MaxParseAttempts:      envInt("MAX_PARSE_ATTEMPTS", 3),
-		MaxParsePerUser:       envInt("MAX_PARSE_PER_USER", 1),
-		MaxParsePerProject:    envInt("MAX_PARSE_PER_PROJECT", 2),
-		MaxFilesPerParseTask:  envInt("MAX_FILES_PER_PARSE_TASK", 10000),
-		MaxBytesPerParseTask:  envInt64("MAX_BYTES_PER_PARSE_TASK", 8<<30),
-		AgentAnalysisURL:      os.Getenv("AGENT_ANALYSIS_URL"),
-		AgentAnalysisToken:    os.Getenv("AGENT_ANALYSIS_TOKEN"),
-		AgentAnalysisTimeout:  time.Duration(envInt64("AGENT_ANALYSIS_TIMEOUT_SECONDS", 60)) * time.Second,
-		LLMAPIBaseURL:         os.Getenv("LLM_API_BASE_URL"),
-		LLMAPIKey:             os.Getenv("LLM_API_KEY"),
-		LLMModel:              firstNonEmpty(os.Getenv("LLM_MODEL"), "qwen-plus"),
-		LLMTimeout:            time.Duration(envInt64("LLM_TIMEOUT_SECONDS", 120)) * time.Second,
-		LLMMaxMatches:         envInt("LLM_MAX_MATCHES", 50),
-		LLMMaxInputBytes:      envInt("LLM_MAX_INPUT_BYTES", 200000),
-		AIMaxTokensPerFile:    envInt("AI_MAX_TOKENS_PER_FILE", 20000),
-		AIDailyTokenQuota:     envInt64("AI_DAILY_TOKEN_QUOTA", 1000000),
-		ConfigEncryptionKey:   os.Getenv("LOGMASTER_CONFIG_ENCRYPTION_KEY"),
-		FrontendDistDir:       firstNonEmpty(os.Getenv("FRONTEND_DIST_DIR"), "frontend/dist"),
-		PublicBaseURL:         strings.TrimRight(os.Getenv("PUBLIC_BASE_URL"), "/"),
-		FeishuRoleTitleRules:  os.Getenv("FEISHU_ROLE_TITLE_RULES"),
-		FeishuSuperAdminIDs:   os.Getenv("FEISHU_SUPER_ADMIN_OPEN_IDS"),
-		FeishuSuperAdminNames: firstNonEmpty(os.Getenv("FEISHU_SUPER_ADMIN_NAMES"), "刘欣彤"),
+		FeishuAppID:          firstNonEmpty(os.Getenv("FEISHU_APP_ID"), "cli_aac4efb073789bd0"),
+		FeishuAppSecret:      os.Getenv("FEISHU_APP_SECRET"),
+		FeishuRedirectURI:    redirectURI,
+		DatabaseURL:          os.Getenv("DATABASE_URL"),
+		StorageDir:           firstNonEmpty(os.Getenv("LOG_STORAGE_DIR"), "data/logs"),
+		MaxUploadBytes:       envInt64("MAX_UPLOAD_BYTES", 2<<30),
+		MaxFilesPerUpload:    envInt("MAX_FILES_PER_UPLOAD", 100),
+		MaxExtractBytes:      envInt64("MAX_EXTRACT_BYTES", 8<<30),
+		MaxParseWorkers:      envInt("MAX_PARSE_WORKERS", 2),
+		MaxAIWorkers:         envInt("MAX_AI_WORKERS", 1),
+		MaxParseAttempts:     envInt("MAX_PARSE_ATTEMPTS", 3),
+		MaxParsePerUser:      envInt("MAX_PARSE_PER_USER", 1),
+		MaxParsePerProject:   envInt("MAX_PARSE_PER_PROJECT", 2),
+		MaxFilesPerParseTask: envInt("MAX_FILES_PER_PARSE_TASK", 10000),
+		MaxBytesPerParseTask: envInt64("MAX_BYTES_PER_PARSE_TASK", 8<<30),
+		AgentAnalysisURL:     os.Getenv("AGENT_ANALYSIS_URL"),
+		AgentAnalysisToken:   os.Getenv("AGENT_ANALYSIS_TOKEN"),
+		AgentAnalysisTimeout: time.Duration(envInt64("AGENT_ANALYSIS_TIMEOUT_SECONDS", 60)) * time.Second,
+		LLMAPIBaseURL:        os.Getenv("LLM_API_BASE_URL"),
+		LLMAPIKey:            os.Getenv("LLM_API_KEY"),
+		LLMModel:             firstNonEmpty(os.Getenv("LLM_MODEL"), "qwen-plus"),
+		LLMTimeout:           time.Duration(envInt64("LLM_TIMEOUT_SECONDS", 120)) * time.Second,
+		LLMMaxMatches:        envInt("LLM_MAX_MATCHES", 50),
+		LLMMaxInputBytes:     envInt("LLM_MAX_INPUT_BYTES", 200000),
+		AIMaxTokensPerFile:   envInt("AI_MAX_TOKENS_PER_FILE", 20000),
+		AIDailyTokenQuota:    envInt64("AI_DAILY_TOKEN_QUOTA", 1000000),
+		FrontendDistDir:      firstNonEmpty(os.Getenv("FRONTEND_DIST_DIR"), "frontend/dist"),
+		PublicBaseURL:        strings.TrimRight(os.Getenv("PUBLIC_BASE_URL"), "/"),
+		FeishuRoleTitleRules: os.Getenv("FEISHU_ROLE_TITLE_RULES"),
+		FeishuSuperAdminIDs:  os.Getenv("FEISHU_SUPER_ADMIN_OPEN_IDS"),
+		// Empty means the first successful Feishu login becomes the initial super admin.
+		FeishuSuperAdminNames: os.Getenv("FEISHU_SUPER_ADMIN_NAMES"),
 		UploadToken:           os.Getenv("LOGMASTER_UPLOAD_TOKEN"),
 		UploadOwnerOpenID:     os.Getenv("LOGMASTER_UPLOAD_OWNER_OPEN_ID"),
+		HTTPReadHeaderTimeout: time.Duration(envInt64("HTTP_READ_HEADER_TIMEOUT_SECONDS", 10)) * time.Second,
+		HTTPReadTimeout:       time.Duration(envInt64("HTTP_READ_TIMEOUT_SECONDS", 1800)) * time.Second,
+		HTTPWriteTimeout:      time.Duration(envInt64("HTTP_WRITE_TIMEOUT_SECONDS", 600)) * time.Second,
+		HTTPIdleTimeout:       time.Duration(envInt64("HTTP_IDLE_TIMEOUT_SECONDS", 120)) * time.Second,
+		HTTPShutdownTimeout:   time.Duration(envInt64("HTTP_SHUTDOWN_TIMEOUT_SECONDS", 30)) * time.Second,
 	}
 }
 

@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+const feishuResponseLimit = 1 << 20
+
 func (s *Service) exchangeFeishuCode(code string) (string, error) {
 	if code == "" {
 		return "", fmt.Errorf("missing authorization code")
@@ -28,11 +30,11 @@ func (s *Service) exchangeFeishuCode(code string) (string, error) {
 
 	var tokenResponse feishuTokenResponse
 	if err := json.Unmarshal(rawBody, &tokenResponse); err != nil {
-		return "", fmt.Errorf("decode feishu token response failed: %w; raw: %s", err, string(rawBody))
+		return "", fmt.Errorf("decode feishu token response failed: %w", err)
 	}
 
 	if tokenResponse.Code != 0 {
-		return "", fmt.Errorf("feishu token error: %s; raw: %s", tokenResponse.Msg, string(rawBody))
+		return "", fmt.Errorf("feishu token error: %s", safeFeishuMessage(tokenResponse.Msg))
 	}
 
 	accessToken := firstNonEmpty(
@@ -45,7 +47,7 @@ func (s *Service) exchangeFeishuCode(code string) (string, error) {
 		tokenFromGenericJSON(rawBody, "access_token"),
 	)
 	if accessToken == "" {
-		return "", fmt.Errorf("feishu token error: user access token is empty; raw: %s", string(rawBody))
+		return "", fmt.Errorf("feishu token error: user access token is empty")
 	}
 
 	return accessToken, nil
@@ -65,13 +67,13 @@ func (s *Service) fetchFeishuUserInfo(accessToken string) (UserInfo, error) {
 	}
 	defer response.Body.Close()
 
-	responseBody, err := io.ReadAll(response.Body)
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, feishuResponseLimit))
 	if err != nil {
 		return UserInfo{}, err
 	}
 
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return UserInfo{}, fmt.Errorf("feishu user info http status %d: %s", response.StatusCode, string(responseBody))
+		return UserInfo{}, fmt.Errorf("feishu user info http status %d", response.StatusCode)
 	}
 
 	var userResponse feishuUserInfoResponse
@@ -118,16 +120,30 @@ func (s *Service) postFeishuJSONRaw(endpoint string, requestBody interface{}) ([
 	}
 	defer response.Body.Close()
 
-	rawBody, err := io.ReadAll(response.Body)
+	rawBody, err := io.ReadAll(io.LimitReader(response.Body, feishuResponseLimit))
 	if err != nil {
 		return nil, err
 	}
 
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, fmt.Errorf("feishu http status %d: %s", response.StatusCode, string(rawBody))
+		return nil, fmt.Errorf("feishu http status %d", response.StatusCode)
 	}
 
 	return rawBody, nil
+}
+
+func safeFeishuMessage(message string) string {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return "unknown error"
+	}
+	// Feishu normally returns a short human-readable message. Keep logs useful
+	// while preventing accidental token-sized or multiline response injection.
+	message = strings.Join(strings.Fields(message), " ")
+	if len(message) > 256 {
+		message = message[:256]
+	}
+	return message
 }
 
 func tokenFromGenericJSON(rawBody []byte, key string) string {

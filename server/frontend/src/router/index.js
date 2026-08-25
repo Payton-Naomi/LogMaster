@@ -20,6 +20,7 @@ const routes = [
         component: () => import('@/views/Dashboard.vue'), 
         meta: { title: '仪表板' } 
       },
+      { path: 'version-comparison', name: 'VersionComparison', component: () => import('@/views/VersionComparison.vue'), meta: { title: '版本变化' } },
 
       // 测试场景
       {
@@ -57,7 +58,7 @@ const routes = [
         path: 'tasks', 
         name: 'TaskList', 
         component: () => import('@/views/TaskList.vue'), 
-        meta: { title: '任务列表' } 
+        meta: { title: '分析任务' }
       },
       
       // 任务详情

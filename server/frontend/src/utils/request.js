@@ -9,6 +9,7 @@ const service = axios.create({
 // 响应拦截器
 service.interceptors.response.use(
   (response) => {
+    if (response.config.responseType === 'blob' || response.config.responseType === 'arraybuffer') return response.data
     const res = response.data
     if (res.code !== 0) {
       ElMessage.error(res.message || '请求失败')

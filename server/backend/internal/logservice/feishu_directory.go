@@ -13,9 +13,10 @@ import (
 )
 
 type collectorIdentity struct {
-	OpenID string
-	Name   string
-	Email  string
+	OpenID   string
+	Name     string
+	Email    string
+	JobTitle string
 }
 
 type feishuDirectory struct {
@@ -92,9 +93,10 @@ func (d *feishuDirectory) identityByEmail(ctx context.Context, email string) (co
 		Msg  string `json:"msg"`
 		Data struct {
 			User struct {
-				OpenID string `json:"open_id"`
-				Name   string `json:"name"`
-				Email  string `json:"email"`
+				OpenID   string `json:"open_id"`
+				Name     string `json:"name"`
+				Email    string `json:"email"`
+				JobTitle string `json:"job_title"`
 			} `json:"user"`
 		} `json:"data"`
 	}
@@ -111,7 +113,12 @@ func (d *feishuDirectory) identityByEmail(ctx context.Context, email string) (co
 	if resolvedEmail != strings.ToLower(strings.TrimSpace(email)) {
 		return collectorIdentity{}, ErrUploaderEmailNotInternal
 	}
-	return collectorIdentity{OpenID: firstNonEmptyValue(detail.Data.User.OpenID, member.UserID), Name: strings.TrimSpace(detail.Data.User.Name), Email: resolvedEmail}, nil
+	return collectorIdentity{
+		OpenID:   firstNonEmptyValue(detail.Data.User.OpenID, member.UserID),
+		Name:     strings.TrimSpace(detail.Data.User.Name),
+		Email:    resolvedEmail,
+		JobTitle: strings.TrimSpace(detail.Data.User.JobTitle),
+	}, nil
 }
 
 func (d *feishuDirectory) tenantAccessToken(ctx context.Context) (string, error) {

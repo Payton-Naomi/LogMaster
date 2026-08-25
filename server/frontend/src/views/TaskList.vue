@@ -1,7 +1,7 @@
 <template>
   <div class="tasks-page">
     <header class="page-heading">
-      <div><h1>解析任务</h1><p>跟踪日志解析进度，并进入任务详情查看文件与结果</p></div>
+      <div><h1>分析任务</h1><p>跟踪日志解析进度，并进入任务详情查看文件与结果</p></div>
       <div class="heading-actions">
         <el-tooltip content="刷新任务" placement="bottom"><el-button :icon="Refresh" :loading="loading" aria-label="刷新任务" @click="loadTasks" /></el-tooltip>
         <el-button :type="autoRefresh ? 'success' : 'default'" @click="toggleAutoRefresh">{{ autoRefresh ? '自动刷新中' : '已暂停刷新' }}</el-button>
@@ -19,20 +19,21 @@
     <section class="tasks-panel" v-loading="loading && !tasks.length">
       <div class="panel-toolbar">
         <div class="search-row">
-          <el-input v-model="keyword" :prefix-icon="Search" clearable placeholder="搜索文件名或任务 ID" />
+          <el-input v-model="keyword" :prefix-icon="Search" clearable placeholder="筛选当前页文件名或任务 ID" />
           <el-select v-model="project" clearable filterable placeholder="全部项目">
             <el-option v-for="name in projects" :key="name" :label="name" :value="name" />
           </el-select>
-          <el-select v-model="sortBy" placeholder="排序方式"><el-option label="最近更新" value="updated_desc" /><el-option label="最早更新" value="updated_asc" /><el-option label="错误最多" value="errors_desc" /><el-option label="文件最多" value="files_desc" /></el-select>
+          <el-input v-model="version" clearable placeholder="版本" />
+          <el-select v-model="sortBy" placeholder="排序方式"><el-option label="最近创建" value="updated_at" /><el-option label="最早创建" value="oldest" /><el-option label="错误最多" value="errors" /></el-select>
         </div>
-        <el-segmented v-model="status" :options="statusOptions" />
+        <div class="filter-actions"><el-segmented v-model="status" :options="statusOptions" /><el-select v-model="aiStatus" clearable placeholder="AI 状态"><el-option v-for="item in aiStatusOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></div>
       </div>
 
       <div class="list-meta">
-        <div><strong>任务列表</strong><span>{{ filteredTasks.length }} 个任务</span></div>
+        <div><strong>任务列表</strong><span>{{ totalTasks }} 个任务</span></div>
         <div class="refresh-state" :class="{ active: activeTaskCount }"><span class="state-dot" />{{ refreshStateText }}</div>
       </div>
-      <div v-if="selectedTaskIds.length" class="batch-toolbar"><span>已选择 {{ selectedTaskIds.length }} 个任务</span><el-button type="danger" size="small" @click="removeSelected">批量删除</el-button><el-button size="small" @click="selectedTaskIds = []">取消选择</el-button></div>
+      <div v-if="selectedTaskIds.length" class="batch-toolbar"><span>已选择 {{ selectedTaskIds.length }} 个任务</span><el-button size="small" @click="batchAction('retry')">批量重试</el-button><el-button size="small" @click="batchAction('cancel')">批量取消</el-button><el-button type="danger" size="small" @click="batchAction('delete')">批量删除</el-button><el-button size="small" @click="selectedTaskIds = []">取消选择</el-button></div>
 
       <el-table ref="taskTable" class="desktop-table" :data="pagedTasks" row-key="id" @row-click="openTask">
         <el-table-column width="48" align="center"><template #header><el-checkbox :model-value="pageSelected" :indeterminate="pagePartial" aria-label="选择当前页" @change="togglePageSelection" /></template><template #default="scope"><el-checkbox :model-value="selectedTaskIds.includes(scope.row.id)" aria-label="选择任务" @click.stop @change="(checked) => toggleTask(scope.row.id, checked)" /></template></el-table-column>
@@ -40,28 +41,28 @@
           <template #default="scope"><div class="task-cell"><el-icon><Document /></el-icon><div><strong>{{ scope.row.name }}</strong><span>{{ scope.row.id }}</span></div></div></template>
         </el-table-column>
         <el-table-column label="项目 / 版本" min-width="170"><template #default="scope"><div class="project-cell"><strong>{{ scope.row.project || '-' }}</strong><span>{{ scope.row.version || '未填写版本' }}</span></div></template></el-table-column>
-        <el-table-column label="状态" width="125"><template #default="scope"><el-tag :type="statusMeta[scope.row.status].type" effect="plain">{{ statusMeta[scope.row.status].label }}</el-tag><small v-if="scope.row.errorCount" class="error-count">{{ scope.row.errorCount }} 个异常</small></template></el-table-column>
+        <el-table-column label="状态" width="145"><template #default="scope"><el-tag :type="statusMeta[scope.row.status].type" effect="plain">{{ statusMeta[scope.row.status].label }}</el-tag><el-tag v-if="scope.row.aiStatus !== 'disabled'" class="ai-status-tag" :type="aiStatusMeta[scope.row.aiStatus].type" effect="plain">AI {{ aiStatusMeta[scope.row.aiStatus].label }}</el-tag><small v-if="scope.row.errorCount" class="error-count">{{ scope.row.errorCount }} 个异常</small></template></el-table-column>
         <el-table-column label="解析进度" min-width="190">
           <template #default="scope"><div class="progress-cell"><el-progress :percentage="scope.row.progress" :status="progressStatus(scope.row)" :stroke-width="7" /><span>{{ scope.row.processedFiles }} / {{ scope.row.totalFiles }} 个文件</span></div></template>
         </el-table-column>
         <el-table-column label="日志行数" min-width="110"><template #default="scope">{{ scope.row.lines.toLocaleString() }}</template></el-table-column>
         <el-table-column prop="updatedAt" label="更新时间" min-width="180" />
         <el-table-column label="操作" width="104" align="center">
-          <template #default="scope"><div class="row-actions" @click.stop><el-tooltip content="查看详情" placement="top"><el-button circle :icon="View" aria-label="查看详情" @click="openTask(scope.row)" /></el-tooltip><el-tooltip content="删除任务" placement="top"><el-button circle type="danger" plain :icon="Delete" aria-label="删除任务" @click="removeTask(scope.row)" /></el-tooltip></div></template>
+          <template #default="scope"><div class="row-actions" @click.stop><el-tooltip content="查看详情" placement="top"><el-button circle :icon="View" aria-label="查看详情" @click="openTask(scope.row)" /></el-tooltip><el-tooltip v-if="scope.row.status === 'failed'" content="重新解析" placement="top"><el-button circle type="warning" plain :icon="Refresh" aria-label="重新解析" @click="runTaskAction('retry', scope.row)" /></el-tooltip><el-tooltip v-if="['queued', 'running', 'paused'].includes(scope.row.status)" :content="scope.row.status === 'paused' ? '恢复任务' : '暂停任务'" placement="top"><el-button circle plain :icon="scope.row.status === 'paused' ? VideoPlay : VideoPause" :aria-label="scope.row.status === 'paused' ? '恢复任务' : '暂停任务'" @click="runTaskAction(scope.row.status === 'paused' ? 'resume' : 'pause', scope.row)" /></el-tooltip><el-tooltip content="删除任务" placement="top"><el-button circle type="danger" plain :icon="Delete" aria-label="删除任务" @click="removeTask(scope.row)" /></el-tooltip></div></template>
         </el-table-column>
-        <template #empty><div class="empty-state"><el-empty :description="hasFilters ? '没有符合条件的解析任务' : '还没有解析任务'" /><el-button v-if="!hasFilters" type="primary" :icon="Upload" @click="router.push('/upload')">上传第一份日志</el-button></div></template>
+        <template #empty><div class="empty-state"><el-empty :description="hasFilters ? '没有符合条件的分析任务' : '还没有分析任务'" /><el-button v-if="!hasFilters" type="primary" :icon="Upload" @click="router.push('/upload')">上传第一份日志</el-button></div></template>
       </el-table>
 
       <div class="mobile-list">
         <article v-for="task in pagedTasks" :key="task.id" class="task-card" @click="openTask(task)">
           <div class="task-card-head"><el-checkbox :model-value="selectedTaskIds.includes(task.id)" aria-label="选择任务" @click.stop @change="(checked) => toggleTask(task.id, checked)" /><div class="task-icon"><el-icon><Document /></el-icon></div><div class="task-title"><strong>{{ task.name }}</strong><span>{{ task.project || '-' }} · {{ task.version || '未填写版本' }}</span></div><el-tag :type="statusMeta[task.status].type" effect="plain">{{ statusMeta[task.status].label }}</el-tag></div>
           <div class="mobile-progress"><el-progress :percentage="task.progress" :status="progressStatus(task)" :stroke-width="7" /><span>{{ task.processedFiles }} / {{ task.totalFiles }} 个文件 · {{ task.lines.toLocaleString() }} 行</span></div>
-          <div class="task-card-foot"><time>{{ task.updatedAt }}</time><div @click.stop><el-button type="primary" link :icon="View" @click="openTask(task)">查看</el-button><el-button type="danger" link :icon="Delete" @click="removeTask(task)">删除</el-button></div></div>
+          <div class="task-card-foot"><time>{{ task.updatedAt }}</time><div @click.stop><el-button type="primary" link :icon="View" @click="openTask(task)">查看</el-button><el-button v-if="task.status === 'failed'" type="warning" link :icon="Refresh" @click="runTaskAction('retry', task)">重试</el-button><el-button type="danger" link :icon="Delete" @click="removeTask(task)">删除</el-button></div></div>
         </article>
-        <div v-if="!pagedTasks.length" class="mobile-empty"><el-empty :description="hasFilters ? '没有符合条件的解析任务' : '还没有解析任务'" /></div>
+        <div v-if="!pagedTasks.length" class="mobile-empty"><el-empty :description="hasFilters ? '没有符合条件的分析任务' : '还没有分析任务'" /></div>
       </div>
 
-      <footer v-if="filteredTasks.length"><span>共 {{ filteredTasks.length }} 个任务</span><el-pagination v-model:current-page="page" :page-size="pageSize" :total="filteredTasks.length" :pager-count="5" layout="prev, pager, next" /></footer>
+      <footer v-if="totalTasks"><span>共 {{ totalTasks }} 个任务</span><el-pagination v-model:current-page="page" :page-size="pageSize" :total="totalTasks" :pager-count="5" layout="prev, pager, next" @current-change="loadTasks" /></footer>
     </section>
   </div>
 </template>
@@ -70,8 +71,8 @@
 import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
-import { CircleCheck, Delete, Document, Files, Loading, Refresh, Search, Upload, View, Warning } from '@element-plus/icons-vue'
-import { deleteTask, getTasks } from '@/api/task'
+import { CircleCheck, Delete, Document, Files, Loading, Refresh, Search, Upload, View, VideoPause, VideoPlay, Warning } from '@element-plus/icons-vue'
+import { batchTaskAction, cancelTask, deleteTask, getTasks, pauseTask, retryTask, resumeTask } from '@/api/task'
 import { getProjects } from '@/api/log'
 
 const router = useRouter()
@@ -81,14 +82,19 @@ const tasks = ref([])
 const loading = ref(false)
 const keyword = ref('')
 const project = ref('')
+const version = ref('')
 const status = ref(['active', 'completed', 'failed'].includes(route.query.status) ? route.query.status : 'all')
-const sortBy = ref('updated_desc')
+const aiStatus = ref('')
+const dateFilter = ref(route.query.date === 'today' ? 'today' : '')
+const errorsFilter = ref(route.query.errors === '1')
+const sortBy = ref('updated_at')
 const autoRefresh = ref(true)
 const selectedTaskIds = ref([])
 const page = ref(1)
 const lastUpdated = ref('')
 const projects = ref([])
-const pageSize = 10
+const pageSize = 20
+const totalTasks = ref(0)
 let refreshTimer = null
 let stopped = false
 let focusedTaskId = ''
@@ -97,8 +103,10 @@ const previousStatuses = new Map()
 const statusMeta = {
   queued: { label: '排队中', type: 'info' },
   running: { label: '解析中', type: 'primary' },
+  paused: { label: '已暂停', type: 'warning' },
   completed: { label: '已完成', type: 'success' },
-  failed: { label: '失败', type: 'danger' }
+  failed: { label: '失败', type: 'danger' },
+  cancelled: { label: '已取消', type: 'info' }
 }
 const statusOptions = [
   { label: '全部', value: 'all' },
@@ -106,8 +114,20 @@ const statusOptions = [
   { label: '已完成', value: 'completed' },
   { label: '失败', value: 'failed' }
 ]
+const aiStatusOptions = [
+  { label: '排队中', value: 'queued' },
+  { label: '分析中', value: 'running' },
+  { label: '已完成', value: 'completed' },
+  { label: '部分失败', value: 'partial_failed' },
+  { label: '失败', value: 'failed' },
+  { label: '已取消', value: 'cancelled' },
+  { label: '未启用', value: 'disabled' }
+]
+const aiStatusMeta = {
+  disabled: { label: '未启用', type: 'info' }, queued: { label: '排队中', type: 'warning' }, running: { label: '分析中', type: 'primary' }, completed: { label: '完成', type: 'success' }, partial_failed: { label: '部分失败', type: 'warning' }, failed: { label: '失败', type: 'danger' }, cancelled: { label: '已取消', type: 'info' }
+}
 
-const normalizeStatus = (value) => ({ uploading: 'queued', queued: 'queued', parsing: 'running', completed: 'completed', failed: 'failed' })[value] || 'queued'
+const normalizeStatus = (value) => ({ uploading: 'queued', queued: 'queued', parsing: 'running', running: 'running', paused: 'paused', cancelled: 'cancelled', completed: 'completed', failed: 'failed' })[value] || 'queued'
 const formatDate = (value) => new Date(value).toLocaleString('zh-CN', { hour12: false })
 const clampProgress = (value) => Math.max(0, Math.min(100, Number(value) || 0))
 const mapTask = (item) => ({
@@ -121,6 +141,7 @@ const mapTask = (item) => ({
   progress: clampProgress(item.progress),
   status: normalizeStatus(item.status),
   rawStatus: item.status,
+  aiStatus: item.ai_status || 'disabled',
   lines: item.total_lines || 0,
   updatedAt: formatDate(item.updated_at),
   rawUpdatedAt: item.updated_at,
@@ -130,7 +151,7 @@ const mapTask = (item) => ({
 
 const activeTaskCount = computed(() => tasks.value.filter((item) => item.status === 'queued' || item.status === 'running').length)
 const summary = computed(() => [
-  { label: '全部任务', value: tasks.value.length, tone: 'blue', icon: markRaw(Files) },
+  { label: '全部任务', value: totalTasks.value, tone: 'blue', icon: markRaw(Files) },
   { label: '处理中', value: activeTaskCount.value, tone: 'gold', icon: markRaw(Loading) },
   { label: '已完成', value: tasks.value.filter((item) => item.status === 'completed').length, tone: 'green', icon: markRaw(CircleCheck) },
   { label: '失败', value: tasks.value.filter((item) => item.status === 'failed').length, tone: 'red', icon: markRaw(Warning) }
@@ -138,20 +159,18 @@ const summary = computed(() => [
 const refreshStateText = computed(() => autoRefresh.value && activeTaskCount.value ? `自动刷新 · ${activeTaskCount.value} 个处理中` : lastUpdated.value ? `更新于 ${lastUpdated.value}` : '等待刷新')
 const filteredTasks = computed(() => {
   const search = keyword.value.trim().toLowerCase()
-  const filtered = tasks.value.filter((item) => {
-    const matchesStatus = status.value === 'all' || (status.value === 'active' ? item.status === 'queued' || item.status === 'running' : item.status === status.value)
-    return matchesStatus && (!project.value || item.project === project.value) && (!search || item.searchable.includes(search))
-  })
-  return filtered.sort((a, b) => {
-    if (sortBy.value === 'errors_desc') return b.errorCount - a.errorCount
-    if (sortBy.value === 'files_desc') return b.totalFiles - a.totalFiles
-    const left = Date.parse(a.rawUpdatedAt) || 0
-    const right = Date.parse(b.rawUpdatedAt) || 0
-    return sortBy.value === 'updated_asc' ? left - right : right - left
+  return tasks.value.filter((item) => {
+    const matchesStatus = status.value === 'all' || (status.value === 'active' ? ['queued', 'running'].includes(item.status) : item.status === status.value)
+    const matchesProject = !project.value || item.project === project.value
+    const matchesVersion = !version.value || item.version === version.value
+    const matchesAi = !aiStatus.value || item.aiStatus === aiStatus.value
+    const matchesDate = dateFilter.value !== 'today' || new Date(item.rawUpdatedAt || 0).toDateString() === new Date().toDateString()
+    const matchesErrors = !errorsFilter.value || item.errorCount > 0
+    return matchesStatus && matchesProject && matchesVersion && matchesAi && matchesDate && matchesErrors && (!search || item.searchable.includes(search))
   })
 })
-const pagedTasks = computed(() => filteredTasks.value.slice((page.value - 1) * pageSize, page.value * pageSize))
-const hasFilters = computed(() => Boolean(keyword.value.trim() || project.value || status.value !== 'all'))
+const pagedTasks = computed(() => filteredTasks.value)
+const hasFilters = computed(() => Boolean(keyword.value.trim() || project.value || version.value || aiStatus.value || status.value !== 'all'))
 const progressStatus = (task) => task.status === 'failed' ? 'exception' : task.status === 'completed' ? 'success' : ''
 const pageIds = computed(() => pagedTasks.value.map(item => item.id))
 const pageSelected = computed(() => pageIds.value.length > 0 && pageIds.value.every(id => selectedTaskIds.value.includes(id)))
@@ -175,13 +194,9 @@ async function loadTasks() {
 	if (loading.value) return
   loading.value = true
   try {
-	const first = await getTasks({ page: 1, page_size: 200 })
-	const pages = Math.ceil(first.total / 200)
-	const remaining = pages > 1
-	  ? await Promise.all(Array.from({ length: pages - 1 }, (_, index) => getTasks({ page: index + 2, page_size: 200 })))
-	  : []
-	const items = [first, ...remaining].flatMap((data) => data.list)
-	const mapped = items.map(mapTask)
+	const response = await getTasks({ page: page.value, page_size: pageSize, status: status.value === 'all' ? undefined : status.value === 'active' ? undefined : status.value, project: project.value || undefined, version: version.value || undefined, sort: sortBy.value, ai_status: aiStatus.value || undefined })
+	const mapped = (response.list || []).map(mapTask)
+	totalTasks.value = Number(response.total || 0)
 	if (previousStatuses.size) {
 	  mapped.forEach((item) => {
 	    const previous = previousStatuses.get(item.id)
@@ -222,12 +237,24 @@ function openTask(task) {
 }
 async function removeTask(task) {
   try {
-    await ElMessageBox.confirm(`将永久删除“${task.name}”、关联日志文件及全部分析结果。`, '删除解析任务', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' })
+    await ElMessageBox.confirm(`将永久删除“${task.name}”、关联日志文件及全部分析结果。`, '删除分析任务', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' })
     await deleteTask(task.id)
-    ElMessage.success('解析任务已删除')
+    ElMessage.success('分析任务已删除')
     await loadTasks()
   } catch (error) {
     if (error !== 'cancel' && error !== 'close') ElMessage.error('删除失败，请稍后重试')
+  }
+}
+async function runTaskAction(action, task) {
+  try {
+    const labels = { retry: '重新解析', cancel: '取消任务', pause: '暂停任务', resume: '恢复任务' }
+    if (action === 'cancel' || action === 'pause') await ElMessageBox.confirm(`确认${labels[action]}“${task.name}”？`, labels[action], { type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消' })
+    const actions = { retry: retryTask, cancel: cancelTask, pause: pauseTask, resume: resumeTask }
+    await actions[action](task.id)
+    ElMessage.success(`${labels[action]}请求已提交`)
+    await loadTasks()
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(error?.response?.data?.message || `${action}操作失败，请稍后重试`)
   }
 }
 function toggleTask(id, checked) {
@@ -240,11 +267,22 @@ async function removeSelected() {
   if (!selectedTaskIds.value.length) return
   try {
     await ElMessageBox.confirm(`将永久删除选中的 ${selectedTaskIds.value.length} 个任务及其分析结果。`, '批量删除任务', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' })
-    for (const id of selectedTaskIds.value) await deleteTask(id)
+    await batchTaskAction('delete', selectedTaskIds.value)
     selectedTaskIds.value = []
     ElMessage.success('选中任务已删除')
     await loadTasks()
   } catch (error) { if (error !== 'cancel' && error !== 'close') ElMessage.error('批量删除失败，请稍后重试') }
+}
+async function batchAction(action) {
+  if (!selectedTaskIds.value.length) return
+  const labels = { retry: '批量重试', cancel: '批量取消', delete: '批量删除' }
+  try {
+    await ElMessageBox.confirm(`确认对选中的 ${selectedTaskIds.value.length} 个任务执行${labels[action]}？`, labels[action], { type: action === 'delete' ? 'warning' : 'info', confirmButtonText: '确认', cancelButtonText: '取消' })
+    const result = await batchTaskAction(action, selectedTaskIds.value)
+    selectedTaskIds.value = []
+    ElMessage.success(result?.message || `${labels[action]}请求已提交`)
+    await loadTasks()
+  } catch (error) { if (error !== 'cancel' && error !== 'close') ElMessage.error(error?.response?.data?.message || `${labels[action]}失败，请稍后重试`) }
 }
 async function loadProjects() {
   try { projects.value = await getProjects() || [] }
@@ -262,8 +300,10 @@ watch(() => route.query.status, (value) => {
   const next = typeof value === 'string' ? value : ''
   status.value = ['active', 'completed', 'failed'].includes(next) ? next : 'all'
 })
-watch([keyword, project, status], () => { page.value = 1 })
-watch(() => filteredTasks.value.length, (length) => { page.value = Math.min(page.value, Math.max(1, Math.ceil(length / pageSize))) })
+watch(() => route.query.date, (value) => { dateFilter.value = value === 'today' ? 'today' : '' })
+watch(() => route.query.errors, (value) => { errorsFilter.value = value === '1' })
+watch([project, version, status, sortBy, aiStatus], () => { page.value = 1; loadTasks() })
+watch(keyword, () => { page.value = 1 })
 onBeforeUnmount(() => {
 	stopped = true
 	window.clearTimeout(refreshTimer)
@@ -307,6 +347,47 @@ html[data-log-theme="light"] .tasks-page .panel-toolbar .el-segmented__item.is-s
 html[data-log-theme="light"] .tasks-page .panel-toolbar .el-segmented__item.is-selected .el-segmented__item-label {
   color: #064f60 !important;
 }
+</style>
+
+<style>
+html[data-log-theme="light"] .tasks-page {
+  background: radial-gradient(circle at 50% 8%, rgba(255,255,255,.64), transparent 34%), linear-gradient(145deg, rgba(215,231,235,.82), rgba(239,246,247,.72) 48%, rgba(198,217,223,.84)) !important;
+  color: #17303b !important;
+}
+html[data-log-theme="light"] .tasks-page .page-heading,
+html[data-log-theme="light"] .tasks-page .summary-item,
+html[data-log-theme="light"] .tasks-page .tasks-panel,
+html[data-log-theme="light"] .tasks-page .task-card {
+  background: linear-gradient(145deg, rgba(255,255,255,.5), rgba(224,240,244,.28)) !important;
+  border-color: rgba(67,98,112,.24) !important;
+  box-shadow: inset 0 1px rgba(255,255,255,.82), 0 18px 48px rgba(35,67,83,.16) !important;
+}
+html[data-log-theme="light"] .tasks-page .page-heading h1,
+html[data-log-theme="light"] .tasks-page .summary-item strong,
+html[data-log-theme="light"] .tasks-page .list-meta strong,
+html[data-log-theme="light"] .tasks-page .task-cell strong,
+html[data-log-theme="light"] .tasks-page .project-cell strong,
+html[data-log-theme="light"] .tasks-page .task-title strong { color: #17303b !important; }
+html[data-log-theme="light"] .tasks-page .page-heading p,
+html[data-log-theme="light"] .tasks-page .summary-item span,
+html[data-log-theme="light"] .tasks-page .task-cell span,
+html[data-log-theme="light"] .tasks-page .project-cell span,
+html[data-log-theme="light"] .tasks-page .progress-cell > span,
+html[data-log-theme="light"] .tasks-page .list-meta span,
+html[data-log-theme="light"] .tasks-page .refresh-state,
+html[data-log-theme="light"] .tasks-page footer,
+html[data-log-theme="light"] .tasks-page .task-card-foot time { color: #55727d !important; }
+html[data-log-theme="light"] .tasks-page .panel-toolbar { background: rgba(218,236,240,.32) !important; border-bottom-color: rgba(67,98,112,.18) !important; }
+html[data-log-theme="light"] .tasks-page .search-row .el-input__wrapper,
+html[data-log-theme="light"] .tasks-page .search-row .el-select__wrapper { background: rgba(255,255,255,.82) !important; box-shadow: 0 0 0 1px rgba(67,98,112,.24) inset !important; }
+html[data-log-theme="light"] .tasks-page .search-row input { color: #17303b !important; }
+html[data-log-theme="light"] .tasks-page .search-row input::placeholder { color: #718894 !important; }
+html[data-log-theme="light"] .tasks-page .desktop-table { --el-table-text-color: #263d47; --el-table-header-text-color: #55727d; --el-table-header-bg-color: rgba(67,98,112,.08); --el-table-border-color: rgba(67,98,112,.16); }
+html[data-log-theme="light"] .tasks-page .desktop-table th.el-table__cell { background: rgba(67,98,112,.08) !important; color: #55727d !important; }
+html[data-log-theme="light"] .tasks-page .desktop-table td.el-table__cell { color: #263d47 !important; border-bottom-color: rgba(67,98,112,.14) !important; }
+html[data-log-theme="light"] .tasks-page .desktop-table .current-row > td.el-table__cell,
+html[data-log-theme="light"] .tasks-page .desktop-table .el-table__row:hover > td.el-table__cell { color: #17303b !important; background: rgba(6,150,180,.12) !important; }
+html[data-log-theme="light"] .tasks-page .row-actions .el-button { background: rgba(255,255,255,.72) !important; border-color: rgba(67,98,112,.22) !important; color: #416574 !important; }
 </style>
 
 <style scoped>

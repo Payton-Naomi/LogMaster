@@ -51,21 +51,22 @@ type UploadSessionRequest struct {
 }
 
 type UploadSession struct {
-	ID              string    `json:"upload_session_id"`
-	QueryCode       string    `json:"query_code"`
-	ClientRequestID string    `json:"client_request_id"`
-	ProjectID       string    `json:"project_id"`
-	ProjectName     string    `json:"project_name"`
-	Version         string    `json:"version"`
-	TestTaskID      string    `json:"test_task_id"`
-	TestTaskName    string    `json:"test_task_name"`
-	UploaderName    string    `json:"uploader_name"`
-	UploaderEmail   string    `json:"uploader_email"`
-	UploaderID      string    `json:"uploader_id"`
-	StorageRoot     string    `json:"-"`
-	ConfigSnapshot  []byte    `json:"-"`
-	Status          string    `json:"status"`
-	CreatedAt       time.Time `json:"created_at"`
+	ID               string    `json:"upload_session_id"`
+	QueryCode        string    `json:"query_code"`
+	ClientRequestID  string    `json:"client_request_id"`
+	ProjectID        string    `json:"project_id"`
+	ProjectName      string    `json:"project_name"`
+	Version          string    `json:"version"`
+	TestTaskID       string    `json:"test_task_id"`
+	TestTaskName     string    `json:"test_task_name"`
+	UploaderName     string    `json:"uploader_name"`
+	UploaderEmail    string    `json:"uploader_email"`
+	UploaderID       string    `json:"uploader_id"`
+	UploaderJobTitle string    `json:"uploader_job_title"`
+	StorageRoot      string    `json:"-"`
+	ConfigSnapshot   []byte    `json:"-"`
+	Status           string    `json:"status"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 func (s *Service) uploadRequestHandler(w http.ResponseWriter, r *http.Request) {
@@ -156,6 +157,7 @@ func (s *Service) uploadSessionHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	session.UploaderJobTitle = identity.JobTitle
 	response.JSONStatus(w, http.StatusCreated, response.APIResponse{Code: 0, Message: "upload session created", Data: session})
 }
 

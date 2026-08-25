@@ -47,6 +47,44 @@ func TestExtractEncryptedZIPWithDefaultPassword(t *testing.T) {
 	}
 }
 
+func TestExtractUnencryptedZIPWithoutPassword(t *testing.T) {
+	root := t.TempDir()
+	archivePath := filepath.Join(root, "logs.zip")
+	archive, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := zip.NewWriter(archive)
+	entry, err := writer.Create("device/system.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := entry.Write([]byte("INFO no password needed\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := collectLogFilesWithPasswords(archivePath, filepath.Join(root, "upload"), 1024*1024, []string{"unused-password"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("file count = %d, want 1", len(files))
+	}
+	content, err := os.ReadFile(filepath.Join(root, "upload", filepath.FromSlash(files[0].RelativePath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "INFO no password needed\n" {
+		t.Fatalf("unexpected content: %q", content)
+	}
+}
+
 func TestSafeArchiveNameAcceptsRootedEntry(t *testing.T) {
 	clean, err := safeArchiveName("/logfile_0")
 	if err != nil {

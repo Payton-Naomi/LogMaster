@@ -144,7 +144,9 @@ func (s *Service) userInfoHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user.Role = role
-	_ = s.db.QueryRowContext(r.Context(), `SELECT role_source, job_title FROM logmaster_api.users WHERE feishu_open_id = $1`, user.FeishuOpenID).Scan(&user.RoleSource, &user.JobTitle)
+	_ = s.db.QueryRowContext(r.Context(), `SELECT role_source, job_title, identity_type, external_company
+		FROM logmaster_api.users WHERE feishu_open_id = $1`, user.FeishuOpenID).
+		Scan(&user.RoleSource, &user.JobTitle, &user.IdentityType, &user.Company)
 
 	response.JSON(w, response.APIResponse{
 		Code:    0,

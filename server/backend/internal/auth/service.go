@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"logmaster-agent/internal/config"
+	"logmaster-agent/internal/rolepolicy"
 )
 
 type Service struct {
@@ -65,7 +66,9 @@ func (s *Service) saveUser(ctx context.Context, user UserInfo) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !hasSuperAdmin {
+	// An explicit name list always wins for matching Feishu users. When the list
+	// is empty, bootstrap only the first user while no super admin exists.
+	if s.isConfiguredSuperAdmin(user.FeishuOpenID, user.Name) || (strings.TrimSpace(s.config.FeishuSuperAdminNames) == "" && strings.TrimSpace(s.config.FeishuSuperAdminIDs) == "" && !hasSuperAdmin) {
 		if err := tx.QueryRowContext(ctx, `UPDATE logmaster_api.users
 			SET role = 'super_admin', role_source = 'manual', updated_at = NOW()
 			WHERE feishu_open_id = $1
@@ -81,43 +84,16 @@ func (s *Service) saveUser(ctx context.Context, user UserInfo) (string, error) {
 }
 
 func (s *Service) roleForJobTitle(jobTitle string) string {
-	for _, rule := range strings.Split(s.config.FeishuRoleTitleRules, ";") {
-		parts := strings.SplitN(rule, "=", 2)
-		if len(parts) != 2 || !strings.Contains(strings.ToLower(jobTitle), strings.ToLower(strings.TrimSpace(parts[0]))) {
-			continue
-		}
-		role := strings.TrimSpace(parts[1])
-		if role == "developer" || role == "admin" || role == "user" {
-			return role
-		}
-	}
-	return "user"
+	return rolepolicy.ForJobTitle(jobTitle)
 }
 
 func (s *Service) roleForFeishuUser(openID, name, jobTitle string) string {
-	for _, id := range strings.Split(s.config.FeishuSuperAdminIDs, ",") {
-		if strings.TrimSpace(id) == openID && openID != "" {
-			return "super_admin"
-		}
-	}
-	for _, configuredName := range strings.Split(s.config.FeishuSuperAdminNames, ",") {
-		if strings.TrimSpace(configuredName) != "" && strings.TrimSpace(configuredName) == strings.TrimSpace(name) {
-			return "super_admin"
-		}
-	}
 	return s.roleForJobTitle(jobTitle)
 }
 
 func (s *Service) userRole(ctx context.Context, openID string) (string, error) {
-	var role, name, roleSource string
-	if err := s.db.QueryRowContext(ctx, `SELECT role, name, role_source FROM logmaster_api.users WHERE feishu_open_id = $1`, openID).Scan(&role, &name, &roleSource); err != nil {
-		return "", err
-	}
-	if roleSource != "feishu" || !s.isConfiguredSuperAdminName(name) || role == "super_admin" {
-		return role, nil
-	}
-	if err := s.db.QueryRowContext(ctx, `UPDATE logmaster_api.users SET role = 'super_admin', updated_at = NOW()
-		WHERE feishu_open_id = $1 RETURNING role`, openID).Scan(&role); err != nil {
+	var role string
+	if err := s.db.QueryRowContext(ctx, `SELECT role FROM logmaster_api.users WHERE feishu_open_id = $1`, openID).Scan(&role); err != nil {
 		return "", err
 	}
 	return role, nil
@@ -132,6 +108,21 @@ func (s *Service) isConfiguredSuperAdminName(name string) bool {
 	return false
 }
 
+func (s *Service) isConfiguredSuperAdmin(openID, name string) bool {
+	for _, configuredID := range strings.Split(s.config.FeishuSuperAdminIDs, ",") {
+		if strings.TrimSpace(configuredID) != "" && strings.TrimSpace(configuredID) == strings.TrimSpace(openID) {
+			return true
+		}
+	}
+	return s.isConfiguredSuperAdminName(name)
+}
+
+// UserRoleResolver is intentionally read-only. Admin permission checks must
+// never bootstrap or modify roles as a side effect of a GET request.
+func (s *Service) UserRoleResolver(ctx context.Context, openID string) (string, error) {
+	return s.userRole(ctx, openID)
+}
+
 func (s *Service) recordRuntimeLog(ctx context.Context, ownerOpenID, event, status, message string) {
 	_, _ = s.db.ExecContext(ctx, `INSERT INTO logmaster_api.runtime_logs
 		(owner_open_id, module, event, status, message)
@@ -142,6 +133,10 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/feishu-url", s.feishuURLHandler)
 	mux.HandleFunc("/api/auth/feishu-login", s.feishuLoginHandler)
 	mux.HandleFunc("/api/auth/callback", s.authCallbackHandler)
+	mux.HandleFunc("/api/auth/external/register", s.externalRegisterHandler)
+	mux.HandleFunc("/api/auth/external/login", s.externalLoginHandler)
+	mux.HandleFunc("/api/auth/external/change-password", s.externalChangePasswordHandler)
+	mux.HandleFunc("/api/auth/external/change-email", s.externalChangeEmailHandler)
 	mux.HandleFunc("/api/auth/logout", s.logoutHandler)
 	mux.HandleFunc("/api/auth/me", s.userInfoHandler)
 	mux.HandleFunc("/api/user/info", s.userInfoHandler)
