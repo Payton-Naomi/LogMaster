@@ -42,5 +42,13 @@ coverage.out
 # AI tools
 .trae/
 .workbuddy/server/backend/start.ps1
+.gocache-job-title
+.gocache-role-policy
+
+
+.gocache-*/
+server/backend/.gocache-*/
+
+.workbuddy/
 
 .workbuddy/

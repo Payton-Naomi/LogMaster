@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"logmaster-agent/internal/rolepolicy"
 )
 
 type Repository struct{ db *sql.DB }
@@ -249,10 +251,14 @@ var (
 )
 
 func (r *Repository) UpsertCollectorIdentity(ctx context.Context, identity collectorIdentity) error {
-	_, err := r.db.ExecContext(ctx, `INSERT INTO logmaster_api.users (feishu_open_id, name, email, role, role_source)
-		VALUES ($1,$2,$3,'user','feishu')
-		ON CONFLICT (feishu_open_id) DO UPDATE SET name=EXCLUDED.name,email=EXCLUDED.email,updated_at=NOW()`,
-		identity.OpenID, identity.Name, identity.Email)
+	role := rolepolicy.ForJobTitle(identity.JobTitle)
+	_, err := r.db.ExecContext(ctx, `INSERT INTO logmaster_api.users (feishu_open_id, name, email, job_title, role, role_source)
+		VALUES ($1,$2,$3,$4,$5,'feishu')
+		ON CONFLICT (feishu_open_id) DO UPDATE SET name=EXCLUDED.name,email=EXCLUDED.email,
+			job_title=EXCLUDED.job_title,
+			role=CASE WHEN logmaster_api.users.role_source='feishu' THEN EXCLUDED.role ELSE logmaster_api.users.role END,
+			updated_at=NOW()`,
+		identity.OpenID, identity.Name, identity.Email, identity.JobTitle, role)
 	return err
 }
 
@@ -2006,13 +2012,12 @@ type TaskOverviewRecord struct {
 
 func (r *Repository) AIAnalysisSettings(ctx context.Context, fallback AIAnalysisSettings) (AIAnalysisSettings, error) {
 	settings := fallback
-	err := r.db.QueryRowContext(ctx, `SELECT COALESCE(NULLIF(llm_api_base_url,''),$1), llm_api_key_encrypted,
-		COALESCE(NULLIF(llm_model,''),$2), COALESCE(NULLIF(llm_timeout_seconds,0),$3),
-		COALESCE(NULLIF(llm_max_matches,0),$4), COALESCE(NULLIF(llm_max_input_bytes,0),$5),
+	err := r.db.QueryRowContext(ctx, `SELECT COALESCE(NULLIF(llm_timeout_seconds,0),$1),
+		COALESCE(NULLIF(llm_max_matches,0),$2), COALESCE(NULLIF(llm_max_input_bytes,0),$3),
 		max_tokens_per_file, daily_token_quota FROM logmaster_api.ai_analysis_config WHERE singleton = TRUE`,
-		fallback.LLMAPIBaseURL, fallback.LLMModel, fallback.LLMTimeoutSeconds, fallback.LLMMaxMatches, fallback.LLMMaxInputBytes).
-		Scan(&settings.LLMAPIBaseURL, &settings.LLMAPIKeyEncrypted, &settings.LLMModel, &settings.LLMTimeoutSeconds,
-			&settings.LLMMaxMatches, &settings.LLMMaxInputBytes, &settings.MaxTokensPerFile, &settings.DailyTokenQuota)
+		fallback.LLMTimeoutSeconds, fallback.LLMMaxMatches, fallback.LLMMaxInputBytes).
+		Scan(&settings.LLMTimeoutSeconds, &settings.LLMMaxMatches, &settings.LLMMaxInputBytes,
+			&settings.MaxTokensPerFile, &settings.DailyTokenQuota)
 	if errors.Is(err, sql.ErrNoRows) {
 		return settings, nil
 	}

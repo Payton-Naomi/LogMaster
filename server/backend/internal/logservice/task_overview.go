@@ -6,8 +6,6 @@ import (
 	"log"
 	"strings"
 	"time"
-
-	"logmaster-agent/internal/securevalue"
 )
 
 const taskOverviewMaxTokens = 4000
@@ -117,18 +115,10 @@ func (s *Service) taskOverviewAnalyzer(settings AIAnalysisSettings) (*LLMAnalyze
 	if strings.TrimSpace(settings.LLMAPIBaseURL) == "" {
 		return nil, "llm", fmt.Errorf("AI analysis is not configured")
 	}
-	apiKey := s.config.LLMAPIKey
-	var err error
-	if settings.LLMAPIKeyEncrypted != "" {
-		apiKey, err = securevalue.Decrypt(settings.LLMAPIKeyEncrypted, s.config.ConfigEncryptionKey)
-		if err != nil {
-			return nil, "llm", fmt.Errorf("decrypt AI API key: %w", err)
-		}
-	}
 	timeout := time.Duration(settings.LLMTimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = s.config.LLMTimeout
 	}
-	return NewLLMAnalyzer(settings.LLMAPIBaseURL, apiKey, settings.LLMModel, timeout,
+	return NewLLMAnalyzer(settings.LLMAPIBaseURL, s.config.LLMAPIKey, settings.LLMModel, timeout,
 		settings.LLMMaxMatches, settings.LLMMaxInputBytes), "llm", nil
 }
