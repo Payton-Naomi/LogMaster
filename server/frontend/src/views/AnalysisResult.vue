@@ -1,8 +1,9 @@
 <template>
-  <div class="page analysis-page" v-loading="loading">
+  <div class="page analysis-page" :class="{ 'is-loading': loading }">
+    <div v-if="loading" class="loading-progress" aria-hidden="true" />
     <header class="page-heading">
-      <div class="title"><el-button text circle :icon="ArrowLeft" title="返回任务详情" @click="router.push(`/task/${taskId}`)" /><div><h1>解析结果</h1><p>{{ task.original_name || taskId }}</p></div></div>
-      <div class="heading-actions"><el-tag v-if="task.scenario_name" effect="plain">{{ task.scenario_name }}</el-tag><el-button v-if="agentResults.length" :loading="agentActionLoading" @click="retryAgentAnalysis">重试 AI</el-button><el-button v-if="agentResults.length" :icon="Download" @click="downloadAgentResults">下载 AI 分析结果</el-button><el-button v-if="agentLoading || ['queued','running'].includes(task.ai_status)" type="warning" plain @click="cancelAgentAnalysis">取消 AI</el-button><el-button :icon="Download" :disabled="!taskId" @click="downloadArtifact('original')">下载原始日志包</el-button><el-button :icon="Download" :disabled="!taskId" @click="downloadArtifact('batch')">下载解析文件包</el-button><el-button :icon="Download" :disabled="!taskId" @click="downloadArtifact('analysis')">下载分析结果</el-button></div>
+      <div class="title"><el-button text circle :icon="ArrowLeft" title="返回任务详情" @click="router.push(`/task/${taskId}`)" /><div><h1>解析结果</h1><p>{{ selectedFilePath || task.original_name || taskId }}</p></div></div>
+      <div class="heading-actions"><el-tag v-if="task.scenario_name" effect="plain">{{ task.scenario_name }}</el-tag><el-button :loading="agentActionLoading" @click="retryAgentAnalysis">重试 AI</el-button><el-button v-if="agentResults.length" :icon="Download" @click="downloadAgentResults">下载 AI 分析结果</el-button><el-button type="warning" plain :disabled="!agentLoading && !['queued','running'].includes(task.ai_status)" @click="cancelAgentAnalysis">取消 AI</el-button></div>
     </header>
     <el-alert v-if="loadError" class="page-error" :title="loadError" type="error" show-icon :closable="false" />
     <el-alert v-if="agentError" class="page-error" :title="agentError" type="warning" show-icon :closable="false" />
@@ -53,7 +54,7 @@
       <div class="filters">
         <el-input v-model="search" :prefix-icon="Search" clearable placeholder="搜索规则、文件或日志内容" />
         <el-select v-model="level" clearable placeholder="全部级别"><el-option label="错误" value="error" /><el-option label="警告" value="warning" /><el-option label="信息" value="info" /></el-select>
-        <el-select v-model="category" clearable placeholder="全部场景"><el-option v-for="item in categories" :key="item" :label="item" :value="item" /></el-select><el-select v-model="groupBy" placeholder="分组方式"><el-option label="按时间排序" value="none" /><el-option label="按分类分组" value="category" /><el-option label="按级别分组" value="level" /></el-select><span>共 {{ filtered.length }} 条</span>
+        <el-select v-model="category" clearable placeholder="全部场景"><el-option v-for="item in categories" :key="item" :label="item" :value="item" /></el-select><el-select v-model="groupBy" placeholder="排序方式"><el-option label="按时间倒序（最新在前）" value="time_desc" /><el-option label="按时间正序（最早在前）" value="time_asc" /><el-option label="按分类分组" value="category" /><el-option label="按级别分组" value="level" /></el-select><span>共 {{ filtered.length }} 条</span>
       </div>
       <el-table :data="paged" @row-click="openResult">
         <el-table-column prop="level" label="级别" width="80"><template #default="scope"><el-tag :type="levelType(scope.row.level)" effect="plain">{{ levelLabel(scope.row.level) }}</el-tag></template></el-table-column>
@@ -107,11 +108,12 @@ import { ArrowLeft, ArrowRight, Close, CopyDocument, Download, Search } from '@e
 import { ElMessage } from 'element-plus'
 import * as echarts from 'echarts'
 import { cancelAgent, getAgentResults, getTaskDetail, getTaskResults, retryAgent, retryAgentFile } from '@/api/task'
-import { downloadLog } from '@/api/log'
 
 const route = useRoute()
 const router = useRouter()
 const taskId = route.params.taskId
+const selectedFileId = String(route.query.file_id || '')
+const selectedFilePath = String(route.query.file_path || '')
 const loading = ref(false)
 const loadError = ref('')
 const agentError = ref('')
@@ -123,7 +125,7 @@ const agentResults = ref([])
 const search = ref('')
 const level = ref('')
 const category = ref('')
-const groupBy = ref('none')
+const groupBy = ref('time_desc')
 const page = ref(1)
 const pageSize = 20
 const drawer = ref(false)
@@ -139,6 +141,8 @@ const jiraKey = ref('')
 const comments = ref([])
 const commentSaving = ref(false)
 let chart = null
+let agentRefreshTimer = null
+let agentRefreshActive = false
 
 const categories = computed(() => [...new Set(results.value.map(item => item.category).filter(Boolean))])
 const agentFindings = computed(() => agentResults.value.flatMap(item => (item.findings || []).map(finding => ({ ...finding, _filePath: finding.file_path || item.file_path || '' }))))
@@ -171,7 +175,12 @@ const selectedAiFinding = computed(() => findAgentFinding(selected.value))
 const filtered = computed(() => {
   const text = search.value.trim().toLowerCase()
   const items = results.value.filter(item => (!level.value || item.level === level.value) && (!category.value || item.category === category.value) && (!text || `${item.rule_name}${item.matched_text}${item.file_path}${item.content}`.toLowerCase().includes(text)))
-  return [...items].sort((a, b) => groupBy.value === 'category' ? String(a.category || '').localeCompare(String(b.category || '')) : groupBy.value === 'level' ? String(a.level || '').localeCompare(String(b.level || '')) : (Date.parse(b.event_time) || 0) - (Date.parse(a.event_time) || 0))
+  return [...items].sort((a, b) => {
+    if (groupBy.value === 'category') return String(a.category || '').localeCompare(String(b.category || ''))
+    if (groupBy.value === 'level') return String(a.level || '').localeCompare(String(b.level || ''))
+    const difference = (Date.parse(a.event_time) || 0) - (Date.parse(b.event_time) || 0)
+    return groupBy.value === 'time_asc' ? difference : -difference
+  })
 })
 const paged = computed(() => filtered.value.slice((page.value - 1) * pageSize, page.value * pageSize))
 
@@ -188,6 +197,16 @@ const formatFinding = finding => [finding.root_cause && `原因：${finding.root
 async function copyText(value) { if (!value) return ElMessage.info('暂无可复制内容'); try { await navigator.clipboard.writeText(String(value)); ElMessage.success('内容已复制') } catch { ElMessage.warning('复制失败，请检查浏览器剪贴板权限') } }
 function copyResult(item) { copyText([item.event_time, levelLabel(item.level), item.file_path && `${item.file_path}:${item.line_number}`, item.rule_name || item.matched_text, item.content].filter(Boolean).join(' | ')) }
 const normalizePath = value => String(value || '').replaceAll('\\', '/').replace(/^\.\//, '').toLowerCase()
+const matchesSelectedFile = item => {
+  if (!selectedFilePath) return true
+  const itemPath = normalizePath(item.file_path)
+  const targetPath = normalizePath(selectedFilePath)
+  return itemPath === targetPath || itemPath.endsWith(`/${targetPath}`)
+}
+const filterAgentResults = items => {
+  if (!selectedFileId && !selectedFilePath) return items
+  return items.filter(item => (selectedFileId && String(item.log_file_id || '') === selectedFileId) || (selectedFilePath && matchesSelectedFile(item)))
+}
 function findAgentFinding(result) {
   if (!result || !agentFindings.value.length) return null
   const lineNumber = Number(result.line_number)
@@ -230,16 +249,12 @@ async function load() {
     if (detailResult.status === 'rejected') throw detailResult.reason
     if (parsedResult.status === 'rejected') throw parsedResult.reason
     task.value = detailResult.value.task
-    results.value = parsedResult.value
+    results.value = parsedResult.value.filter(matchesSelectedFile)
+    loading.value = false
     if (agentsResult.status === 'fulfilled') {
-      agentResults.value = agentsResult.value || []
+      agentResults.value = filterAgentResults(agentsResult.value || [])
       if (!agentResults.value.length && task.value.status === 'completed') {
-        agentLoading.value = true
-        for (let attempt = 0; attempt < 2 && !agentResults.value.length; attempt += 1) {
-          await new Promise(resolve => window.setTimeout(resolve, attempt ? 5000 : 3000))
-          try { agentResults.value = await getAgentResults(taskId) || [] } catch { /* AI results are optional */ }
-        }
-        agentLoading.value = false
+        refreshAgentResults()
       }
       agentReady.value = true
     } else {
@@ -316,48 +331,6 @@ function drawTimeline() {
 
 async function openResult(item) { selected.value = item; comments.value = []; commentText.value = ''; jiraKey.value = ''; drawer.value = true; try { const { getResultComments } = await import('@/api/result'); comments.value = await getResultComments(item.id) || [] } catch { /* comments are optional */ } }
 
-async function downloadArtifact(type) {
-  try {
-    if (type === 'analysis') {
-      downloadReadableAnalysis()
-      return
-    }
-    const response = await downloadLog(taskId, { type })
-    const link = document.createElement('a')
-    link.href = URL.createObjectURL(new Blob([response]))
-    link.download = `${taskId}-${type}.zip`
-    link.click()
-    URL.revokeObjectURL(link.href)
-  } catch (error) { ElMessage.error(errorMessage(error, '下载失败，请稍后重试')) }
-}
-
-function csvCell(value) {
-  const text = String(value ?? '').replaceAll('"', '""')
-  return /[",\r\n]/.test(text) ? `"${text}"` : text
-}
-function downloadReadableAnalysis() {
-  const headers = ['级别', '事件时间', '解析规则', '分类', '文件路径', '行号', '日志内容', '可能原因']
-  const rows = results.value.map(item => [
-    levelLabel(item.level), formatTime(item.event_time), item.rule_name || item.matched_text || '', item.category || '',
-    item.file_path || '', item.line_number ?? '', item.content || '', (item.related_causes || []).map(cause => cause.label || cause.reason || '').filter(Boolean).join('；')
-  ])
-  const lines = [
-    ['LogMaster 分析结果'].map(csvCell).join(','),
-    ['任务', task.original_name || taskId].map(csvCell).join(','),
-    ['导出时间', formatTime(new Date().toISOString())].map(csvCell).join(','),
-    ['结果数量', rows.length].map(csvCell).join(','),
-    '',
-    headers.map(csvCell).join(','),
-    ...(rows.length ? rows.map(row => row.map(csvCell).join(',')) : [['暂无关键词命中结果', '', '', '', '', '', '本任务没有可导出的异常记录', '']].map(row => row.map(csvCell).join(',')))
-  ]
-  const blob = new Blob([`\uFEFF${lines.join('\r\n')}`], { type: 'text/csv;charset=utf-8' })
-  const link = document.createElement('a')
-  link.href = URL.createObjectURL(blob)
-  link.download = `${taskId}-分析结果.csv`
-  link.click()
-  URL.revokeObjectURL(link.href)
-  ElMessage.success(rows.length ? `已导出 ${rows.length} 条分析结果` : '已导出空结果说明文件')
-}
 function downloadAgentResults() {
   const lines = [`# AI 分析结果`, ``, `- 任务：${task.value.original_name || taskId}`, `- 导出时间：${formatTime(new Date().toISOString())}`, ``]
   agentResults.value.forEach((item, index) => {
@@ -378,18 +351,42 @@ function downloadAgentResults() {
   ElMessage.success('AI 分析结果已下载')
 }
 
-async function retryAgentAnalysis() { agentActionLoading.value = true; try { await retryAgent(taskId); ElMessage.success('AI 重试已提交'); await load() } catch (error) { ElMessage.error(errorMessage(error, 'AI 重试失败')) } finally { agentActionLoading.value = false } }
+async function refreshAgentResults() {
+  if (agentRefreshActive) return
+  agentRefreshActive = true
+  agentLoading.value = true
+  agentError.value = ''
+  try {
+    for (let attempt = 0; attempt < 3 && !agentResults.value.length; attempt += 1) {
+      if (attempt) await new Promise(resolve => { agentRefreshTimer = window.setTimeout(resolve, attempt === 1 ? 3000 : 5000) })
+      const items = filterAgentResults(await getAgentResults(taskId) || [])
+      agentResults.value = items
+      if (items.length) break
+    }
+  } catch (error) {
+    agentError.value = `Agent 诊断结果加载失败：${errorMessage(error, '请稍后重试')}`
+  } finally {
+    agentLoading.value = false
+    agentRefreshActive = false
+    agentRefreshTimer = null
+  }
+}
+
+async function retryAgentAnalysis() { agentActionLoading.value = true; try { if (selectedFileId) await retryAgentFile(taskId, selectedFileId); else await retryAgent(taskId); ElMessage.success(selectedFileId ? '当前文件 AI 重试已提交' : 'AI 重试已提交'); await load() } catch (error) { ElMessage.error(errorMessage(error, 'AI 重试失败')) } finally { agentActionLoading.value = false } }
 async function retryAgentFileResult(item) { agentActionLoading.value = true; try { await retryAgentFile(taskId, item.log_file_id); ElMessage.success('文件 AI 重试已提交'); await load() } catch (error) { ElMessage.error(errorMessage(error, '文件 AI 重试失败')) } finally { agentActionLoading.value = false } }
 async function cancelAgentAnalysis() { try { await cancelAgent(taskId); ElMessage.success('AI 取消请求已提交'); await load() } catch (error) { ElMessage.error(errorMessage(error, '取消 AI 失败')) } }
 async function saveComment() { const content = commentText.value.trim(); const defectId = jiraKey.value.trim(); if (!selected.value || (!content && !defectId)) return; commentSaving.value = true; try { const { addResultComment, getResultComments } = await import('@/api/result'); await addResultComment(selected.value.id, { content: content || '关联 Jira 问题', ...(defectId ? { defect_id: defectId } : {}) }); commentText.value = ''; jiraKey.value = ''; comments.value = await getResultComments(selected.value.id) || []; ElMessage.success('已保存') } catch (error) { ElMessage.error(errorMessage(error, '保存失败')) } finally { commentSaving.value = false } }
 
-watch([search, level, category], () => { page.value = 1 })
+watch([search, level, category, groupBy], () => { page.value = 1 })
 function resizeTimeline() { chart?.resize() }
 onMounted(() => { window.addEventListener('resize', resizeTimeline); load() })
-onBeforeUnmount(() => { window.removeEventListener('resize', resizeTimeline); chart?.dispose() })
+onBeforeUnmount(() => { window.removeEventListener('resize', resizeTimeline); if (agentRefreshTimer) window.clearTimeout(agentRefreshTimer); chart?.dispose() })
 </script>
 
 <style scoped>
+.analysis-page { position: relative; min-width: 0; overflow-x: hidden; }
+.loading-progress { position: absolute; z-index: 20; top: 0; left: 0; width: 35%; height: 3px; border-radius: 0 3px 3px 0; background: linear-gradient(90deg, #06b6d4, #67e8f9); box-shadow: 0 0 12px rgba(34, 211, 238, .7); animation: loading-progress 1.4s ease-in-out infinite; }
+@keyframes loading-progress { 0% { transform: translateX(-100%); opacity: .35; } 50% { opacity: 1; } 100% { transform: translateX(285%); opacity: .35; } }
 .page { height: 100%; overflow: auto; color: #1f2937; }.result-actions{display:grid;gap:10px}.result-actions .el-textarea{width:100%}.comment-list{display:grid;gap:7px}.comment-list p{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:0;padding:8px 10px;border-radius:5px;background:#f5f7fa;color:#536174;font-size:11px;line-height:1.5}.comment-list small{color:#8a94a3}.jira-link{font-size:11px}.jira-url{overflow:hidden;max-width:100%;color:#3478dc;text-overflow:ellipsis;white-space:nowrap}
 .page-heading, .title, .heading-actions, .filters, .panel-heading, .detail-head, .section-title { display: flex; align-items: center; }
 .page-heading { justify-content: space-between; margin-bottom: 18px; }.title { gap: 8px; }.title h1 { margin: 0; font-size: 21px; }.title p { margin: 4px 0 0; color: #8a94a3; font: 11px Consolas, monospace; }.heading-actions { gap: 10px; }

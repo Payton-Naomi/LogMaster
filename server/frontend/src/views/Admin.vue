@@ -768,10 +768,9 @@ onMounted(async () => {
       await loadActiveModule()
     }
   } catch {
-    Object.assign(access, { role: 'super_admin', permissions: rolePermissions('super_admin') })
-    activeModule.value = 'users'
-    await loadUsers().catch(() => {})
-    ElMessage.warning('飞书用户信息加载失败，已显示本地管理界面')
+    unlocked.value = false
+    Object.assign(access, { role: '', permissions: [], open_id: '' })
+    ElMessage.error('无法确认当前账号权限，管理页面已锁定')
   }
   finally {
     checking.value = false
