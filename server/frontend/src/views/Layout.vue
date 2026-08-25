@@ -87,6 +87,7 @@ import { ArrowDown, ArrowRight, Bell, DataAnalysis, DataBoard, Expand, FolderOpe
 import { getNotificationSettings, getNotifications, markAllNotificationsRead, markNotificationRead, updateNotificationSettings } from '@/api/notification'
 import { getTaskDetail } from '@/api/task'
 import { getCurrentUser, logout } from '@/api/auth'
+import { clearVerifiedSession } from '@/router'
 import { useTheme } from '@/utils/theme'
 
 const route = useRoute()
@@ -105,7 +106,6 @@ const notificationSettingsSaving = ref(false)
 const notificationSettings = ref({ task_completed: true, task_failed: true, task_cancelled: true, ai_completed: true, ai_failed: true, result_assigned: true, result_commented: true })
 const notificationSettingItems = [{ key: 'task_completed', label: '任务完成' }, { key: 'task_failed', label: '任务失败' }, { key: 'task_cancelled', label: '任务取消' }, { key: 'ai_completed', label: 'AI 分析完成' }, { key: 'ai_failed', label: 'AI 分析失败' }, { key: 'result_assigned', label: '异常结果被分配' }, { key: 'result_commented', label: '异常结果新增备注' }]
 let notificationStream = null
-const loginURL = import.meta.env.VITE_FEISHU_LOGIN_URL || '/api/auth/feishu-login'
 const baseNavGroups = [
   { label: '日志', items: [{ path: '/upload', label: '日志上传', icon: markRaw(Upload) }, { path: '/query', label: '采集日志查询', icon: markRaw(Search) }] },
   { label: '分析', items: [{ path: '/log-records', label: '日志记录', icon: markRaw(FolderOpened) }, { path: '/tasks', label: '分析任务', icon: markRaw(List) }, { path: '/dashboard', label: '数据概览', icon: markRaw(DataBoard) }] },
@@ -156,9 +156,11 @@ function startNotificationStream() { if (!window.EventSource) return; notificati
 async function handleUserCommand(command) {
   if (command !== 'logout') return
   try {
-    await ElMessageBox.confirm('退出后需要重新通过飞书登录。', '确认退出', { confirmButtonText: '退出登录', cancelButtonText: '取消', type: 'warning' })
+    await ElMessageBox.confirm('退出后需要重新选择登录方式并完成身份验证。', '确认退出', { confirmButtonText: '退出登录', cancelButtonText: '取消', type: 'warning' })
     await logout()
-    window.location.href = loginURL
+    notificationStream?.close()
+    clearVerifiedSession()
+    await router.replace({ name: 'Login' })
   } catch (error) {
     if (error !== 'cancel' && error !== 'close') ElMessage.error('退出失败，请稍后重试')
   }

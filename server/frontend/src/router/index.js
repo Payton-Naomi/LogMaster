@@ -1,9 +1,19 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
-const FEISHU_LOGIN_URL = import.meta.env.VITE_FEISHU_LOGIN_URL || '/api/auth/feishu-login'
 let sessionVerified = false
 
+export function clearVerifiedSession() {
+  sessionVerified = false
+  localStorage.removeItem('user_info')
+}
+
 const routes = [
+  {
+    path: '/login',
+    name: 'Login',
+    component: () => import('@/views/Login.vue'),
+    meta: { public: true }
+  },
   // 主布局
   {
     path: '/',
@@ -104,6 +114,21 @@ const router = createRouter({
 
 // 路由守卫
 router.beforeEach(async (to) => {
+  if (to.path === '/login') {
+    if (sessionVerified) return { path: '/upload' }
+    try {
+      const response = await fetch('/api/user/info', { credentials: 'same-origin' })
+      if (response.ok) {
+        const result = await response.json()
+        if (result.code === 0) {
+          sessionVerified = true
+          localStorage.setItem('user_info', JSON.stringify(result.data))
+          return { path: '/upload' }
+        }
+      }
+    } catch { /* Login page remains available when the API is offline. */ }
+    return true
+  }
   if (!to.meta.requiresAuth) {
     return true
   }
@@ -121,8 +146,7 @@ router.beforeEach(async (to) => {
     localStorage.setItem('user_info', JSON.stringify(result.data))
     return true
   } catch {
-    window.location.replace(FEISHU_LOGIN_URL)
-    return false
+    return { path: '/login', query: { redirect: to.fullPath } }
   }
 })
 
