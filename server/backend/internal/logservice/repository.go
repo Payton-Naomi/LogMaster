@@ -2012,13 +2012,12 @@ type TaskOverviewRecord struct {
 
 func (r *Repository) AIAnalysisSettings(ctx context.Context, fallback AIAnalysisSettings) (AIAnalysisSettings, error) {
 	settings := fallback
-	err := r.db.QueryRowContext(ctx, `SELECT COALESCE(NULLIF(llm_api_base_url,''),$1), llm_api_key_encrypted,
-		COALESCE(NULLIF(llm_model,''),$2), COALESCE(NULLIF(llm_timeout_seconds,0),$3),
-		COALESCE(NULLIF(llm_max_matches,0),$4), COALESCE(NULLIF(llm_max_input_bytes,0),$5),
+	err := r.db.QueryRowContext(ctx, `SELECT COALESCE(NULLIF(llm_timeout_seconds,0),$1),
+		COALESCE(NULLIF(llm_max_matches,0),$2), COALESCE(NULLIF(llm_max_input_bytes,0),$3),
 		max_tokens_per_file, daily_token_quota FROM logmaster_api.ai_analysis_config WHERE singleton = TRUE`,
-		fallback.LLMAPIBaseURL, fallback.LLMModel, fallback.LLMTimeoutSeconds, fallback.LLMMaxMatches, fallback.LLMMaxInputBytes).
-		Scan(&settings.LLMAPIBaseURL, &settings.LLMAPIKeyEncrypted, &settings.LLMModel, &settings.LLMTimeoutSeconds,
-			&settings.LLMMaxMatches, &settings.LLMMaxInputBytes, &settings.MaxTokensPerFile, &settings.DailyTokenQuota)
+		fallback.LLMTimeoutSeconds, fallback.LLMMaxMatches, fallback.LLMMaxInputBytes).
+		Scan(&settings.LLMTimeoutSeconds, &settings.LLMMaxMatches, &settings.LLMMaxInputBytes,
+			&settings.MaxTokensPerFile, &settings.DailyTokenQuota)
 	if errors.Is(err, sql.ErrNoRows) {
 		return settings, nil
 	}

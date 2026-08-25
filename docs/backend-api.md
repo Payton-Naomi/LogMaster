@@ -1,8 +1,22 @@
 # LogMaster 后端 API 文档
 
+> **825 调整（2026-08-25）**：新增外包账号密码注册与登录。外包账号固定为 `role=user`、`role_source=external`、`identity_type=external`，不使用飞书职位自动授权规则。迁移 `045_external_password_accounts.sql` 新增凭证表，密码只以 Argon2id 哈希保存；本期不包含邮箱验证、邀请码、账号禁用或有效期。
+
+`POST /api/auth/external/register` 公开注册，JSON 为 `{ "name": "...", "email": "...", "company": "...", "password": "非空字符串", "confirm_password": "..." }`。邮箱全局不可重复，成功返回 `201` 并写入登录 Cookie。
+
+`POST /api/auth/external/login` 公开登录，JSON 为 `{ "email": "...", "password": "..." }`。成功返回当前用户并写入登录 Cookie；错误邮箱或密码返回 `401`。`GET /api/auth/me` 和 `GET /api/user/info` 同时支持飞书和外包 Session。
+
+`POST /api/auth/external/change-password` 要求外包用户登录，JSON 为 `{ "current_password": "...", "password": "非空字符串", "confirm_password": "..." }`；当前密码正确且新密码非空、两次输入一致时修改成功。
+
+`POST /api/auth/external/change-email` 要求外包用户登录，JSON 为 `{ "current_password": "...", "email": "..." }`；邮箱全局唯一，修改成功后刷新当前登录 Cookie。飞书账号不能通过这两个接口修改凭证或邮箱。
+
 > **最新：824 调整（2026-08-24）**：`POST /api/upload-sessions` 成功响应新增 `data.uploader_job_title`。后端使用飞书 `tenant_access_token` 查询用户详情并同步 `users.job_title`；该字段为后端解析的只读展示字段，采集端请求不需要新增字段。
 
 飞书自动角色固定按职位匹配：`主任` → `super_admin`，`高级` → `admin`，`软件工程师` / `硬件工程师` → `developer`，其他 → `user`。人工设置的角色不被自动同步覆盖。
+
+超级管理员初始化规则：`FEISHU_SUPER_ADMIN_OPEN_IDS` 支持用英文逗号分隔多个飞书 Open ID，匹配后每次飞书登录都会强制授予 `super_admin`；`FEISHU_SUPER_ADMIN_NAMES` 支持用英文逗号分隔多个姓名，兼容但存在同名误匹配风险，优先使用 Open ID。两个配置都为空时，数据库还没有超级管理员的情况下，首次成功飞书登录的用户会成为超级管理员。权限检查只读查询角色，不再执行角色更新。
+
+HTTP 服务默认配置为请求头读取 10 秒、请求读取 1800 秒、响应写入 600 秒、空闲连接 120 秒、优雅停机等待 30 秒，可通过同名 `HTTP_*_SECONDS` 环境变量调整。服务统一捕获 HTTP handler panic 并返回 500；收到 SIGINT/SIGTERM 后停止接收新请求并等待现有请求结束。
 
 迁移 `044_fixed_feishu_job_title_roles.sql` 会重算现有飞书自动角色用户；重新启动后端后自动执行。
 
@@ -39,7 +53,9 @@
 
 > **818 补充**：AI 分析完成后会记录 `ai_usage` token 用量；迁移 `027_ai_usage_permissions.sql` 补齐表和序列权限，后端重启后自动执行。该修复不改变 HTTP API 返回结构。
 
-> **819 调整**：超级管理员可通过 `/api/admin/ai-analysis-settings` 修改大模型地址、模型、超时、命中采样上限、输入字节上限和输出 token/配额。API Key 只接收写入，不返回明文，并使用 `LOGMASTER_CONFIG_ENCRYPTION_KEY` 加密保存；数据库配置优先于环境变量。
+> **825 调整（2026-08-25）**：`LLM_API_BASE_URL`、`LLM_API_KEY` 和 `LLM_MODEL` 只能由服务端环境变量或 Docker `.env` 配置，管理后台仅可修改超时、命中采样、输入字节上限和 token 配额。迁移 `046_lock_ai_provider_settings.sql` 会清除历史数据库中的模型地址、密钥和模型名，数据库不再覆盖环境变量。
+
+日志全文搜索会在后端进程内缓存 `upload_id`、文件版本、关键词和大小写模式相同的完整命中结果，默认缓存 15 分钟。翻页和其他用户的相同搜索直接复用缓存，不再重复读取原始日志；缓存仅用于加速搜索，服务重启后会清空，超出单条 4 MiB 或总计 32 MiB 时自动不缓存。
 
 AI 分析命中日志采用按规则/关键词分组轮询采样，避免重复关键词占满输入；采样上限和输入字节保护由后端固定执行。
 
@@ -820,13 +836,14 @@ AI 分析为异步任务：关键字规则解析先同步完成（兜底），AI
 | --- | --- | --- |
 | `max_tokens_per_file` | 1 到 1000000 | 单个日志文件的 AI 模型最大输出 token 数 |
 | `daily_token_quota` | `>= 0` | 每个用户每天的 AI token 配额，`0` 表示不限制 |
-| `llm_api_base_url` | HTTP(S) URL | 大模型 OpenAI 兼容接口地址 |
-| `llm_api_key` | PUT 时可选 | 新 API Key；GET 不返回明文 |
-| `llm_api_key_configured` | 只读 | 是否已配置 API Key |
-| `llm_model` | 1 到 128 字符 | 模型名称 |
+| `llm_api_base_url` | 只读 | 服务端环境变量中的大模型 OpenAI 兼容接口地址 |
+| `llm_api_key_configured` | 只读 | 环境变量中是否已配置 API Key |
+| `llm_model` | 只读 | 服务端环境变量中的模型名称 |
 | `llm_timeout_seconds` | 5 到 600 | 单次请求超时时间 |
 | `llm_max_matches` | 1 到 5000 | 按规则/关键词轮询采样的命中条数上限 |
 | `llm_max_input_bytes` | 1024 到 10485760 | 单次模型输入大小上限 |
+
+`PUT` 尝试修改 `llm_api_base_url`、`llm_api_key`、`clear_llm_api_key` 或 `llm_model` 时后端返回 `400`，这些字段不会写入数据库。
 
 超过每日配额时，对应文件跳过 AI 分析（关键字规则仍正常执行），AI 结果记录为 `failed` 并提示 quota exceeded。
 

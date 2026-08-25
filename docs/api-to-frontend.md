@@ -1,8 +1,20 @@
 # LogMaster 后端与前端 API 文档
 
+> **825 调整（2026-08-25）**：登录页新增“企业员工”和“外包账号”两个入口。企业员工继续跳转 `/api/auth/feishu-login`；外包账号调用 `POST /api/auth/external/login` 或 `POST /api/auth/external/register`，注册字段为 `name`、`email`、`company`、`password`、`confirm_password`。注册和登录成功后后端写入同一个 HttpOnly `session_token` Cookie，并跳转 `/upload`。
+
+> **825 AI 配置调整**：管理后台不得编辑或提交 `llm_api_base_url`、`llm_api_key`、`clear_llm_api_key`、`llm_model`。页面将前三项仅作为环境配置的只读展示；尝试修改时后端返回 `400`。可提交的 AI 设置仅为超时、命中数量、输入字节上限、单文件 token 上限和每日 token 配额。
+
+日志搜索接口会缓存相同上传、文件版本、关键词和大小写条件的命中结果 15 分钟，因此分页或多个用户重复查询不会重复扫描原始文件。缓存是服务端内存缓存，重启后清空，不改变接口返回结构。
+
+外包注册不做邮箱验证码；密码只要求非空并与确认密码一致。`GET /api/user/info` 新增只读字段 `identity_type`（`feishu` 或 `external`）和 `company`。外包用户固定为普通用户，前端不能根据职位字段赋予管理入口。
+
+外包账号登录后可在“账号设置”中调用 `POST /api/auth/external/change-password` 修改密码，或调用 `POST /api/auth/external/change-email` 修改邮箱；两个接口都要求当前密码。飞书账号不显示该入口。
+
 > **824 调整（2026-08-24）**：采集端上传人经飞书校验后，后端同步 `users.job_title`；管理员用户接口已有 `job_title` 字段，因此前端无需新增接口。
 
 飞书自动角色规则调整为：职位含 `主任` 为 `super_admin`，含 `高级` 为 `admin`，含 `软件工程师` 或 `硬件工程师` 为 `developer`，其他为 `user`。手工分配角色保持优先；前端继续读取现有 `role` 控制权限。
+
+超管配置支持 `FEISHU_SUPER_ADMIN_OPEN_IDS` 和逗号分隔的 `FEISHU_SUPER_ADMIN_NAMES`。登录时按配置名单强制授予超管；两者都为空且系统尚无超管时，首个成功飞书登录用户初始化为超管。前端无需新增接口。
 
 > **823 调整（2026-08-23）**：通知中心增加全部已读、用户开关和 SSE 实时推送；任务、AI、负责人分配和备注事件均可产生持久化通知。日志下载扩展为单文件、解析批次、原始上传包和分析结果包四类。
 AI 作业现已使用 PostgreSQL 持久化队列。任务列表和任务详情新增 `ai_status`、`ai_error_message`；AI 状态为 `disabled`、`queued`、`running`、`completed`、`partial_failed`、`failed`、`cancelled`。`GET /api/tasks` 可传 `ai_status` 进行服务端筛选。规则解析状态与 AI 状态互不覆盖。

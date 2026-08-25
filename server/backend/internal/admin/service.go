@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -474,14 +475,7 @@ func (s *Service) roleForUser(ctx context.Context, openID string) (string, error
 	if s.roleResolver != nil {
 		return s.roleResolver(ctx, openID)
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE logmaster_api.users SET role = $2, updated_at = NOW()
-		WHERE feishu_open_id = $1 AND name = '刘欣彤' AND role = $3
-		AND NOT EXISTS (SELECT 1 FROM logmaster_api.users WHERE role = $2)`, openID, roleSuperAdmin, roleUser); err != nil {
-		return "", err
-	}
-	var role string
-	err := s.db.QueryRowContext(ctx, `SELECT role FROM logmaster_api.users WHERE feishu_open_id = $1`, openID).Scan(&role)
-	return role, err
+	return "", fmt.Errorf("admin role resolver is not configured")
 }
 
 func permissionsForRole(role string) []string {

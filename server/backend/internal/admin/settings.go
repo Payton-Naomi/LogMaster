@@ -10,7 +10,6 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -18,7 +17,6 @@ import (
 	"unicode/utf8"
 
 	"logmaster-agent/internal/response"
-	"logmaster-agent/internal/securevalue"
 )
 
 const (
@@ -118,7 +116,6 @@ type aiAnalysisSettings struct {
 	MaxTokensPerFile    int        `json:"max_tokens_per_file"`
 	DailyTokenQuota     int64      `json:"daily_token_quota"`
 	UpdatedAt           *time.Time `json:"updated_at,omitempty"`
-	llmAPIKeyEncrypted  string
 }
 
 func (s *Service) aiAnalysisSettingsHandler(w http.ResponseWriter, r *http.Request) {
@@ -146,13 +143,20 @@ func (s *Service) aiAnalysisSettingsHandler(w http.ResponseWriter, r *http.Reque
 			writeError(w, http.StatusInternalServerError, "query AI analysis settings failed")
 			return
 		}
-		// Keep compatibility with older admin clients that only submit token limits.
-		if input.LLMAPIBaseURL == "" {
-			input.LLMAPIBaseURL = current.LLMAPIBaseURL
+		requestedBaseURL := strings.TrimRight(strings.TrimSpace(input.LLMAPIBaseURL), "/")
+		requestedModel := strings.TrimSpace(input.LLMModel)
+		if (requestedBaseURL != "" && requestedBaseURL != current.LLMAPIBaseURL) ||
+			(requestedModel != "" && requestedModel != current.LLMModel) ||
+			strings.TrimSpace(input.LLMAPIKey) != "" || input.ClearLLMAPIKey {
+			writeError(w, http.StatusBadRequest, "大模型地址、API Key 和模型名只能通过服务端环境变量配置")
+			return
 		}
-		if input.LLMModel == "" {
-			input.LLMModel = current.LLMModel
-		}
+		// Provider endpoint, API key, and model are server environment settings.
+		// Ignore them in older admin payloads rather than allowing database overrides.
+		input.LLMAPIBaseURL = current.LLMAPIBaseURL
+		input.LLMModel = current.LLMModel
+		input.LLMAPIKey = ""
+		input.ClearLLMAPIKey = false
 		if input.LLMTimeoutSeconds == 0 {
 			input.LLMTimeoutSeconds = current.LLMTimeoutSeconds
 		}
@@ -168,40 +172,28 @@ func (s *Service) aiAnalysisSettingsHandler(w http.ResponseWriter, r *http.Reque
 		if input.DailyTokenQuota == 0 && current.DailyTokenQuota > 0 {
 			input.DailyTokenQuota = current.DailyTokenQuota
 		}
-		input.LLMAPIBaseURL = strings.TrimRight(strings.TrimSpace(input.LLMAPIBaseURL), "/")
-		input.LLMModel = strings.TrimSpace(input.LLMModel)
 		if err := validateAIAnalysisSettings(input); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
-		}
-		encryptedKey := current.llmAPIKeyEncrypted
-		if input.ClearLLMAPIKey {
-			encryptedKey = ""
-		} else if strings.TrimSpace(input.LLMAPIKey) != "" {
-			encryptedKey, err = securevalue.Encrypt(strings.TrimSpace(input.LLMAPIKey), s.config.ConfigEncryptionKey)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, "encrypt LLM API key failed")
-				return
-			}
 		}
 		var updatedAt time.Time
 		err = s.db.QueryRowContext(r.Context(), `INSERT INTO logmaster_api.ai_analysis_config
 			(singleton, llm_api_base_url, llm_api_key_encrypted, llm_model, llm_timeout_seconds, llm_max_matches, llm_max_input_bytes,
 			 max_tokens_per_file, daily_token_quota, updated_by_open_id, updated_at)
-			VALUES (TRUE, $1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+			VALUES (TRUE, '', '', '', $1, $2, $3, $4, $5, $6, NOW())
 			ON CONFLICT (singleton) DO UPDATE SET max_tokens_per_file = EXCLUDED.max_tokens_per_file,
-			daily_token_quota = EXCLUDED.daily_token_quota, llm_api_base_url=EXCLUDED.llm_api_base_url,
-			llm_api_key_encrypted=EXCLUDED.llm_api_key_encrypted, llm_model=EXCLUDED.llm_model,
+			daily_token_quota = EXCLUDED.daily_token_quota, llm_api_base_url='',
+			llm_api_key_encrypted='', llm_model='',
 			llm_timeout_seconds=EXCLUDED.llm_timeout_seconds, llm_max_matches=EXCLUDED.llm_max_matches,
 			llm_max_input_bytes=EXCLUDED.llm_max_input_bytes, updated_by_open_id = EXCLUDED.updated_by_open_id, updated_at = NOW()
-			RETURNING updated_at`, input.LLMAPIBaseURL, encryptedKey, input.LLMModel, input.LLMTimeoutSeconds,
-			input.LLMMaxMatches, input.LLMMaxInputBytes, input.MaxTokensPerFile, input.DailyTokenQuota, openID).Scan(&updatedAt)
+			RETURNING updated_at`, input.LLMTimeoutSeconds, input.LLMMaxMatches, input.LLMMaxInputBytes,
+			input.MaxTokensPerFile, input.DailyTokenQuota, openID).Scan(&updatedAt)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "save AI analysis settings failed")
 			return
 		}
-		input.LLMAPIKey, input.ClearLLMAPIKey, input.llmAPIKeyEncrypted = "", false, ""
-		input.LLMAPIKeyConfigured = encryptedKey != "" || (!input.ClearLLMAPIKey && s.config.LLMAPIKey != "")
+		input.LLMAPIKey, input.ClearLLMAPIKey = "", false
+		input.LLMAPIKeyConfigured = s.config.LLMAPIKey != ""
 		if input.LLMAPIKeyConfigured {
 			input.LLMAPIKeyMasked = "********"
 		}
@@ -216,13 +208,12 @@ func (s *Service) loadAIAnalysisSettings(ctx context.Context) (aiAnalysisSetting
 	settings := aiAnalysisSettings{LLMAPIBaseURL: s.config.LLMAPIBaseURL, LLMModel: s.config.LLMModel,
 		LLMTimeoutSeconds: int(s.config.LLMTimeout / time.Second), LLMMaxMatches: s.config.LLMMaxMatches,
 		LLMMaxInputBytes: s.config.LLMMaxInputBytes, MaxTokensPerFile: s.config.AIMaxTokensPerFile, DailyTokenQuota: s.config.AIDailyTokenQuota}
-	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(NULLIF(llm_api_base_url,''),$1), llm_api_key_encrypted,
-		COALESCE(NULLIF(llm_model,''),$2), COALESCE(NULLIF(llm_timeout_seconds,0),$3),
-		COALESCE(NULLIF(llm_max_matches,0),$4), COALESCE(NULLIF(llm_max_input_bytes,0),$5),
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(NULLIF(llm_timeout_seconds,0),$1),
+		COALESCE(NULLIF(llm_max_matches,0),$2), COALESCE(NULLIF(llm_max_input_bytes,0),$3),
 		max_tokens_per_file, daily_token_quota, updated_at FROM logmaster_api.ai_analysis_config WHERE singleton = TRUE`,
-		settings.LLMAPIBaseURL, settings.LLMModel, settings.LLMTimeoutSeconds, settings.LLMMaxMatches, settings.LLMMaxInputBytes).
-		Scan(&settings.LLMAPIBaseURL, &settings.llmAPIKeyEncrypted, &settings.LLMModel, &settings.LLMTimeoutSeconds,
-			&settings.LLMMaxMatches, &settings.LLMMaxInputBytes, &settings.MaxTokensPerFile, &settings.DailyTokenQuota, &settings.UpdatedAt)
+		settings.LLMTimeoutSeconds, settings.LLMMaxMatches, settings.LLMMaxInputBytes).
+		Scan(&settings.LLMTimeoutSeconds, &settings.LLMMaxMatches, &settings.LLMMaxInputBytes,
+			&settings.MaxTokensPerFile, &settings.DailyTokenQuota, &settings.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		settings.LLMAPIKeyConfigured = s.config.LLMAPIKey != ""
 		if settings.LLMAPIKeyConfigured {
@@ -230,7 +221,7 @@ func (s *Service) loadAIAnalysisSettings(ctx context.Context) (aiAnalysisSetting
 		}
 		return settings, nil
 	}
-	settings.LLMAPIKeyConfigured = settings.llmAPIKeyEncrypted != "" || s.config.LLMAPIKey != ""
+	settings.LLMAPIKeyConfigured = s.config.LLMAPIKey != ""
 	if settings.LLMAPIKeyConfigured {
 		settings.LLMAPIKeyMasked = "********"
 	}
@@ -238,15 +229,6 @@ func (s *Service) loadAIAnalysisSettings(ctx context.Context) (aiAnalysisSetting
 }
 
 func validateAIAnalysisSettings(input aiAnalysisSettings) error {
-	if input.LLMAPIBaseURL != "" {
-		parsed, err := url.Parse(input.LLMAPIBaseURL)
-		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-			return errors.New("llm_api_base_url must be an absolute HTTP(S) URL")
-		}
-	}
-	if input.LLMModel == "" || len(input.LLMModel) > 128 {
-		return errors.New("llm_model is required and must not exceed 128 characters")
-	}
 	if input.LLMTimeoutSeconds < 5 || input.LLMTimeoutSeconds > 600 {
 		return errors.New("llm_timeout_seconds must be 5 to 600")
 	}

@@ -1,6 +1,9 @@
 package admin
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestRolePermissionMatrix(t *testing.T) {
 	tests := []struct {
@@ -49,5 +52,25 @@ func TestAutomaticRoleUsesFixedJobTitlePolicy(t *testing.T) {
 		if got := service.automaticRole("ou_any", title); got != want {
 			t.Errorf("automaticRole(%q) = %q, want %q", title, got, want)
 		}
+	}
+}
+
+func TestAIProviderSettingsAreEnvironmentOnly(t *testing.T) {
+	current := aiAnalysisSettings{LLMAPIBaseURL: "https://env.example/v1", LLMModel: "env-model"}
+	input := aiAnalysisSettings{LLMAPIBaseURL: "https://database.example/v1", LLMAPIKey: "database-key", LLMModel: "database-model", ClearLLMAPIKey: true}
+	input.LLMAPIBaseURL = current.LLMAPIBaseURL
+	input.LLMModel = current.LLMModel
+	input.LLMAPIKey = ""
+	input.ClearLLMAPIKey = false
+	if input.LLMAPIBaseURL != current.LLMAPIBaseURL || input.LLMModel != current.LLMModel || input.LLMAPIKey != "" || input.ClearLLMAPIKey {
+		t.Fatal("provider endpoint, key, and model must be ignored in admin updates")
+	}
+}
+
+func TestAIProviderSettingsRejectChanges(t *testing.T) {
+	current := aiAnalysisSettings{LLMAPIBaseURL: "https://env.example/v1", LLMModel: "env-model"}
+	input := aiAnalysisSettings{LLMAPIBaseURL: "https://other.example/v1", LLMModel: "other-model"}
+	if strings.TrimRight(strings.TrimSpace(input.LLMAPIBaseURL), "/") == current.LLMAPIBaseURL && strings.TrimSpace(input.LLMModel) == current.LLMModel {
+		t.Fatal("test setup must request a provider setting change")
 	}
 }

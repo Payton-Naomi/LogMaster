@@ -933,52 +933,73 @@ func (s *Service) logSearchHandler(w http.ResponseWriter, r *http.Request, uploa
 	}
 	start := (page - 1) * pageSize
 	end := start + pageSize
-	total := 0
-	matches := make([]logSearchMatch, 0, pageSize)
+	cacheFiles := make([]string, 0, len(selectedFiles))
 	for _, file := range selectedFiles {
-		cleanRelative := filepath.Clean(filepath.FromSlash(file.RelativePath))
-		if filepath.IsAbs(cleanRelative) || cleanRelative == ".." || strings.HasPrefix(cleanRelative, ".."+string(filepath.Separator)) {
-			writeError(w, http.StatusInternalServerError, "invalid stored log path")
-			return
-		}
-		fullPath, pathErr := filepath.Abs(filepath.Join(root, cleanRelative))
-		if pathErr != nil || (fullPath != root && !strings.HasPrefix(fullPath, root+string(filepath.Separator))) {
-			writeError(w, http.StatusInternalServerError, "invalid stored log path")
-			return
-		}
-		input, openErr := os.Open(fullPath)
-		if openErr != nil {
-			writeError(w, http.StatusNotFound, "stored log file unavailable")
-			return
-		}
-		scanner := bufio.NewScanner(input)
-		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-		lineNumber := 0
-		for scanner.Scan() {
-			lineNumber++
-			content := scanner.Text()
-			candidate := content
-			if !caseSensitive {
-				candidate = strings.ToLower(content)
-			}
-			if !strings.Contains(candidate, needle) {
-				continue
-			}
-			if total >= start && total < end {
-				matches = append(matches, logSearchMatch{FileID: file.ID, RelativePath: file.RelativePath, LineNumber: lineNumber, Content: content})
-			}
-			total++
-		}
-		closeErr := input.Close()
-		if scanErr := scanner.Err(); scanErr != nil {
-			writeError(w, http.StatusInternalServerError, "read stored log failed")
-			return
-		}
-		if closeErr != nil {
-			writeError(w, http.StatusInternalServerError, "close stored log failed")
-			return
-		}
+		cacheFiles = append(cacheFiles, fmt.Sprintf("%d:%s", file.ID, file.SHA256))
 	}
+	cacheKey := logSearchCacheKey{UploadID: uploadID, Files: strings.Join(cacheFiles, ","), Keyword: keyword, CaseSensitive: caseSensitive}
+	loadMatches := func() ([]logSearchMatch, error) {
+		allMatches := make([]logSearchMatch, 0)
+		for _, file := range selectedFiles {
+			cleanRelative := filepath.Clean(filepath.FromSlash(file.RelativePath))
+			if filepath.IsAbs(cleanRelative) || cleanRelative == ".." || strings.HasPrefix(cleanRelative, ".."+string(filepath.Separator)) {
+				return nil, fmt.Errorf("invalid stored log path")
+			}
+			fullPath, pathErr := filepath.Abs(filepath.Join(root, cleanRelative))
+			if pathErr != nil || (fullPath != root && !strings.HasPrefix(fullPath, root+string(filepath.Separator))) {
+				return nil, fmt.Errorf("invalid stored log path")
+			}
+			input, openErr := os.Open(fullPath)
+			if openErr != nil {
+				return nil, fmt.Errorf("stored log file unavailable")
+			}
+			scanner := bufio.NewScanner(input)
+			scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+			lineNumber := 0
+			for scanner.Scan() {
+				lineNumber++
+				content := scanner.Text()
+				candidate := content
+				if !caseSensitive {
+					candidate = strings.ToLower(content)
+				}
+				if !strings.Contains(candidate, needle) {
+					continue
+				}
+				allMatches = append(allMatches, logSearchMatch{FileID: file.ID, RelativePath: file.RelativePath, LineNumber: lineNumber, Content: content})
+			}
+			closeErr := input.Close()
+			if scanErr := scanner.Err(); scanErr != nil {
+				return nil, fmt.Errorf("read stored log failed")
+			}
+			if closeErr != nil {
+				return nil, fmt.Errorf("close stored log failed")
+			}
+		}
+		return allMatches, nil
+	}
+	var allMatches []logSearchMatch
+	if s.searchCache != nil {
+		allMatches, err = s.searchCache.getOrLoad(cacheKey, loadMatches)
+	} else {
+		allMatches, err = loadMatches()
+	}
+	if err != nil {
+		if strings.Contains(err.Error(), "stored log file unavailable") {
+			writeError(w, http.StatusNotFound, err.Error())
+		} else {
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	total := len(allMatches)
+	if start > total {
+		start = total
+	}
+	if end > total {
+		end = total
+	}
+	matches := allMatches[start:end]
 	response.JSON(w, response.APIResponse{Code: 0, Message: "success", Data: map[string]any{
 		"total": total, "page": page, "page_size": pageSize, "keyword": keyword, "case_sensitive": caseSensitive, "matches": matches,
 	}})
