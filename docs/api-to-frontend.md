@@ -1,6 +1,6 @@
 # LogMaster 后端与前端 API 文档
 
-> **825 调整（2026-08-25）**：登录页新增“企业员工”和“外包账号”两个入口。企业员工继续跳转 `/api/auth/feishu-login`；外包账号调用 `POST /api/auth/external/login` 或 `POST /api/auth/external/register`，注册字段为 `name`、`email`、`company`、`password`、`confirm_password`。注册和登录成功后后端写入同一个 HttpOnly `session_token` Cookie，并跳转 `/upload`。
+> **825 调整（2026-08-25）**：登录页新增“企业员工”和“外包账号”两个入口。企业员工继续跳转 `/api/auth/feishu-login`；外包账号调用 `POST /api/auth/external/login` 或 `POST /api/auth/external/register`，注册字段为 `name`、`email`、`company`、`password`、`confirm_password`。注册和登录成功后后端写入同一个 HttpOnly `session_token` Cookie，并跳转 `/upload`。后端需执行迁移 `045_external_password_accounts.sql` 与 `047_external_role_source.sql`；若注册收到 500，请先确认后端已使用包含该迁移的新版本重启。
 
 > **825 AI 配置调整**：管理后台不得编辑或提交 `llm_api_base_url`、`llm_api_key`、`clear_llm_api_key`、`llm_model`。页面将前三项仅作为环境配置的只读展示；尝试修改时后端返回 `400`。可提交的 AI 设置仅为超时、命中数量、输入字节上限、单文件 token 上限和每日 token 配额。
 
