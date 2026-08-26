@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path"
 	"path/filepath"
@@ -92,6 +93,7 @@ func extractZipEntry(entry *zip.File, target string, maxBytes int64, passwords [
 	}
 
 	candidates := append([]string{}, passwords...)
+	log.Printf("extract encrypted ZIP entry %q using %d configured archive password candidates", entry.Name, len(candidates))
 	var lastErr error
 	for _, password := range candidates {
 		size, digest, err := extractZipEntryWithPassword(entry, target, maxBytes, password)

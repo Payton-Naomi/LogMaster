@@ -205,9 +205,11 @@ func (s *Service) prepareParseTask(task ClaimedParseTask) {
 	var totalParseBytes int64
 	archivePasswords, passwordErr := s.repo.ArchivePasswords(ctx)
 	if passwordErr != nil {
-		// Keep existing deployments usable before migration 033 is applied.
 		log.Printf("load archive passwords failed: %v", passwordErr)
+		s.failClaimedTask(task, "load archive passwords", passwordErr.Error())
+		return
 	}
+	log.Printf("loaded %d archive passwords for parse task %s", len(archivePasswords), task.TaskID)
 	for _, item := range items {
 		cancelled, cancelErr := s.repo.IsParseTaskStopped(ctx, task.TaskID)
 		if cancelErr != nil {
