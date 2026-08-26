@@ -145,7 +145,9 @@ AI 支持整任务重试 `POST /api/tasks/{task_id}/agent-retry`、单文件重�
 | `GET` | `/api/admin/ai-analysis-settings` | `super_admin` | AI 分析限额设置 | 8/16新增 |
 | `PUT` | `/api/admin/ai-analysis-settings` | `super_admin` | 修改 AI 分析限额 | 8/16新增 |
 | `GET` | `/api/admin/keyword-rules` | 关键词权限 | 标准关键词列表 | 8/16之前 |
+| `POST` | `/api/admin/keyword-rules` | 关键词权限 | 新增公共解析规则 | 8/26新增 |
 | `POST` | `/api/admin/keyword-rules/import` | 关键词权限 | 导入标准关键词 | 8/16之前 |
+| `PUT` | `/api/admin/keyword-rules/{id}` | 关键词权限 | 修改公共解析规则 | 8/26新增 |
 | `DELETE` | `/api/admin/keyword-rules/{id}` | 关键词权限 | 删除标准关键词 | 8/16之前 |
 | `GET` | `/api/admin/projects` | `admin` 或 `super_admin` | 项目管理列表 | 8/16之前 |
 | `POST` | `/api/admin/projects` | `admin` 或 `super_admin` | 创建项目 | 8/16之前 |
@@ -434,6 +436,17 @@ AI 分析是异步任务：关键字规则结果先返回，AI 结果可能延�
 ### 8.5 `DELETE /api/admin/keyword-rules/{id}`
 
 删除管理员导入规则。规则被场景引用时返回 `409`。
+
+### 8.6 管理员解析规则维护（2026/08/26）
+
+管理员界面应使用管理员专用接口，不要调用普通 `/api/rules` 来创建公共规则：
+
+- `GET /api/admin/keyword-rules`：读取所有公共规则，包括 `system` 和关键字文档导入规则；响应包含 `enabled`、`source`、`editable=true`、`scenario_count`、`created_at`、`updated_at`。
+- `POST /api/admin/keyword-rules`：具有关键词权限的 `developer`、`admin`、`super_admin` 可新增。
+- `PUT /api/admin/keyword-rules/{id}`：具有关键词权限的 `developer`、`admin`、`super_admin` 可编辑公共规则。
+- `DELETE /api/admin/keyword-rules/{id}`：具有关键词权限的 `developer`、`admin`、`super_admin` 可删除；`scenario_count > 0` 时应禁用删除入口或展示“已被测试场景引用”。
+
+写入字段为 `name`、`category`、`keyword`、`scope`、`level`、`enabled`、`description`。普通用户不能进入或提交该模块，后端返回 `403`。
 
 ### 8.6 AI 分析限额设置
 
