@@ -15,7 +15,6 @@ import (
 	zip "github.com/yeka/zip"
 )
 
-const defaultArchivePassword = "70M_dashcam_^"
 const maxArchiveFiles = 10000
 
 func collectLogFiles(sourcePath, uploadRoot string, maxExtractBytes int64) ([]LogFile, error) {
@@ -93,7 +92,6 @@ func extractZipEntry(entry *zip.File, target string, maxBytes int64, passwords [
 	}
 
 	candidates := append([]string{}, passwords...)
-	candidates = append(candidates, defaultArchivePassword)
 	var lastErr error
 	for _, password := range candidates {
 		size, digest, err := extractZipEntryWithPassword(entry, target, maxBytes, password)

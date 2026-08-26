@@ -48,7 +48,7 @@ HTTP 服务默认配置为请求头读取 10 秒、请求读取 1800 秒、响�
 `POST /api/tasks/{task_id}/cancel` 取消解析任务。`queued` 或 `running` 可取消并返回 `202`、`status=cancelled`；已完成或失败返回 `409`，重复取消已取消任务幂等返回 `202`。取消保留原始文件、解析结果和运行日志，不修改采集端上传协议。
 `GET /api/logs/{upload_id}/search` 按关键字搜索原始日志，支持 `file_id`、`case_sensitive`、`page`、`page_size`，返回命中总数和行号、路径、内容。
 `GET /api/logs/{upload_id}/download` 的 `type` 可选 `file`、`batch`、`original`、`results`；单文件需传 `file_id` 并支持 HTTP Range，结果包包含 CSV、JSON、Markdown。不传 `type` 时兼容旧行为。
-上传、解压和解析失败统一返回中文 `message`，后台任务的 `error_message` 和运行日志也使用中文。管理员可通过 `GET/POST /api/admin/archive-passwords` 管理解压密码，通过 `DELETE /api/admin/archive-passwords/{id}` 删除；普通管理员使用现有关键字管理权限即可操作。
+上传、解压和解析失败统一返回中文 `message`，后台任务的 `error_message` 和运行日志也使用中文。管理员可通过 `GET/POST /api/admin/archive-passwords` 管理解压密码，通过 `DELETE /api/admin/archive-passwords/{id}` 删除；普通管理员使用现有关键字管理权限即可操作。解压密码不属于解析规则，后端不再内置默认密码：未加密 ZIP 直接解压；加密 ZIP 仅依次尝试管理员维护的密码。
 `PATCH /api/results/{id}/status` 更新异常结果状态，允许值为 `pending`、`confirmed`、`false_positive`、`fixed`、`closed`，只允许结果有权访问者操作。
 `POST /api/results/{id}/comments` 添加异常备注，JSON 为 `{ "comment": "...", "defect_id": "BUG-123" }`；`GET /api/results/{id}/comments` 查询备注历史。
 `PUT /api/results/{id}/assignment` 分配或取消负责人，JSON 为 `{ "assigned_to": "用户 open_id" }`，空字符串表示取消分配。
@@ -909,6 +909,8 @@ AI 分析为异步任务：关键字规则解析先同步完成（兜底），AI
 ```
 
 `category` 仅允许 `power`、`storage`、`recording`、`system`、`connectivity`、`feature`、`tool`；`level` 仅允许 `critical`、`warning`、`info`。同一公共规则不能存在相同的 `keyword + category`，冲突返回 `409`。规则被测试场景引用时删除返回 `409`，必须先从场景中移除引用；修改不会删除场景引用，但会使场景后续解析使用修改后的规则内容。管理员修改公共规则后，会清除该规则的个人启用/停用覆盖，确保新公共配置立即生效。
+
+兼容历史测试场景：后端仅展开 JSON 数组类型的 `checks`；空值、`null` 或旧对象格式按“未引用规则”处理，不会使规则列表或删除前引用检查返回 `500`。引用检查以字符串规则 ID 绑定到 SQL 文本参数，兼容 pgx 驱动；若数据库访问本身失败，接口仅返回中文通用提示，具体 PostgreSQL 错误会记录在后端控制台日志 `check keyword rule usage for rule <id>` 中，不向浏览器暴露数据库细节。
 
 ## 10. AI 分析与外部 Agent 接口
 

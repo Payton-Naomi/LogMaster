@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -81,7 +82,8 @@ func (r *Repository) ListRules(ctx context.Context, ownerOpenID string) ([]Parse
 		COALESCE(s.enabled, r.enabled), r.description, r.priority, r.source,
 		COALESCE(r.created_by_open_id = $1, FALSE),
 		(SELECT COUNT(*) FROM logmaster_api.test_scenarios scenario WHERE EXISTS (
-			SELECT 1 FROM jsonb_array_elements(scenario.checks) item WHERE item->>'rule_id' = r.id::text
+			SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(scenario.checks) = 'array' THEN scenario.checks ELSE '[]'::jsonb END) item
+			WHERE item->>'rule_id' = r.id::text
 		)), r.created_at, r.updated_at
 		FROM logmaster_api.parse_rules r
 		LEFT JOIN logmaster_api.user_rule_settings s
@@ -202,8 +204,8 @@ func defaultRuleEnabled(level string) bool {
 func (r *Repository) DeleteRule(ctx context.Context, ownerOpenID string, id int64) error {
 	var referenceCount int
 	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM logmaster_api.test_scenarios scenario
-		WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(scenario.checks) item
-			WHERE item->>'rule_id' = $1::text)`, id).Scan(&referenceCount)
+		WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(scenario.checks) = 'array' THEN scenario.checks ELSE '[]'::jsonb END) item
+			WHERE item->>'rule_id' = $1::text)`, strconv.FormatInt(id, 10)).Scan(&referenceCount)
 	if err != nil {
 		return err
 	}

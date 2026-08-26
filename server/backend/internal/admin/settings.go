@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"path/filepath"
@@ -340,10 +341,12 @@ func (s *Service) deleteKeywordRule(w http.ResponseWriter, r *http.Request, id i
 	var inUse bool
 	if err := s.db.QueryRowContext(r.Context(), `SELECT EXISTS (
 		SELECT 1 FROM logmaster_api.test_scenarios scenario WHERE EXISTS (
-			SELECT 1 FROM jsonb_array_elements(scenario.checks) item WHERE item->>'rule_id' = $1::text
+			SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(scenario.checks) = 'array' THEN scenario.checks ELSE '[]'::jsonb END) item
+			WHERE item->>'rule_id' = $1::text
 		)
-	)`, id).Scan(&inUse); err != nil {
-		writeError(w, http.StatusInternalServerError, "check keyword rule usage failed")
+	)`, strconv.FormatInt(id, 10)).Scan(&inUse); err != nil {
+		log.Printf("check keyword rule usage for rule %d: %v", id, err)
+		writeError(w, http.StatusInternalServerError, "检查规则是否被测试场景引用时发生错误，请稍后重试")
 		return
 	}
 	if inUse {
@@ -585,7 +588,8 @@ func (s *Service) listKeywordRules(r *http.Request) ([]keywordRule, error) {
 	rows, err := s.db.QueryContext(r.Context(), `SELECT rule.id, rule.name, rule.category, rule.keyword, rule.scope, rule.level,
 		rule.enabled, COALESCE(rule.description, ''), rule.source, TRUE,
 		(SELECT COUNT(*) FROM logmaster_api.test_scenarios scenario WHERE EXISTS (
-			SELECT 1 FROM jsonb_array_elements(scenario.checks) item WHERE item->>'rule_id' = rule.id::text
+			SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(scenario.checks) = 'array' THEN scenario.checks ELSE '[]'::jsonb END) item
+			WHERE item->>'rule_id' = rule.id::text
 		)), rule.created_at, rule.updated_at
 		FROM logmaster_api.parse_rules rule
 		WHERE rule.created_by_open_id IS NULL
