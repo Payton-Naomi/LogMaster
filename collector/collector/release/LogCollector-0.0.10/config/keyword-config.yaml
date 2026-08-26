@@ -1,0 +1,211 @@
+# 精简关键字配置：text 是匹配内容；默认普通包含且不区分大小写。
+# 只有正则匹配或严格区分大小写时才需要填写 mode / case_sensitive。
+schema_version: 1
+profiles:
+    - id: novatek-log-fields
+      name: 联咏项目日志关键字
+      groups:
+        - id: power-cycle-legacy
+          name: 开关机1
+          scope: 老项目
+          rules:
+            - {id: power-cycle-starting, text: starting}
+            - {id: power-cycle-need-power-off, text: need_power_off}
+        - id: power-cycle-new
+          name: 开关机2
+          scope: 新项目，如DR2820等
+          rules:
+            - {id: power-cycle-shutdown, text: 'shutdown:'}
+        - id: acc-state
+          name: ACC状态
+          scope: 自研通用
+          rules:
+            - {id: acc-off, text: AccOff}
+            - {id: acc-on, text: AccON}
+            - {id: acc-transition, text: trans to}
+            - {id: acc-generic, text: acc}
+        - id: lapse-mode
+          name: 进入缩时
+          scope: 自研通用
+          rules:
+            - {id: lapse-mode, text: ready to enter lapse mode}
+        - id: sd-card-state-log
+          name: SD卡状态日志
+          scope: 自研通用
+          rules:
+            - {id: sd-card-state, text: sd state}
+        - id: system-crash
+          name: 系统崩溃
+          scope: 自研通用
+          rules:
+            - {id: system-crash, text: backtrace}
+        - id: adas
+          name: ADAS相关
+          scope: 自研通用
+          rules:
+            - {id: adas, text: zdd Adas}
+        - id: voice-play
+          name: 声音播放
+          scope: 自研通用
+          rules:
+            - {id: voice-play, text: voice play}
+        - id: wifi-info
+          name: Wi-Fi信息
+          scope: 自研通用
+          rules:
+            - {id: wifi-info, text: Wifi--------}
+        - id: video-recording
+          name: 视频录制
+          scope: 自研通用
+          rules:
+            - {id: video-file-start, text: File Start}
+            - {id: video-file-end, text: File End}
+        - id: rear-camera
+          name: 后录相关
+          scope: 自研通用
+          rules:
+            - {id: rear-camera-ahd, text: AHD}
+        - id: bluetooth
+          name: 蓝牙相关
+          scope: 自研通用
+          rules:
+            - {id: bluetooth, text: blemng}
+        - id: ota
+          name: OTA
+          scope: 自研通用
+          rules:
+            - {id: ota, text: OTA start}
+        - id: gps
+          name: GPS
+          scope: 自研通用
+          rules:
+            - {id: gps, text: 'RMC:'}
+        - id: cpu-temperature
+          name: CPU温度
+          scope: 自研通用
+          rules:
+            - {id: cpu-temperature, text: cpu_temp}
+        - id: watchdog-restart
+          name: 触发看门狗重启
+          scope: DR4800、DR5800
+          rules:
+            - {id: watchdog-restart, text: 2f0050080}
+        - id: video-drop-frame
+          name: 视频丢帧
+          scope: 自研通用
+          rules:
+            - {id: video-drop-frame, text: queue is full!!! drop frame}
+        - id: application-crash
+          name: 应用程序崩溃
+          scope: 自研通用
+          rules:
+            - {id: application-crash, text: Log_Signal_Data}
+        - id: fatigue-reminder
+          name: 疲劳驾驶提醒
+          scope: 自研通用
+          rules:
+            - {id: fatigue-reminder, text: adas_driver_take_a_rest.aac}
+        - id: capacitor-power-error
+          name: 开关机通断电判断是否有异常
+          scope: 自研电容项目
+          rules:
+            - {id: capacitor-ubi0, text: ubi0 e}
+            - {id: capacitor-ubi1, text: ubi1 e}
+            - {id: capacitor-ubi2, text: ubi2 e}
+            - {id: capacitor-uib3, text: uib3 e}
+            - {id: capacitor-ubifs, text: ubifs e}
+        - id: format-storage-card
+          name: 提示：请格式化存储卡
+          scope: 自研通用
+          rules:
+            - {id: format-storage-card, text: s_FacParam.sd_state   = 2, name: s_FacParam.sd_state = 2}
+        - id: unrecognized-storage-files
+          name: 提示：卡内存在非记录仪文件
+          scope: 自研通用
+          rules:
+            - {id: unrecognized-storage-files, text: s_FacParam.sd_state   = 11, name: s_FacParam.sd_state = 11}
+        - id: storage-performance-low
+          name: 提示：性能不足建议更换
+          scope: 自研通用
+          rules:
+            - {id: storage-performance-low, text: 'speed monitor state cb, state'}
+        - id: mp4-write-failed
+          name: 写MP4文件报错
+          scope: 自研通用
+          rules:
+            - {id: mp4-write-failed, text: XA_MP4_Write failed}
+        - id: emergency-recording-stuck
+          name: 录制紧急视频卡住
+          scope: 自研通用
+          rules:
+            - {id: emergency-recording-stuck, text: 'Failed to create falloc directory: /mnt/sd/.tmp'}
+        - id: filesystem-error
+          name: 查看系统文件是否有异常
+          scope: 自研通用
+          rules:
+            - {id: filesystem-error, text: FAT-fs}
+        - id: frame-loss-15-seconds
+          name: 30秒内累计丢帧达到15秒
+          scope: 自研通用
+          rules:
+            - {id: frame-loss-15-seconds, text: SD write detected frame loss for}
+        - id: system-mode
+          name: 系统模式
+          scope: 自研通用
+          rules:
+            - {id: sysmode-log-field, text: FL_BOOT_SYSMODE, case_sensitive: true}
+            - {id: sysmode-normal, text: XA_NORMAL_SYSMODE, name: XA_NORMAL_SYSMODE（正常模式）, case_sensitive: true}
+            - {id: sysmode-guider, text: XA_GUIDER_SYSMODE, name: XA_GUIDER_SYSMODE（新手引导）, case_sensitive: true}
+            - {id: sysmode-factory, text: XA_FAC_SYSMODE, name: XA_FAC_SYSMODE（厂测模式）, case_sensitive: true}
+            - {id: sysmode-factory-smt, text: XA_FAC_SMT_SYSMODE, name: XA_FAC_SMT_SYSMODE（厂测单板测试不带sensor）, case_sensitive: true}
+            - {id: sysmode-mult, text: XA_SYSMODE_MULT, case_sensitive: true}
+            - {id: sysmode-enum-type, text: XA_BOOT_SYSMODE_E, case_sensitive: true}
+        - id: wake-source
+          name: 开机类型
+          scope: 自研通用
+          rules:
+            - {id: wake-psw1, text: POWER_ID_PSW1, name: POWER_ID_PSW1（电源键）, case_sensitive: true}
+            - {id: wake-psw2, text: POWER_ID_PSW2, name: POWER_ID_PSW2（ACC输入）, case_sensitive: true}
+            - {id: wake-psw3, text: POWER_ID_PSW3, name: POWER_ID_PSW3（USB输入）, case_sensitive: true}
+            - {id: wake-psw4, text: POWER_ID_PSW4, name: POWER_ID_PSW4（G-sensor）, case_sensitive: true}
+            - {id: wake-hwrt, text: POWER_ID_HWRT, name: POWER_ID_HWRT（硬件复位定时器）, case_sensitive: true}
+            - {id: wake-swrt, text: POWER_ID_SWRT, name: POWER_ID_SWRT（看门狗定时器）, case_sensitive: true}
+            - {id: wake-4g, text: POWER_ID_4G, name: POWER_ID_4G（4G信号唤醒）, case_sensitive: true}
+            - {id: wake-enum-type, text: XA_SYSTEM_WAKUP_SOURCE_E, case_sensitive: true}
+        - id: shutdown-type
+          name: 关机类型
+          scope: 自研通用
+          rules:
+            - {id: shutdown-high-temp, text: SYSTEMMNG_SHUTDOWN_HIGH_TEMP_E, name: SYSTEMMNG_SHUTDOWN_HIGH_TEMP_E（高温）, case_sensitive: true}
+            - {id: shutdown-power-plugout, text: SYSTEMMNG_SHUTDOWN_POWER_PLUGOUT_E, name: SYSTEMMNG_SHUTDOWN_POWER_PLUGOUT_E（外部电源断开）, case_sensitive: true}
+            - {id: shutdown-acc-off, text: SYSTEMMNG_SHUTDOWN_ACC_OFF_E, name: SYSTEMMNG_SHUTDOWN_ACC_OFF_E（ACC OFF）, case_sensitive: true}
+            - {id: shutdown-vol-low, text: SYSTEMMNG_SHUTDOWN_VOL_LOW_E, name: SYSTEMMNG_SHUTDOWN_VOL_LOW_E（低电关机）, case_sensitive: true}
+            - {id: shutdown-nomove, text: SYSTEMMNG_SHUTDOWN_NOMOVE_E, name: SYSTEMMNG_SHUTDOWN_NOMOVE_E（持续无移动）, case_sensitive: true}
+            - {id: shutdown-key-press, text: SYSTEMMNG_SHUTDOWN_KEY_PRESS_E, name: SYSTEMMNG_SHUTDOWN_KEY_PRESS_E（长按键）, case_sensitive: true}
+            - {id: shutdown-sd-plugout, text: SYSTEMMNG_SHUTDOWN_SD_PLUGOUT_E, name: SYSTEMMNG_SHUTDOWN_SD_PLUGOUT_E（SD卡移除）, case_sensitive: true}
+            - {id: shutdown-parking-enter, text: SYSTEMMNG_SHUTDOWN_PRKING_ENTER_E, name: SYSTEMMNG_SHUTDOWN_PRKING_ENTER_E（进入停车监控）, case_sensitive: true}
+            - {id: shutdown-parking-end, text: SYSTEMMNG_SHUTDOWN_PRKING_END_E, name: SYSTEMMNG_SHUTDOWN_PRKING_END_E（停车监控结束）, case_sensitive: true}
+            - {id: shutdown-reboot, text: SYSTEMMNG_SHUTDOWN_REBOOT_E, name: SYSTEMMNG_SHUTDOWN_REBOOT_E（重启）, case_sensitive: true}
+            - {id: shutdown-car-battery-low, text: SYSTEMMNG_SHUTDOWN_CAR_BATTERY_LOW_E, name: SYSTEMMNG_SHUTDOWN_CAR_BATTERY_LOW_E（汽车电瓶低电）, case_sensitive: true}
+            - {id: shutdown-4g, text: SYSTEMMNG_SHUTDOWN_4G_POWEROFF_E, name: SYSTEMMNG_SHUTDOWN_4G_POWEROFF_E（4G关机）, case_sensitive: true}
+            - {id: shutdown-parking-duration, text: SYSTEMMNG_SHUTDOWN_PARKING_MONITOR_DURATION_E, name: SYSTEMMNG_SHUTDOWN_PARKING_MONITOR_DURATION_E（停车监控时长结束）, case_sensitive: true}
+            - {id: shutdown-mult, text: SYSTEMMNG_SHUTDOWN_MULT, case_sensitive: true}
+            - {id: shutdown-enum-type, text: XA_SYSTEMMNG_SHUTDOWN_TYPE_E, case_sensitive: true}
+        - id: sd-state-enum
+          name: SD卡状态枚举
+          scope: 自研通用
+          rules:
+            - {id: sd-noexist, text: STGMNG_SD_NOEXSIT_STATE, case_sensitive: true}
+            - {id: sd-insert, text: STGMNG_SD_INSERT_STATE, case_sensitive: true}
+            - {id: sd-need-format, text: STGMNG_SD_NEEDFORMAT_STATE, case_sensitive: true}
+            - {id: sd-formatting, text: STGMNG_SD_FORMATING_STATE, case_sensitive: true}
+            - {id: sd-error, text: STGMNG_SD_ERROR_STATE, case_sensitive: true}
+            - {id: sd-fs-ok, text: STGMNG_SD_FSOK_STATE, case_sensitive: true}
+            - {id: sd-low-level, text: STGMNG_SD_LOWLEVEL_STATE, case_sensitive: true}
+            - {id: sd-low-capacity, text: STGMNG_SD_LOWCAP_STATE, case_sensitive: true}
+            - {id: sd-plugout, text: STGMNG_SD_PLUGOUT_STATE, case_sensitive: true}
+            - {id: sd-connecting, text: STGMNG_SD_CONNECTING_STATE, case_sensitive: true}
+            - {id: sd-checking, text: STGMNG_SD_CHECKING_STATE, case_sensitive: true}
+            - {id: sd-unrecognized-files, text: STGMNG_SD_UNRECOGNIZED_FILES, case_sensitive: true}
+            - {id: sd-state-built, text: STGMNG_SD_STATE_BULT, case_sensitive: true}
+            - {id: sd-state-enum-type, text: STGMNG_SD_STATE_E, case_sensitive: true}

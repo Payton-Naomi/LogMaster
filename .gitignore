@@ -52,3 +52,4 @@ server/backend/.gocache-*/
 .workbuddy/
 
 .workbuddy/
+.tmp-go-cache-collector/

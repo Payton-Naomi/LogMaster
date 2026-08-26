@@ -1,0 +1,6 @@
+LogMaster 采集端 0.0.10
+
+1. 双击 LogCollector-0.0.10.exe 启动。
+2. 程序会自动读取同级 config 目录中的设置与项目、任务、关键字配置。
+3. 服务迁移时，请在程序关闭后修改 config\settings-config.json 的 backendUrl，再重新启动。
+4. 本地配置可直接编辑 YAML；在程序内修改会自动同步写入对应文件。

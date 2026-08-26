@@ -54,6 +54,7 @@ type LogFileRecord struct {
 	CompletedAt    time.Time
 	UploadState    string
 	QueryCode      string
+	SegmentCount   int
 }
 
 type HistoryFilter struct {
@@ -146,7 +147,7 @@ func (s *Store) RegisterLogFile(ctx context.Context, session Session, file LogFi
 	return file.ID, nil
 }
 
-func (s *Store) ListHistory(ctx context.Context, filter HistoryFilter) ([]LogFileRecord, int64, error) {
+func (s *Store) listHistoryFiles(ctx context.Context, filter HistoryFilter) ([]LogFileRecord, int64, error) {
 	where := []string{"1=1"}
 	args := []any{}
 	if filter.DeviceSN != "" {
@@ -216,8 +217,107 @@ func (s *Store) ListHistory(ctx context.Context, filter HistoryFilter) ([]LogFil
 	return result, total, rows.Err()
 }
 
+// ListHistory returns one representative record per collection session. The
+// physical log_files rows remain available through SessionFiles for upload,
+// recovery and export, but history pagination is stable at the session level.
+func (s *Store) ListHistory(ctx context.Context, filter HistoryFilter) ([]LogFileRecord, int64, error) {
+	originalOffset, originalLimit := filter.Offset, filter.Limit
+	filter.Offset, filter.Limit = 0, 200
+	var files []LogFileRecord
+	for {
+		page, total, err := s.listHistoryFiles(ctx, filter)
+		if err != nil {
+			return nil, 0, err
+		}
+		files = append(files, page...)
+		filter.Offset += len(page)
+		if len(page) == 0 || int64(filter.Offset) >= total {
+			break
+		}
+	}
+	groups := make(map[string]LogFileRecord)
+	order := make([]string, 0)
+	for _, file := range files {
+		key := file.SessionID
+		if strings.TrimSpace(key) == "" {
+			key = file.ID
+		}
+		if current, ok := groups[key]; ok {
+			current.SegmentCount++
+			current.SizeBytes += file.SizeBytes
+			current.LineCount += file.LineCount
+			if file.FirstSequence < current.FirstSequence {
+				current.FirstSequence = file.FirstSequence
+			}
+			if file.LastSequence > current.LastSequence {
+				current.LastSequence = file.LastSequence
+			}
+			if file.CreatedAt.Before(current.CreatedAt) {
+				current.CreatedAt = file.CreatedAt
+			}
+			if file.CompletedAt.After(current.CompletedAt) {
+				current.CompletedAt = file.CompletedAt
+			}
+			if current.QueryCode == "" {
+				current.QueryCode = file.QueryCode
+			}
+			if uploadPriority(file.UploadState) > uploadPriority(current.UploadState) {
+				current.UploadState = file.UploadState
+			}
+			groups[key] = current
+			continue
+		}
+		file.SegmentCount = 1
+		groups[key] = file
+		order = append(order, key)
+	}
+	// listHistoryFiles sorts newest first, so first encounter preserves order.
+	limit := originalLimit
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	offset := originalOffset
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(order) {
+		return []LogFileRecord{}, int64(len(order)), nil
+	}
+	end := offset + limit
+	if end > len(order) {
+		end = len(order)
+	}
+	result := make([]LogFileRecord, 0, end-offset)
+	for _, key := range order[offset:end] {
+		result = append(result, groups[key])
+	}
+	return result, int64(len(order)), nil
+}
+
+func uploadPriority(state string) int {
+	switch state {
+	case "dead":
+		return 5
+	case "uncertain":
+		return 4
+	case "pending", "uploading":
+		return 3
+	case "uploaded":
+		return 1
+	default:
+		return 0
+	}
+}
+
 func (s *Store) SessionFiles(ctx context.Context, sessionID string) ([]LogFileRecord, error) {
 	return s.listFiles(ctx, `f.session_id=?`, sessionID)
+}
+
+// ListLocalHistoryFiles returns files that have never entered the upload queue.
+// Queued, uploading, uncertain, failed, and uploaded files are intentionally
+// excluded so shutdown cleanup cannot discard an upload task.
+func (s *Store) ListLocalHistoryFiles(ctx context.Context) ([]LogFileRecord, error) {
+	return s.listFiles(ctx, `COALESCE(b.state,'local')='local'`)
 }
 
 func (s *Store) GetLogFile(ctx context.Context, id string) (LogFileRecord, error) {
@@ -231,8 +331,8 @@ func (s *Store) GetLogFile(ctx context.Context, id string) (LogFileRecord, error
 	return items[0], nil
 }
 
-func (s *Store) listFiles(ctx context.Context, clause string, arg any) ([]LogFileRecord, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT f.log_file_id,f.session_id,f.file_path,f.file_name,f.device_sn,f.port_name,f.project_id,f.project_name,f.version,f.test_task_id,f.test_task_name,f.first_sequence,f.last_sequence,f.line_count,f.size_bytes,f.sha256,f.upload_eligible,f.created_at,f.completed_at,COALESCE(b.state,'local'),COALESCE(b.query_code,'') FROM log_files f LEFT JOIN upload_files uf ON uf.log_file_id=f.log_file_id LEFT JOIN upload_batches b ON b.local_batch_id=uf.local_batch_id WHERE `+clause+` ORDER BY f.first_sequence`, arg)
+func (s *Store) listFiles(ctx context.Context, clause string, args ...any) ([]LogFileRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT f.log_file_id,f.session_id,f.file_path,f.file_name,f.device_sn,f.port_name,f.project_id,f.project_name,f.version,f.test_task_id,f.test_task_name,f.first_sequence,f.last_sequence,f.line_count,f.size_bytes,f.sha256,f.upload_eligible,f.created_at,f.completed_at,COALESCE(b.state,'local'),COALESCE(b.query_code,'') FROM log_files f LEFT JOIN upload_files uf ON uf.log_file_id=f.log_file_id LEFT JOIN upload_batches b ON b.local_batch_id=uf.local_batch_id WHERE `+clause+` ORDER BY f.first_sequence`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -359,6 +459,130 @@ func (s *Store) DeleteLocalHistoryRecord(ctx context.Context, id string) (LogFil
 		return LogFileRecord{}, errors.New("history file entered the upload queue and cannot be deleted")
 	}
 	return record, nil
+}
+
+// DeleteHistoryRecords removes selected local history rows and their upload
+// queue links. Callers must remove the corresponding files from disk first.
+// Active uploads are rejected so an upload worker can never finish against a
+// record that was removed by an operator.
+func (s *Store) DeleteHistoryRecords(ctx context.Context, ids []string) error {
+	unique := make([]string, 0, len(ids))
+	seen := map[string]struct{}{}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
+			unique = append(unique, id)
+		}
+	}
+	if len(unique) == 0 {
+		return nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(unique)), ",")
+	args := make([]any, len(unique))
+	for index, id := range unique {
+		args[index] = id
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	// Acquire SQLite's writer lock before checking state, preventing a worker
+	// from claiming a pending batch between the check and link removal.
+	if _, err := tx.ExecContext(ctx, `UPDATE upload_batches SET next_attempt_at=next_attempt_at WHERE state='uploading'`); err != nil {
+		return err
+	}
+	var active int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM upload_files uf JOIN upload_batches b ON b.local_batch_id=uf.local_batch_id WHERE b.state='uploading' AND uf.log_file_id IN (`+placeholders+`)`, args...).Scan(&active); err != nil {
+		return err
+	}
+	if active > 0 {
+		return errors.New("文件正在上传，暂时不能删除")
+	}
+	sessionRows, err := tx.QueryContext(ctx, `SELECT DISTINCT session_id FROM log_files WHERE log_file_id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return err
+	}
+	var sessionIDs []string
+	for sessionRows.Next() {
+		var sessionID string
+		if err := sessionRows.Scan(&sessionID); err != nil {
+			sessionRows.Close()
+			return err
+		}
+		sessionIDs = append(sessionIDs, sessionID)
+	}
+	if err := sessionRows.Close(); err != nil {
+		return err
+	}
+
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT local_batch_id FROM upload_files WHERE log_file_id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return err
+	}
+	var batchIDs []string
+	for rows.Next() {
+		var batchID string
+		if err := rows.Scan(&batchID); err != nil {
+			rows.Close()
+			return err
+		}
+		batchIDs = append(batchIDs, batchID)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM upload_files WHERE log_file_id IN (`+placeholders+`)`, args...); err != nil {
+		return err
+	}
+	for _, batchID := range batchIDs {
+		if _, err := tx.ExecContext(ctx, `UPDATE upload_batches SET bytes_total=(SELECT COALESCE(SUM(size_bytes),0) FROM upload_files WHERE local_batch_id=?) WHERE local_batch_id=?`, batchID, batchID); err != nil {
+			return err
+		}
+		var remaining int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM upload_files WHERE local_batch_id=?`, batchID).Scan(&remaining); err != nil {
+			return err
+		}
+		if remaining == 0 {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM upload_batch_metadata WHERE local_batch_id=?`, batchID); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM upload_batches WHERE local_batch_id=?`, batchID); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM log_files WHERE log_file_id IN (`+placeholders+`)`, args...); err != nil {
+		return err
+	}
+	for _, sessionID := range sessionIDs {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM keyword_hits WHERE session_id=? AND NOT EXISTS (SELECT 1 FROM log_files WHERE session_id=?)`, sessionID, sessionID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM collection_sessions WHERE session_id=? AND NOT EXISTS (SELECT 1 FROM log_files WHERE session_id=?)`, sessionID, sessionID); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// RemoveMissingLogFile removes a history row whose physical file is gone.
+// Upload metadata is intentionally retained so queued batches remain auditable;
+// the upload worker marks such batches dead and will not retry them.
+func (s *Store) RemoveMissingLogFile(ctx context.Context, id string) error {
+	if strings.TrimSpace(id) == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM log_files WHERE log_file_id=?`, id)
+	return err
 }
 
 func boolInt(value bool) int {

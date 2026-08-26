@@ -28,7 +28,7 @@ storage:
 
 # 上传参数由维护人员修改，界面中不可编辑
 upload:
-  backend_url: ''
+  backend_url: 'http://localhost:8080/api'
   interval_seconds: 300
   concurrency: 5
   gzip: true

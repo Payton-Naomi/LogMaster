@@ -1,0 +1,28 @@
+{
+  "name": "logmaster-collector-desktop",
+  "private": true,
+  "version": "0.0.10",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ant-design/icons-vue": "^7.0.1",
+    "@lucide/vue": "latest",
+    "@vitejs/plugin-vue": "latest",
+    "@vueuse/core": "^14.3.0",
+    "ant-design-vue": "^4.2.6",
+    "reka-ui": "^2.10.1",
+    "vite": "latest",
+    "vue": "latest",
+    "vue-virtual-scroller": "^3.0.4"
+  },
+  "devDependencies": {
+    "@vue/test-utils": "^2.4.11",
+    "jsdom": "^30.0.0",
+    "vitest": "^4.1.10"
+  }
+}

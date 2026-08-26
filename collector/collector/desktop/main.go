@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"log"
+	"os"
 	"strings"
 
 	"github.com/wailsapp/wails/v2"
@@ -17,6 +18,12 @@ import (
 var assets embed.FS
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "--export-config" {
+		if err := exportDefaultConfigDirectory(os.Args[2]); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	service, err := NewService()
 	if err != nil {
 		log.Fatal(err)

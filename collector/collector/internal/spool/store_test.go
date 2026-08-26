@@ -61,6 +61,32 @@ func TestUploadStateLifecycleAndUncertainRequiresOperator(t *testing.T) {
 	}
 }
 
+func TestClearUploadHistoryKeepsOriginalFiles(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	dir := t.TempDir()
+	file := testFile(t, dir, "history.log", "keep source file\n", 1)
+	if _, err := store.EnqueueFile(ctx, "project", "version", file); err != nil {
+		t.Fatal(err)
+	}
+
+	deleted, err := store.ClearUploadHistory(ctx)
+	if err != nil || deleted != 1 {
+		t.Fatalf("clear upload history = %d, %v", deleted, err)
+	}
+	counts, err := store.Counts(ctx)
+	if err != nil || len(counts) != 0 {
+		t.Fatalf("queue should be empty: %+v, %v", counts, err)
+	}
+	if _, err := os.Stat(file.Path); err != nil {
+		t.Fatalf("source log was deleted: %v", err)
+	}
+}
+
 func TestClaimMergesFilesAndSplitRestoresIndividualPendingBatches(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(filepath.Join(t.TempDir(), "agent.db"))
@@ -179,6 +205,10 @@ func TestDeleteLocalHistoryRecordRejectsQueuedFiles(t *testing.T) {
 	logFileID, err := store.RegisterLogFile(ctx, session, LogFileRecord{Path: file.Path, DeviceSN: file.DeviceSN, PortName: "COM3", FirstSequence: 1, LastSequence: 1, SizeBytes: file.SizeBytes, SHA256: file.SHA256})
 	if err != nil {
 		t.Fatal(err)
+	}
+	localFiles, err := store.ListLocalHistoryFiles(ctx)
+	if err != nil || len(localFiles) != 1 || localFiles[0].ID != logFileID {
+		t.Fatalf("local history files = %+v, err=%v", localFiles, err)
 	}
 	if _, err := store.DeleteLocalHistoryRecord(ctx, logFileID); err != nil {
 		t.Fatalf("delete local history record: %v", err)

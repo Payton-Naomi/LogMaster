@@ -1,0 +1,16 @@
+./adapter.go
+./backoff.go
+./decoder.go
+./discovery.go
+./discovery_windows.go
+./framer.go
+./match.go
+./session.go
+./types.go
+./adapter_test.go
+./backoff_test.go
+./decoder_test.go
+./discovery_windows_test.go
+./framer_test.go
+./match_test.go
+./session_test.go

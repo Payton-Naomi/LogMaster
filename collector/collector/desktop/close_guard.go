@@ -11,7 +11,7 @@ func (s *Service) CloseWarnings() []string {
 		}
 	}
 	if active > 0 {
-		warnings = append(warnings, fmt.Sprintf("%d 个串口正在采集，退出时会封口日志并释放串口", active))
+		warnings = append(warnings, fmt.Sprintf("%d 个串口正在采集，退出时会封口日志并释放串口；未手动另存且未进入上传队列的本地日志会删除", active))
 	}
 	s.mu.RLock()
 	dirty := 0
