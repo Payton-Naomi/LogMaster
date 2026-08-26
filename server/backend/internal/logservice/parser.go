@@ -67,13 +67,10 @@ var causeDefinitions = []causeDefinition{
 	{Kind: "crash", Label: "系统或应用崩溃", Reason: "崩溃堆栈或信号信息可能是当前错误的上游原因", Confidence: 0.9, Pattern: regexp.MustCompile(`(?i)backtrace|Log_Signal_Data|panic|assert`)},
 }
 
-// parseLog keeps the original parser entry point for tests and callers that do not load database rules.
+// parseLog keeps the original parser entry point for callers that do not load
+// database rules. Generic log-level words are intentionally not findings.
 func parseLog(reader io.Reader) (parseSummary, error) {
-	rules := []ParseRule{
-		{Name: "通用错误", Category: "system", Keyword: "FATAL|ERROR", Level: "critical", Enabled: true, Priority: 900},
-		{Name: "通用警告", Category: "system", Keyword: "WARNING|WARN", Level: "warning", Enabled: true, Priority: 950},
-	}
-	return parseLogWithRules(reader, rules, time.Now())
+	return parseLogWithRules(reader, nil, time.Now())
 }
 
 func parseLogWithRules(reader io.Reader, rules []ParseRule, now time.Time) (parseSummary, error) {

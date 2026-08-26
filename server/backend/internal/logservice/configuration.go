@@ -46,6 +46,13 @@ type TestScenario struct {
 	UpdatedAt   time.Time       `json:"updated_at"`
 }
 
+// CollectorProject is the stable project shape exposed to collector clients.
+// IDs are strings so the client does not depend on PostgreSQL's integer type.
+type CollectorProject struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 type ScenarioMetadata struct {
 	Status       string   `json:"status"`
 	ProjectScope string   `json:"project_scope"`
@@ -71,7 +78,7 @@ type ScenarioCheck struct {
 
 func (r *Repository) ListRules(ctx context.Context, ownerOpenID string) ([]ParseRule, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT r.id, r.name, r.category, r.keyword, r.scope, r.level,
-		COALESCE(s.enabled, r.level IN ('critical', 'warning')), r.description, r.priority, r.source,
+		COALESCE(s.enabled, r.enabled), r.description, r.priority, r.source,
 		COALESCE(r.created_by_open_id = $1, FALSE),
 		(SELECT COUNT(*) FROM logmaster_api.test_scenarios scenario WHERE EXISTS (
 			SELECT 1 FROM jsonb_array_elements(scenario.checks) item WHERE item->>'rule_id' = r.id::text
@@ -429,6 +436,29 @@ func (r *Repository) ListScenarios(ctx context.Context) ([]TestScenario, error) 
 		}
 		scenarios = append(scenarios, scenario)
 		hydrateScenarioFields(&scenarios[len(scenarios)-1])
+	}
+	return scenarios, rows.Err()
+}
+
+// ListCollectorScenarios returns only published scenarios that a collector can use.
+func (r *Repository) ListCollectorScenarios(ctx context.Context) ([]TestScenario, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id, name, description, color, judgement, metadata, checks,
+		created_at, updated_at FROM logmaster_api.test_scenarios
+		WHERE COALESCE(metadata->>'status', 'published') = 'published'
+		ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	scenarios := make([]TestScenario, 0)
+	for rows.Next() {
+		var scenario TestScenario
+		if err := rows.Scan(&scenario.ID, &scenario.Name, &scenario.Description, &scenario.Color,
+			&scenario.Judgement, &scenario.Metadata, &scenario.Checks, &scenario.CreatedAt, &scenario.UpdatedAt); err != nil {
+			return nil, err
+		}
+		hydrateScenarioFields(&scenario)
+		scenarios = append(scenarios, scenario)
 	}
 	return scenarios, rows.Err()
 }
