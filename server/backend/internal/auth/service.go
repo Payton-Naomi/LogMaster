@@ -135,6 +135,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/callback", s.authCallbackHandler)
 	mux.HandleFunc("/api/auth/external/register", s.externalRegisterHandler)
 	mux.HandleFunc("/api/auth/external/login", s.externalLoginHandler)
+	mux.HandleFunc("/api/auth/external/password-reset", s.externalPasswordResetHandler)
 	mux.HandleFunc("/api/auth/external/change-password", s.externalChangePasswordHandler)
 	mux.HandleFunc("/api/auth/external/change-email", s.externalChangeEmailHandler)
 	mux.HandleFunc("/api/auth/logout", s.logoutHandler)
@@ -179,6 +180,16 @@ func (s *Service) deleteSession(r *http.Request) {
 	s.sessionMu.Lock()
 	delete(s.sessions, cookie.Value)
 	s.sessionMu.Unlock()
+}
+
+func (s *Service) deleteSessionsForUser(openID string) {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	for token, user := range s.sessions {
+		if user.FeishuOpenID == openID {
+			delete(s.sessions, token)
+		}
+	}
 }
 
 func randomToken() string {

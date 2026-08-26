@@ -173,6 +173,7 @@ func (s *Service) uploadHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		metadata.UploaderName, metadata.UploaderID = session.UploaderName, session.UploaderID
+		metadata.AIAnalysisEnabled = session.AIAnalysisEnabled
 		if !sameJSON(session.ConfigSnapshot, []byte(r.FormValue("config_snapshot"))) {
 			writeError(w, http.StatusBadRequest, "config_snapshot does not match upload session")
 			return
@@ -215,7 +216,7 @@ func (s *Service) uploadHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, ErrScenarioNotApplicable) {
-			writeError(w, http.StatusBadRequest, "test scenario is unavailable or does not apply to this project")
+			writeError(w, http.StatusBadRequest, "test task is not synchronized to a server test scenario")
 			return
 		}
 		if errors.Is(err, ErrScenarioRuleUnavailable) {
@@ -288,6 +289,14 @@ func uploadMetadataFromForm(r *http.Request, creatorOpenID, projectName, version
 		CollectorVersion:    strings.TrimSpace(r.FormValue("collector_version")),
 		Timezone:            strings.TrimSpace(r.FormValue("timezone")),
 		DisableParsingRules: true,
+		AIAnalysisEnabled:   true,
+	}
+	if value := strings.TrimSpace(r.FormValue("ai_analysis_enabled")); value != "" {
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return UploadMetadata{}, fmt.Errorf("ai_analysis_enabled must be a boolean")
+		}
+		metadata.AIAnalysisEnabled = enabled
 	}
 	if value := strings.TrimSpace(r.FormValue("disable_parsing_rules")); value != "" {
 		disableParsingRules, err := strconv.ParseBool(value)
@@ -1805,6 +1814,77 @@ func (s *Service) keywordSyncHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.JSON(w, response.APIResponse{Code: 0, Message: "success", Data: keywords})
+}
+
+func (s *Service) collectorProjectsSyncHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	if _, ok := s.uploadUser(r); !ok {
+		writeError(w, http.StatusUnauthorized, "login required or upload token invalid")
+		return
+	}
+	projects, err := s.repo.ListCollectorProjects(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query collector projects failed")
+		return
+	}
+	response.JSON(w, response.APIResponse{Code: 0, Message: "success", Data: projects})
+}
+
+func (s *Service) collectorScenariosSyncHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	if _, ok := s.uploadUser(r); !ok {
+		writeError(w, http.StatusUnauthorized, "login required or upload token invalid")
+		return
+	}
+	scenarios, err := s.repo.ListCollectorScenarios(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query collector scenarios failed")
+		return
+	}
+	response.JSON(w, response.APIResponse{Code: 0, Message: "success", Data: scenarios})
+}
+
+type collectorSyncSnapshot struct {
+	Projects  []CollectorProject `json:"projects"`
+	Scenarios []TestScenario     `json:"scenarios"`
+	Keywords  []StandardKeyword  `json:"keywords"`
+	SyncedAt  time.Time          `json:"synced_at"`
+}
+
+func (s *Service) collectorSyncHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	if _, ok := s.uploadUser(r); !ok {
+		writeError(w, http.StatusUnauthorized, "login required or upload token invalid")
+		return
+	}
+	ctx := r.Context()
+	projects, err := s.repo.ListCollectorProjects(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query collector projects failed")
+		return
+	}
+	scenarios, err := s.repo.ListCollectorScenarios(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query collector scenarios failed")
+		return
+	}
+	keywords, err := s.repo.ListStandardKeywords(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query standard keywords failed")
+		return
+	}
+	response.JSON(w, response.APIResponse{Code: 0, Message: "success", Data: collectorSyncSnapshot{
+		Projects: projects, Scenarios: scenarios, Keywords: keywords, SyncedAt: time.Now().UTC(),
+	}})
 }
 
 func (s *Service) queryHandler(w http.ResponseWriter, r *http.Request) {

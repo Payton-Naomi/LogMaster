@@ -536,6 +536,9 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/upload-sessions/", s.completeUploadSessionHandler)
 	mux.HandleFunc("/api/upload-config", s.uploadConfigHandler)
 	mux.HandleFunc("/api/keywords/sync", s.keywordSyncHandler)
+	mux.HandleFunc("/api/projects/sync", s.collectorProjectsSyncHandler)
+	mux.HandleFunc("/api/scenarios/sync", s.collectorScenariosSyncHandler)
+	mux.HandleFunc("/api/collector/sync", s.collectorSyncHandler)
 	mux.HandleFunc("/api/logs/upload", s.uploadHandler)
 	mux.HandleFunc("/api/query/", s.queryHandler)
 	mux.HandleFunc("/api/logs/inspect", s.inspectHandler)
@@ -635,6 +638,12 @@ func (s *Service) processUpload(task ClaimedParseTask) {
 		fail("load parsing rules", fmt.Sprintf("load parsing rules: %v", err))
 		return
 	}
+	aiEnabled, err := s.repo.UploadAIAnalysisEnabled(ctx, task.UploadID)
+	if err != nil {
+		fail("load AI analysis setting", err.Error())
+		return
+	}
+	aiEnabled = aiEnabled && s.analysisEnabled(ctx)
 	var processedBytes int64
 	allAgentJobsQueued := true
 	for _, file := range files {
@@ -683,7 +692,7 @@ func (s *Service) processUpload(task ClaimedParseTask) {
 		if err := s.repo.UpdateClaimedParsingProgress(ctx, taskID, task.RunToken, processedBytes); err != nil {
 			log.Printf("finalize parsing progress %s: %v", taskID, err)
 		}
-		if s.analysisEnabled(ctx) {
+		if aiEnabled {
 			file.LineCount = summary.Lines
 			if !s.enqueueAgentAnalysis(agentJob{
 				taskID: taskID, uploadID: task.UploadID, ownerOpenID: ownerOpenID, attemptNo: task.AttemptNo, file: file,
@@ -701,7 +710,7 @@ func (s *Service) processUpload(task ClaimedParseTask) {
 	if err := s.repo.CreateTaskNotifications(ctx, task.TaskID, "task_completed", "日志解析完成", "日志解析任务已完成，可查看分析结果"); err != nil {
 		log.Printf("create completion notification %s: %v", task.TaskID, err)
 	}
-	if s.dynamicLLM && s.analysisEnabled(ctx) && allAgentJobsQueued {
+	if s.dynamicLLM && aiEnabled && allAgentJobsQueued {
 		s.enqueueAgentAnalysis(agentJob{taskID: taskID, uploadID: task.UploadID, ownerOpenID: ownerOpenID, attemptNo: task.AttemptNo, overview: true})
 	}
 	s.repo.RecordUploadRuntimeLog(ctx, task.UploadID, "parsing", "complete parsing", "success", fmt.Sprintf("parsed %d log files", len(files)))

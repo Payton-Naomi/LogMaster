@@ -1,5 +1,7 @@
 # LogMaster 后端 API 文档
 
+> **2026/08/26 更新**：新增采集端项目、已发布测试场景及统一配置快照同步接口。
+
 > **825 调整（2026-08-25）**：新增外包账号密码注册与登录。外包账号固定为 `role=user`、`role_source=external`、`identity_type=external`，不使用飞书职位自动授权规则。迁移 `045_external_password_accounts.sql` 新增凭证表，`047_external_role_source.sql` 将用户角色来源约束扩展为 `external`，两者均需在后端重启时自动执行；密码只以 Argon2id 哈希保存；本期不包含邮箱验证、邀请码、账号禁用或有效期。
 
 `POST /api/auth/external/register` 公开注册，JSON 为 `{ "name": "...", "email": "...", "company": "...", "password": "非空字符串", "confirm_password": "..." }`。邮箱全局不可重复，成功返回 `201` 并写入登录 Cookie。
@@ -9,6 +11,16 @@
 `POST /api/auth/external/change-password` 要求外包用户登录，JSON 为 `{ "current_password": "...", "password": "非空字符串", "confirm_password": "..." }`；当前密码正确且新密码非空、两次输入一致时修改成功。
 
 `POST /api/auth/external/change-email` 要求外包用户登录，JSON 为 `{ "current_password": "...", "email": "..." }`；邮箱全局唯一，修改成功后刷新当前登录 Cookie。飞书账号不能通过这两个接口修改凭证或邮箱。
+
+`POST /api/auth/external/password-reset` 为外包账号忘记密码接口，不要求登录，JSON 为 `{ "name": "...", "email": "...", "password": "非空字符串", "confirm_password": "..." }`。后端仅在外包账号的姓名和邮箱同时精确匹配时更新密码；不匹配统一返回 `401`，不透露邮箱是否已注册。成功后作废该账号现有登录会话，需使用新密码重新登录；飞书账号不支持该接口。
+
+采集端上传规则：采集端同步的测试任务必须对应服务端 `test_scenarios`。上传带 `test_task_id` 时按场景 ID 精确匹配；仅带 `test_task_name` 时按唯一场景名称匹配；带有测试任务但无法匹配时直接拒绝上传，不回退到全量规则。未带测试任务时使用全部已启用的服务端关键字规则，但不使用 `FATAL/ERROR/WARNING/WARN` 通用兜底规则。
+
+任务调度环境变量：`MAX_PARSE_WORKERS` 控制规则解析并行 Worker 数；`MAX_AI_WORKERS` 控制 AI 并行 Worker 数；`MAX_PARSE_ATTEMPTS` 控制解析任务自动恢复次数；`MAX_PARSE_PER_USER` 和 `MAX_PARSE_PER_PROJECT` 控制单用户、单项目并发上限；`MAX_FILES_PER_PARSE_TASK` 和 `MAX_BYTES_PER_PARSE_TASK` 限制单个任务解压后的文件数和总字节数。超过并发上限的任务排队，超过文件或字节容量的任务失败。
+
+飞书通知只发送给 `identity_type=feishu` 的企业员工。外包账号不会收到飞书登录成功或 AI 分析完成/失败消息，也不会被加入飞书消息通知收件人。
+
+AI 开关：采集端 `POST /api/upload-sessions` 创建的会话固定关闭 AI，后续该会话上传的文件不会创建 AI 作业。网页服务端上传接口 `POST /api/uploads` 可通过表单字段 `ai_analysis_enabled=true|false` 控制，未提交时默认为 `true`。迁移 `049_upload_ai_analysis_switch.sql` 增加上传会话和上传记录的持久化开关。
 
 > **最新：824 调整（2026-08-24）**：`POST /api/upload-sessions` 成功响应新增 `data.uploader_job_title`。后端使用飞书 `tenant_access_token` 查询用户详情并同步 `users.job_title`；该字段为后端解析的只读展示字段，采集端请求不需要新增字段。
 
@@ -936,3 +948,9 @@ AI 分析为异步任务：关键字规则解析先同步完成（兜底），AI
 配置项为 `AGENT_ANALYSIS_URL`、`AGENT_ANALYSIS_TOKEN` 和 `AGENT_ANALYSIS_TIMEOUT_SECONDS`，结果 `provider` 记为 `http-agent`。
 
 两种方式的失败都会单独持久化为 `failed` 记录，不会使本地解析任务失败。
+## Collector configuration synchronization
+
+`GET /api/projects/sync`, `GET /api/scenarios/sync`, and `GET /api/collector/sync` are upload-identity endpoints for collector configuration synchronization. The combined endpoint returns active projects, published scenarios, enabled standard keywords, and `synced_at`. The upload-session API remains the final validation point.
+### Role restoration behavior (2026/08/26)
+
+`PUT /api/admin/users/{user_id}/restore-feishu-role` now checks the account identity. External accounts are always restored to `role=user` with `role_source=external`; they are never assigned a Feishu job-title role. Feishu accounts are restored with `role_source=feishu` and their role is recalculated from the current Feishu job title. The operation is audited with the actual previous and new roles.

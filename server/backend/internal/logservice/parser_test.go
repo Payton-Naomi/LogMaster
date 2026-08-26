@@ -7,16 +7,16 @@ import (
 	"time"
 )
 
-func TestParseLog(t *testing.T) {
+func TestParseLogDoesNotTreatGenericLevelsAsFindings(t *testing.T) {
 	input := "INFO boot complete\nERROR disk full\nwarning temperature high\nFATAL recorder crashed\n"
 	summary, err := parseLog(strings.NewReader(input))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.Lines != 4 || summary.Errors != 2 || summary.Warnings != 1 {
+	if summary.Lines != 4 || summary.Errors != 0 || summary.Warnings != 0 {
 		t.Fatalf("unexpected summary: %+v", summary)
 	}
-	if len(summary.Results) != 3 {
+	if len(summary.Results) != 0 {
 		t.Fatalf("got %d results", len(summary.Results))
 	}
 }
