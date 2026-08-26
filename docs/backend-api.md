@@ -164,7 +164,9 @@ AI 分析命中日志采用按规则/关键词分组轮询采样，避免重复�
 | `GET` | `/api/admin/ai-analysis-settings` | `super_admin` | 查询 AI 分析限额设置 | 8/16新增 |
 | `PUT` | `/api/admin/ai-analysis-settings` | `super_admin` | 修改 AI 分析限额设置 | 8/16新增 |
 | `GET` | `/api/admin/keyword-rules` | `developer`、`admin` 或 `super_admin` | 查询标准关键词规则 | 8/16之前 |
+| `POST` | `/api/admin/keyword-rules` | `developer`、`admin` 或 `super_admin` | 新增公共解析规则 | 8/26新增 |
 | `POST` | `/api/admin/keyword-rules/import` | `developer`、`admin` 或 `super_admin` | 导入标准关键词规则 | 8/16之前 |
+| `PUT` | `/api/admin/keyword-rules/{id}` | `developer`、`admin` 或 `super_admin` | 修改公共解析规则 | 8/26新增 |
 | `DELETE` | `/api/admin/keyword-rules/{id}` | `developer`、`admin` 或 `super_admin` | 删除标准关键词规则 | 8/16之前 |
 | `GET` | `/api/admin/projects` | `admin` 或 `super_admin` | 查询项目管理列表 | 8/16之前 |
 | `POST` | `/api/admin/projects` | `admin` 或 `super_admin` | 创建项目 | 8/16之前 |
@@ -880,6 +882,33 @@ AI 分析为异步任务：关键字规则解析先同步完成（兜底），AI
 ### 9.6 `DELETE /api/admin/keyword-rules/{id}`
 
 要求关键词管理权限。规则被测试场景引用时返回 `409`；不存在或不是管理员上传规则时返回 `404`。
+
+### 9.7 管理员公共解析规则 CRUD（2026/08/26）
+
+管理员规则界面使用 `/api/admin/keyword-rules` 管理全部公共解析规则，包括原有 `system` 规则和从关键字文档导入的 `admin_keyword_upload` 规则。普通 `/api/rules` 保持用户自定义规则设置入口，`POST /api/rules` 仍固定返回 `403`，不能用于维护公共规则。
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| `GET` | `/api/admin/keyword-rules` | `developer`、`admin` 或 `super_admin` | 查询全部公共规则；所有返回项均为 `editable=true`。 |
+| `POST` | `/api/admin/keyword-rules` | `developer`、`admin` 或 `super_admin` | 新增公共规则，来源固定为 `admin_keyword_upload`。 |
+| `PUT` | `/api/admin/keyword-rules/{id}` | `developer`、`admin` 或 `super_admin` | 修改公共规则的名称、分类、关键字、范围、等级、启用状态和说明。 |
+| `DELETE` | `/api/admin/keyword-rules/{id}` | `developer`、`admin` 或 `super_admin` | 删除未被测试场景引用的公共规则。 |
+
+新增和修改请求体：
+
+```json
+{
+  "name": "录像写盘失败",
+  "category": "recording",
+  "keyword": "XA_WRITE_FAIL",
+  "scope": "全局",
+  "level": "critical",
+  "enabled": true,
+  "description": "检测录像写盘失败"
+}
+```
+
+`category` 仅允许 `power`、`storage`、`recording`、`system`、`connectivity`、`feature`、`tool`；`level` 仅允许 `critical`、`warning`、`info`。同一公共规则不能存在相同的 `keyword + category`，冲突返回 `409`。规则被测试场景引用时删除返回 `409`，必须先从场景中移除引用；修改不会删除场景引用，但会使场景后续解析使用修改后的规则内容。管理员修改公共规则后，会清除该规则的个人启用/停用覆盖，确保新公共配置立即生效。
 
 ## 10. AI 分析与外部 Agent 接口
 

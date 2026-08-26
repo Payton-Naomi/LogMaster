@@ -33,14 +33,19 @@ type uploadCapacity struct {
 }
 
 type keywordRule struct {
-	ID          int64     `json:"id"`
-	Name        string    `json:"name"`
-	Category    string    `json:"category"`
-	Keyword     string    `json:"keyword"`
-	Scope       string    `json:"scope"`
-	Level       string    `json:"level"`
-	Description string    `json:"description"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID            int64     `json:"id"`
+	Name          string    `json:"name"`
+	Category      string    `json:"category"`
+	Keyword       string    `json:"keyword"`
+	Scope         string    `json:"scope"`
+	Level         string    `json:"level"`
+	Enabled       bool      `json:"enabled"`
+	Description   string    `json:"description"`
+	Source        string    `json:"source"`
+	Editable      bool      `json:"editable"`
+	ScenarioCount int       `json:"scenario_count"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type keywordImportResult struct {
@@ -49,6 +54,11 @@ type keywordImportResult struct {
 	Skipped int           `json:"skipped"`
 	Rules   []keywordRule `json:"rules"`
 }
+
+var (
+	errInvalidKeywordRule   = errors.New("invalid keyword rule")
+	errKeywordRuleDuplicate = errors.New("keyword rule already exists")
+)
 
 func (s *Service) uploadCapacityHandler(w http.ResponseWriter, r *http.Request) {
 	openID, ok := s.requirePermission(w, r, permissionCapacity)
@@ -245,27 +255,47 @@ func validateAIAnalysisSettings(input aiAnalysisSettings) error {
 }
 
 func (s *Service) keywordRulesHandler(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requirePermission(w, r, permissionKeywords); !ok {
-		return
-	}
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		if _, ok := s.requirePermission(w, r, permissionKeywords); !ok {
+			return
+		}
+		rules, err := s.listKeywordRules(r)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "query keyword rules failed")
+			return
+		}
+		response.JSON(w, response.APIResponse{Code: 0, Message: "success", Data: rules})
+	case http.MethodPost:
+		if _, ok := s.requireKeywordRuleAdmin(w, r); !ok {
+			return
+		}
+		var rule keywordRule
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&rule); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid keyword rule")
+			return
+		}
+		created, err := s.createKeywordRule(r, rule)
+		if errors.Is(err, errKeywordRuleDuplicate) {
+			writeError(w, http.StatusConflict, "keyword rule already exists")
+			return
+		}
+		if errors.Is(err, errInvalidKeywordRule) {
+			writeError(w, http.StatusBadRequest, "invalid keyword rule")
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "create keyword rule failed")
+			return
+		}
+		response.JSONStatus(w, http.StatusCreated, response.APIResponse{Code: 0, Message: "success", Data: created})
+	default:
 		methodNotAllowed(w)
-		return
 	}
-	rules, err := s.listKeywordRules(r)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "query keyword rules failed")
-		return
-	}
-	response.JSON(w, response.APIResponse{Code: 0, Message: "success", Data: rules})
 }
 
 func (s *Service) keywordRuleHandler(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requirePermission(w, r, permissionKeywords); !ok {
-		return
-	}
-	if r.Method != http.MethodDelete {
-		methodNotAllowed(w)
+	if _, ok := s.requireKeywordRuleAdmin(w, r); !ok {
 		return
 	}
 	id, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/api/admin/keyword-rules/")), 10, 64)
@@ -273,6 +303,40 @@ func (s *Service) keywordRuleHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid rule id")
 		return
 	}
+	switch r.Method {
+	case http.MethodPut:
+		var rule keywordRule
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&rule); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid keyword rule")
+			return
+		}
+		rule.ID = id
+		updated, err := s.updateKeywordRule(r, rule)
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "keyword rule not found")
+			return
+		}
+		if errors.Is(err, errKeywordRuleDuplicate) {
+			writeError(w, http.StatusConflict, "keyword rule already exists")
+			return
+		}
+		if errors.Is(err, errInvalidKeywordRule) {
+			writeError(w, http.StatusBadRequest, "invalid keyword rule")
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "update keyword rule failed")
+			return
+		}
+		response.JSON(w, response.APIResponse{Code: 0, Message: "success", Data: updated})
+	case http.MethodDelete:
+		s.deleteKeywordRule(w, r, id)
+	default:
+		methodNotAllowed(w)
+	}
+}
+
+func (s *Service) deleteKeywordRule(w http.ResponseWriter, r *http.Request, id int64) {
 	var inUse bool
 	if err := s.db.QueryRowContext(r.Context(), `SELECT EXISTS (
 		SELECT 1 FROM logmaster_api.test_scenarios scenario WHERE EXISTS (
@@ -287,7 +351,7 @@ func (s *Service) keywordRuleHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := s.db.ExecContext(r.Context(), `DELETE FROM logmaster_api.parse_rules
-		WHERE id = $1 AND created_by_open_id IS NULL AND source = 'admin_keyword_upload'`, id)
+		WHERE id = $1 AND created_by_open_id IS NULL`, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "delete keyword rule failed")
 		return
@@ -301,7 +365,7 @@ func (s *Service) keywordRuleHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) keywordRulesImportHandler(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requirePermission(w, r, permissionKeywords); !ok {
+	if _, ok := s.requireKeywordRuleAdmin(w, r); !ok {
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -518,8 +582,14 @@ func (s *Service) saveKeywordRules(r *http.Request, rules []keywordRule, skipped
 }
 
 func (s *Service) listKeywordRules(r *http.Request) ([]keywordRule, error) {
-	rows, err := s.db.QueryContext(r.Context(), `SELECT id, name, category, keyword, scope, level, COALESCE(description, ''), updated_at
-		FROM logmaster_api.parse_rules WHERE created_by_open_id IS NULL AND source = 'admin_keyword_upload' ORDER BY updated_at DESC, name`)
+	rows, err := s.db.QueryContext(r.Context(), `SELECT rule.id, rule.name, rule.category, rule.keyword, rule.scope, rule.level,
+		rule.enabled, COALESCE(rule.description, ''), rule.source, TRUE,
+		(SELECT COUNT(*) FROM logmaster_api.test_scenarios scenario WHERE EXISTS (
+			SELECT 1 FROM jsonb_array_elements(scenario.checks) item WHERE item->>'rule_id' = rule.id::text
+		)), rule.created_at, rule.updated_at
+		FROM logmaster_api.parse_rules rule
+		WHERE rule.created_by_open_id IS NULL
+		ORDER BY rule.updated_at DESC, rule.name`)
 	if err != nil {
 		return nil, err
 	}
@@ -527,12 +597,111 @@ func (s *Service) listKeywordRules(r *http.Request) ([]keywordRule, error) {
 	rules := make([]keywordRule, 0)
 	for rows.Next() {
 		var rule keywordRule
-		if err := rows.Scan(&rule.ID, &rule.Name, &rule.Category, &rule.Keyword, &rule.Scope, &rule.Level, &rule.Description, &rule.UpdatedAt); err != nil {
+		if err := rows.Scan(&rule.ID, &rule.Name, &rule.Category, &rule.Keyword, &rule.Scope, &rule.Level,
+			&rule.Enabled, &rule.Description, &rule.Source, &rule.Editable, &rule.ScenarioCount, &rule.CreatedAt, &rule.UpdatedAt); err != nil {
 			return nil, err
 		}
 		rules = append(rules, rule)
 	}
 	return rules, rows.Err()
+}
+
+func (s *Service) requireKeywordRuleAdmin(w http.ResponseWriter, r *http.Request) (string, bool) {
+	openID, ok := s.currentUser(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "login required")
+		return "", false
+	}
+	role, err := s.roleForUser(r.Context(), openID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query user role failed")
+		return "", false
+	}
+	if role != roleDeveloper && role != roleAdmin && role != roleSuperAdmin {
+		writeError(w, http.StatusForbidden, "当前账号无权维护公共关键词规则")
+		return "", false
+	}
+	return openID, true
+}
+
+func normalizeKeywordRule(rule *keywordRule) error {
+	rule.Name = strings.TrimSpace(rule.Name)
+	rule.Keyword = strings.TrimSpace(rule.Keyword)
+	rule.Category = strings.ToLower(strings.TrimSpace(rule.Category))
+	rule.Level = strings.ToLower(strings.TrimSpace(rule.Level))
+	rule.Scope = strings.TrimSpace(rule.Scope)
+	rule.Description = strings.TrimSpace(rule.Description)
+	if rule.Name == "" || rule.Keyword == "" || !validKeywordCategory(rule.Category) || !validKeywordLevel(rule.Level) ||
+		utf8.RuneCountInString(rule.Name) > 128 || utf8.RuneCountInString(rule.Keyword) > 500 ||
+		utf8.RuneCountInString(rule.Scope) > 128 || utf8.RuneCountInString(rule.Description) > 1000 {
+		return errInvalidKeywordRule
+	}
+	return nil
+}
+
+func (s *Service) createKeywordRule(r *http.Request, rule keywordRule) (keywordRule, error) {
+	if err := normalizeKeywordRule(&rule); err != nil {
+		return keywordRule{}, err
+	}
+	var exists bool
+	if err := s.db.QueryRowContext(r.Context(), `SELECT EXISTS (SELECT 1 FROM logmaster_api.parse_rules
+		WHERE created_by_open_id IS NULL AND LOWER(keyword) = LOWER($1) AND category = $2)`, rule.Keyword, rule.Category).Scan(&exists); err != nil {
+		return keywordRule{}, err
+	}
+	if exists {
+		return keywordRule{}, errKeywordRuleDuplicate
+	}
+	err := s.db.QueryRowContext(r.Context(), `INSERT INTO logmaster_api.parse_rules
+		(name, category, keyword, scope, level, enabled, description, priority, source, created_by_open_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 200, 'admin_keyword_upload', NULL)
+		RETURNING id, name, category, keyword, scope, level, enabled, COALESCE(description, ''), source, created_at, updated_at`,
+		rule.Name, rule.Category, rule.Keyword, rule.Scope, rule.Level, rule.Enabled, rule.Description).
+		Scan(&rule.ID, &rule.Name, &rule.Category, &rule.Keyword, &rule.Scope, &rule.Level, &rule.Enabled,
+			&rule.Description, &rule.Source, &rule.CreatedAt, &rule.UpdatedAt)
+	if err != nil {
+		return keywordRule{}, err
+	}
+	rule.Editable = true
+	return rule, nil
+}
+
+func (s *Service) updateKeywordRule(r *http.Request, rule keywordRule) (keywordRule, error) {
+	if err := normalizeKeywordRule(&rule); err != nil {
+		return keywordRule{}, err
+	}
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		return keywordRule{}, err
+	}
+	defer tx.Rollback()
+	var exists bool
+	if err := tx.QueryRowContext(r.Context(), `SELECT EXISTS (SELECT 1 FROM logmaster_api.parse_rules
+		WHERE id <> $1 AND created_by_open_id IS NULL AND LOWER(keyword) = LOWER($2) AND category = $3)`,
+		rule.ID, rule.Keyword, rule.Category).Scan(&exists); err != nil {
+		return keywordRule{}, err
+	}
+	if exists {
+		return keywordRule{}, errKeywordRuleDuplicate
+	}
+	err = tx.QueryRowContext(r.Context(), `UPDATE logmaster_api.parse_rules
+		SET name = $2, category = $3, keyword = $4, scope = $5, level = $6, enabled = $7,
+			description = $8, updated_at = NOW()
+		WHERE id = $1 AND created_by_open_id IS NULL
+		RETURNING id, name, category, keyword, scope, level, enabled, COALESCE(description, ''), source, created_at, updated_at`,
+		rule.ID, rule.Name, rule.Category, rule.Keyword, rule.Scope, rule.Level, rule.Enabled, rule.Description).
+		Scan(&rule.ID, &rule.Name, &rule.Category, &rule.Keyword, &rule.Scope, &rule.Level, &rule.Enabled,
+			&rule.Description, &rule.Source, &rule.CreatedAt, &rule.UpdatedAt)
+	if err != nil {
+		return keywordRule{}, err
+	}
+	if _, err = tx.ExecContext(r.Context(), `DELETE FROM logmaster_api.user_rule_settings WHERE rule_id = $1`, rule.ID); err != nil {
+		return keywordRule{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return keywordRule{}, err
+	}
+	rule.Editable = true
+	return rule, nil
 }
 
 func normalizeKeywordHeader(value string) string {

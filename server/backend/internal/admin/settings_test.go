@@ -1,7 +1,10 @@
 package admin
 
 import (
+	"context"
 	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -38,6 +41,61 @@ func TestParseKeywordCSVSupportsChineseHeadersAndOverridesDefaults(t *testing.T)
 	}
 	if rules[0].Name != "录像失败" || rules[0].Category != "recording" || rules[0].Level != "warning" || rules[0].Scope != "DR7800" {
 		t.Fatalf("unexpected CSV rule: %#v", rules[0])
+	}
+}
+
+func TestNormalizeKeywordRuleAcceptsCompletePublicRule(t *testing.T) {
+	rule := keywordRule{
+		Name:        "  Write failure  ",
+		Category:    " RECORDING ",
+		Keyword:     "  XA_WRITE_FAIL ",
+		Scope:       " global ",
+		Level:       " CRITICAL ",
+		Description: " write failed ",
+	}
+	if err := normalizeKeywordRule(&rule); err != nil {
+		t.Fatalf("normalizeKeywordRule() error = %v", err)
+	}
+	if rule.Name != "Write failure" || rule.Category != "recording" || rule.Keyword != "XA_WRITE_FAIL" || rule.Level != "critical" {
+		t.Fatalf("unexpected normalized rule: %#v", rule)
+	}
+}
+
+func TestNormalizeKeywordRuleRejectsInvalidPublicRule(t *testing.T) {
+	for _, rule := range []keywordRule{
+		{Name: "", Category: "system", Keyword: "fatal", Level: "critical"},
+		{Name: "rule", Category: "unknown", Keyword: "fatal", Level: "critical"},
+		{Name: "rule", Category: "system", Keyword: "fatal", Level: "error"},
+	} {
+		if err := normalizeKeywordRule(&rule); err != errInvalidKeywordRule {
+			t.Fatalf("normalizeKeywordRule(%#v) error = %v, want errInvalidKeywordRule", rule, err)
+		}
+	}
+}
+
+func TestRequireKeywordRuleAdminAllowsKeywordRoles(t *testing.T) {
+	for _, role := range []string{roleDeveloper, roleAdmin, roleSuperAdmin} {
+		service := &Service{
+			currentUserResolver: func(*http.Request) (string, bool) { return "ou_test", true },
+			roleResolver:        func(context.Context, string) (string, error) { return role, nil },
+		}
+		if _, ok := service.requireKeywordRuleAdmin(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/admin/keyword-rules", nil)); !ok {
+			t.Fatalf("role %q should manage keyword rules", role)
+		}
+	}
+}
+
+func TestRequireKeywordRuleAdminRejectsUser(t *testing.T) {
+	service := &Service{
+		currentUserResolver: func(*http.Request) (string, bool) { return "ou_test", true },
+		roleResolver:        func(context.Context, string) (string, error) { return roleUser, nil },
+	}
+	recorder := httptest.NewRecorder()
+	if _, ok := service.requireKeywordRuleAdmin(recorder, httptest.NewRequest(http.MethodPost, "/api/admin/keyword-rules", nil)); ok {
+		t.Fatal("ordinary user should not manage keyword rules")
+	}
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusForbidden)
 	}
 }
 
