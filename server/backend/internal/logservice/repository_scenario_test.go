@@ -87,3 +87,16 @@ func TestRulesFromScenariosCanIncludeEnabledParsingRules(t *testing.T) {
 		t.Fatalf("combined rules = %#v", result)
 	}
 }
+
+func TestAllConfiguredRulesExcludesGenericLogLevelRules(t *testing.T) {
+	rules := []ParseRule{
+		{ID: 1, Name: "platform keyword", Keyword: "specific failure", Enabled: true, Source: "admin_keyword_upload"},
+		{ID: 2, Name: "generic error", Keyword: "FATAL|ERROR", Enabled: true, Source: "system"},
+		{ID: 3, Name: "generic warning", Keyword: "WARNING|WARN", Enabled: true, Source: "system"},
+		{ID: 4, Name: "disabled", Keyword: "disabled", Enabled: false, Source: "admin_keyword_upload"},
+	}
+	selected := allConfiguredRules(rules)
+	if len(selected) != 1 || selected[0].ID != 1 {
+		t.Fatalf("selected rules = %#v", selected)
+	}
+}

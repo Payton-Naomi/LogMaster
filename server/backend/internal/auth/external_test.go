@@ -51,3 +51,17 @@ func TestExternalRegistrationRequiresMatchingPassword(t *testing.T) {
 		t.Fatal("expected mismatched passwords to be rejected")
 	}
 }
+
+func TestValidateExternalPasswordReset(t *testing.T) {
+	name, email, err := validateExternalPasswordReset(externalPasswordResetRequest{
+		Name: "Contractor", Email: "CONTRACTOR@example.com", Password: "new-password", ConfirmPassword: "new-password",
+	})
+	if err != nil || name != "Contractor" || email != "contractor@example.com" {
+		t.Fatalf("reset fields = %q, %q, %v", name, email, err)
+	}
+	if _, _, err := validateExternalPasswordReset(externalPasswordResetRequest{
+		Name: "Contractor", Email: "contractor@example.com", Password: "new-password", ConfirmPassword: "different",
+	}); err == nil {
+		t.Fatal("expected mismatched reset password to be rejected")
+	}
+}

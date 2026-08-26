@@ -1,6 +1,14 @@
 # LogMaster 后端与采集端 API 文档
 
+> **2026/08/26 更新**：新增采集端项目、已发布测试场景及统一配置快照同步接口。
+
 > **824 调整（2026-08-24）**：创建上传会话成功响应新增只读 `data.uploader_job_title`。后端通过飞书详情自动解析并同步职位，采集端无需提交、保存或依赖该字段；上传、鉴权和查询协议不变。
+
+采集端上传时，`test_task_id` 会严格匹配服务端测试场景 ID，`test_task_name` 在没有 ID 时按唯一名称匹配。采集端已同步的测试任务不会因缺少场景而静默使用其他规则；匹配失败返回 HTTP 400。完全未选择测试任务时，后端使用全部已启用的平台关键字，但排除 `FATAL/ERROR/WARNING/WARN` 通用规则。
+
+采集端上传会话默认关闭 AI 分析。采集端无需新增字段；服务端在创建会话时固定保存 `ai_analysis_enabled=false`，会话下的文件解析只执行关键字规则，不创建 AI 文件分析或任务总览作业。
+
+解析任务的并发和容量由后端环境变量控制：`MAX_PARSE_WORKERS`、`MAX_PARSE_PER_USER`、`MAX_PARSE_PER_PROJECT`、`MAX_FILES_PER_PARSE_TASK`、`MAX_BYTES_PER_PARSE_TASK`。采集端无需调整请求。外包或非飞书账号不会收到飞书通知。
 
 上传人同步时按职位自动分配角色：`主任` 为 `super_admin`，`高级` 为 `admin`，`软件工程师` 或 `硬件工程师` 为 `developer`，其他为 `user`。采集端请求字段不变，人工角色不会被同步覆盖。
 AI 分析和任务总览已改为 PostgreSQL 持久化队列，服务重启后可恢复；采集端不需要提交新的字段或调用新接口。通过原查询接口看到的上传/解析状态不受 `ai_status` 影响。
@@ -360,3 +368,6 @@ Content-Encoding: gzip
 - 当前保持 `inspect_before_upload=false`。
 - 断网时继续本地落盘，恢复后队列继续上传。
 - `uncertain` 批次不更换幂等键重传。
+## 6. Collector configuration synchronization
+
+The collector can use `GET /api/projects/sync` for active projects, `GET /api/scenarios/sync` for published test scenarios, or `GET /api/collector/sync` for one response snapshot containing `projects`, `scenarios`, `keywords`, and UTC `synced_at`. All endpoints use the same upload-token authentication as upload sessions and return `401` for invalid credentials. Projects include `id` and `name`; scenarios include `id`, `name`, `enabled`, applicable projects, and keywords. The server validates the selected project and scenario again when creating an upload session.

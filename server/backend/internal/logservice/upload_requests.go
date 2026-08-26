@@ -51,22 +51,23 @@ type UploadSessionRequest struct {
 }
 
 type UploadSession struct {
-	ID               string    `json:"upload_session_id"`
-	QueryCode        string    `json:"query_code"`
-	ClientRequestID  string    `json:"client_request_id"`
-	ProjectID        string    `json:"project_id"`
-	ProjectName      string    `json:"project_name"`
-	Version          string    `json:"version"`
-	TestTaskID       string    `json:"test_task_id"`
-	TestTaskName     string    `json:"test_task_name"`
-	UploaderName     string    `json:"uploader_name"`
-	UploaderEmail    string    `json:"uploader_email"`
-	UploaderID       string    `json:"uploader_id"`
-	UploaderJobTitle string    `json:"uploader_job_title"`
-	StorageRoot      string    `json:"-"`
-	ConfigSnapshot   []byte    `json:"-"`
-	Status           string    `json:"status"`
-	CreatedAt        time.Time `json:"created_at"`
+	ID                string    `json:"upload_session_id"`
+	QueryCode         string    `json:"query_code"`
+	ClientRequestID   string    `json:"client_request_id"`
+	ProjectID         string    `json:"project_id"`
+	ProjectName       string    `json:"project_name"`
+	Version           string    `json:"version"`
+	TestTaskID        string    `json:"test_task_id"`
+	TestTaskName      string    `json:"test_task_name"`
+	UploaderName      string    `json:"uploader_name"`
+	UploaderEmail     string    `json:"uploader_email"`
+	UploaderID        string    `json:"uploader_id"`
+	UploaderJobTitle  string    `json:"uploader_job_title"`
+	AIAnalysisEnabled bool      `json:"ai_analysis_enabled"`
+	StorageRoot       string    `json:"-"`
+	ConfigSnapshot    []byte    `json:"-"`
+	Status            string    `json:"status"`
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 func (s *Service) uploadRequestHandler(w http.ResponseWriter, r *http.Request) {
@@ -252,8 +253,8 @@ func (r *Repository) CreateOrGetUploadSession(ctx context.Context, sessionID, qu
 		return UploadSession{}, false, err
 	}
 	result, err := r.db.ExecContext(ctx, `INSERT INTO logmaster_api.upload_sessions
-		(id,query_code,created_by_open_id,client_request_id,project_id,project_name,version,test_task_id,test_task_name,uploader_name,uploader_id,uploader_email,config_snapshot,storage_root)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+		(id,query_code,created_by_open_id,client_request_id,project_id,project_name,version,test_task_id,test_task_name,uploader_name,uploader_id,uploader_email,ai_analysis_enabled,config_snapshot,storage_root)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,FALSE,$13,$14)
 		ON CONFLICT(created_by_open_id,client_request_id) DO NOTHING`, sessionID, queryCode, owner, request.ClientRequestID,
 		projectID, request.ProjectName, request.Version, request.TestTaskID, request.TestTaskName, request.UploaderName, uploaderID, request.UploaderEmail, snapshot, root)
 	if err != nil {
@@ -264,19 +265,19 @@ func (r *Repository) CreateOrGetUploadSession(ctx context.Context, sessionID, qu
 		return UploadSession{}, false, err
 	}
 	var session UploadSession
-	err = r.db.QueryRowContext(ctx, `SELECT id,query_code,client_request_id,project_id::text,project_name,version,test_task_id,test_task_name,uploader_name,uploader_id,uploader_email,storage_root,config_snapshot,status,created_at
+	err = r.db.QueryRowContext(ctx, `SELECT id,query_code,client_request_id,project_id::text,project_name,version,test_task_id,test_task_name,uploader_name,uploader_id,uploader_email,ai_analysis_enabled,storage_root,config_snapshot,status,created_at
 		FROM logmaster_api.upload_sessions WHERE created_by_open_id=$1 AND client_request_id=$2`, owner, request.ClientRequestID).Scan(
 		&session.ID, &session.QueryCode, &session.ClientRequestID, &session.ProjectID, &session.ProjectName, &session.Version,
-		&session.TestTaskID, &session.TestTaskName, &session.UploaderName, &session.UploaderID, &session.UploaderEmail, &session.StorageRoot, &session.ConfigSnapshot, &session.Status, &session.CreatedAt)
+		&session.TestTaskID, &session.TestTaskName, &session.UploaderName, &session.UploaderID, &session.UploaderEmail, &session.AIAnalysisEnabled, &session.StorageRoot, &session.ConfigSnapshot, &session.Status, &session.CreatedAt)
 	return session, rows == 1, err
 }
 
 func (r *Repository) GetUploadSessionForUpload(ctx context.Context, id, queryCode, owner string) (UploadSession, error) {
 	var session UploadSession
-	err := r.db.QueryRowContext(ctx, `SELECT id,query_code,client_request_id,project_id::text,project_name,version,test_task_id,test_task_name,uploader_name,uploader_id,uploader_email,storage_root,config_snapshot,status,created_at
+	err := r.db.QueryRowContext(ctx, `SELECT id,query_code,client_request_id,project_id::text,project_name,version,test_task_id,test_task_name,uploader_name,uploader_id,uploader_email,ai_analysis_enabled,storage_root,config_snapshot,status,created_at
 		FROM logmaster_api.upload_sessions WHERE id=$1 AND query_code=$2 AND created_by_open_id=$3`, id, queryCode, owner).Scan(
 		&session.ID, &session.QueryCode, &session.ClientRequestID, &session.ProjectID, &session.ProjectName, &session.Version,
-		&session.TestTaskID, &session.TestTaskName, &session.UploaderName, &session.UploaderID, &session.UploaderEmail, &session.StorageRoot, &session.ConfigSnapshot, &session.Status, &session.CreatedAt)
+		&session.TestTaskID, &session.TestTaskName, &session.UploaderName, &session.UploaderID, &session.UploaderEmail, &session.AIAnalysisEnabled, &session.StorageRoot, &session.ConfigSnapshot, &session.Status, &session.CreatedAt)
 	return session, err
 }
 

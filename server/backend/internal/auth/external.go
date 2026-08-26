@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,6 +37,13 @@ type externalChangePasswordRequest struct {
 type externalChangeEmailRequest struct {
 	CurrentPassword string `json:"current_password"`
 	Email           string `json:"email"`
+}
+
+type externalPasswordResetRequest struct {
+	Name            string `json:"name"`
+	Email           string `json:"email"`
+	Password        string `json:"password"`
+	ConfirmPassword string `json:"confirm_password"`
 }
 
 func (s *Service) externalRegisterHandler(w http.ResponseWriter, r *http.Request) {
@@ -94,6 +102,51 @@ func (s *Service) externalLoginHandler(w http.ResponseWriter, r *http.Request) {
 	s.saveSession(w, user)
 	s.recordRuntimeLog(r.Context(), user.FeishuOpenID, "外包账号登录", "success", "external login succeeded")
 	response.JSON(w, response.APIResponse{Code: 0, Message: "登录成功", Data: user})
+}
+
+// externalPasswordResetHandler is intentionally limited to external accounts.
+// Feishu credentials are never stored or reset by LogMaster.
+func (s *Service) externalPasswordResetHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	var input externalPasswordResetRequest
+	if err := decodeJSON(r, &input); err != nil {
+		writeAuthError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	name, email, err := validateExternalPasswordReset(input)
+	if err != nil {
+		writeAuthError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	passwordHash, err := hashPassword(input.Password)
+	if err != nil {
+		writeAuthError(w, http.StatusInternalServerError, "外包账号密码处理失败")
+		return
+	}
+	var openID string
+	err = s.db.QueryRowContext(r.Context(), `UPDATE logmaster_api.external_password_credentials credential
+		SET password_hash = $1, password_updated_at = NOW(), updated_at = NOW()
+		FROM logmaster_api.users user_account
+		WHERE credential.user_id = user_account.id
+		  AND user_account.identity_type = 'external'
+		  AND user_account.name = $2
+		  AND lower(trim(user_account.email)) = lower(trim($3))
+		RETURNING user_account.feishu_open_id`, passwordHash, name, email).Scan(&openID)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Do not reveal whether the email exists or belongs to a Feishu account.
+		writeAuthError(w, http.StatusUnauthorized, "姓名、邮箱或账号信息不匹配")
+		return
+	}
+	if err != nil {
+		writeAuthError(w, http.StatusInternalServerError, "重置外包账号密码失败")
+		return
+	}
+	s.deleteSessionsForUser(openID)
+	s.recordRuntimeLog(r.Context(), openID, "外包账号忘记密码", "success", "external password reset")
+	response.JSON(w, response.APIResponse{Code: 0, Message: "密码重置成功，请使用新密码登录", Data: nil})
 }
 
 func (s *Service) externalChangePasswordHandler(w http.ResponseWriter, r *http.Request) {
@@ -277,6 +330,21 @@ func validateExternalRegistration(input externalRegisterRequest) (UserInfo, erro
 		FeishuOpenID: "external_" + randomToken(), Name: name, Email: email,
 		Role: "user", RoleSource: "external", IdentityType: "external", Company: company,
 	}, nil
+}
+
+func validateExternalPasswordReset(input externalPasswordResetRequest) (string, string, error) {
+	name := strings.TrimSpace(input.Name)
+	if name == "" || utf8.RuneCountInString(name) > 128 {
+		return "", "", fmt.Errorf("姓名不能为空且不能超过 128 个字符")
+	}
+	email, err := normalizeEmail(input.Email)
+	if err != nil {
+		return "", "", err
+	}
+	if input.Password == "" || input.Password != input.ConfirmPassword {
+		return "", "", fmt.Errorf("新密码不能为空且两次输入必须一致")
+	}
+	return name, email, nil
 }
 
 func normalizeEmail(value string) (string, error) {

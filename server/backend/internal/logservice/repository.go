@@ -190,7 +190,7 @@ func (r *Repository) CreatePendingAINotifications(ctx context.Context, taskID st
 		) recipient
 		LEFT JOIN logmaster_api.notification_settings settings ON settings.user_open_id=recipient.open_id
 		WHERE ($1='' OR task.id=NULLIF($1,'')::uuid) AND task.ai_status IN ('completed','partial_failed','failed') AND recipient.open_id<>''
-		AND EXISTS (SELECT 1 FROM logmaster_api.users user_record WHERE user_record.feishu_open_id=recipient.open_id)
+		AND EXISTS (SELECT 1 FROM logmaster_api.users user_record WHERE user_record.feishu_open_id=recipient.open_id AND user_record.identity_type='feishu')
 		AND CASE WHEN task.ai_status='completed' THEN COALESCE(settings.ai_completed,TRUE) ELSE COALESCE(settings.ai_failed,TRUE) END
 		ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`, taskID)
 	return err
@@ -637,6 +637,7 @@ type UploadMetadata struct {
 	CollectorVersion    string
 	Timezone            string
 	DisableParsingRules bool
+	AIAnalysisEnabled   bool
 	CreatedAt           *time.Time
 	StartedAt           *time.Time
 	EndedAt             *time.Time
@@ -775,6 +776,7 @@ func (r *Repository) CreateUpload(ctx context.Context, uploadID, taskID, project
 		Version:             version,
 		UploaderID:          creatorOpenID,
 		DisableParsingRules: true,
+		AIAnalysisEnabled:   true,
 	}, scenarioIDs, storagePath, creatorOpenID)
 }
 
@@ -784,6 +786,13 @@ func (r *Repository) CreateUploadWithMetadata(ctx context.Context, uploadID, tas
 		return err
 	}
 	defer tx.Rollback()
+	if len(scenarioIDs) == 0 {
+		matchedScenarioIDs, err := resolveTaskScenarioIDs(ctx, tx, metadata.TestTaskID, metadata.TestTaskName)
+		if err != nil {
+			return err
+		}
+		scenarioIDs = matchedScenarioIDs
+	}
 
 	var projectID int64
 	err = tx.QueryRowContext(ctx, `SELECT id FROM logmaster_api.projects
@@ -864,12 +873,12 @@ func (r *Repository) CreateUploadWithMetadata(ctx context.Context, uploadID, tas
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO logmaster_api.log_uploads
 		(id, project_id, version, scenario_id, scenario_snapshot, status, storage_path, created_by_open_id,
-		 test_task_id, test_task_name, uploader_name, uploader_id, remark, client_request_id,
+		 ai_analysis_enabled, test_task_id, test_task_name, uploader_name, uploader_id, remark, client_request_id,
 		 collector_version, timezone, client_created_at, started_at, ended_at, query_code, upload_session_id)
-		VALUES ($1, $2, $3, NULLIF($4, ''), $5, 'uploading', $6, NULLIF($7, ''),
-			 NULLIF($8, ''), $9, $10, $11, $12, NULLIF($13, ''), $14, $15, $16, $17, $18, $19, NULLIF($20, '')::uuid )`,
+		VALUES ($1, $2, $3, NULLIF($4, ''), $5, 'uploading', $6, NULLIF($7, ''), $8,
+			 NULLIF($9, ''), $10, $11, $12, $13, NULLIF($14, ''), $15, $16, $17, $18, $19, $20, NULLIF($21, '')::uuid )`,
 		uploadID, projectID, metadata.Version, primaryScenarioID, snapshotJSON, storagePath, creatorOpenID,
-		metadata.TestTaskID, metadata.TestTaskName, metadata.UploaderName, metadata.UploaderID, metadata.Remark,
+		metadata.AIAnalysisEnabled, metadata.TestTaskID, metadata.TestTaskName, metadata.UploaderName, metadata.UploaderID, metadata.Remark,
 		metadata.ClientRequestID, metadata.CollectorVersion, metadata.Timezone, metadata.CreatedAt, metadata.StartedAt, metadata.EndedAt, metadata.QueryCode, metadata.UploadSessionID)
 	if err != nil {
 		return fmt.Errorf("create upload: %w", err)
@@ -1097,6 +1106,12 @@ func (r *Repository) UploadOwner(ctx context.Context, uploadID string) (string, 
 	return ownerOpenID, err
 }
 
+func (r *Repository) UploadAIAnalysisEnabled(ctx context.Context, uploadID string) (bool, error) {
+	var enabled bool
+	err := r.db.QueryRowContext(ctx, `SELECT ai_analysis_enabled FROM logmaster_api.log_uploads WHERE id = $1`, uploadID).Scan(&enabled)
+	return enabled, err
+}
+
 func (r *Repository) RulesForUpload(ctx context.Context, uploadID, ownerOpenID string) ([]ParseRule, error) {
 	rules, err := r.ListRules(ctx, ownerOpenID)
 	if err != nil {
@@ -1108,7 +1123,7 @@ func (r *Repository) RulesForUpload(ctx context.Context, uploadID, ownerOpenID s
 		return nil, err
 	}
 	if len(encodedSnapshot) == 0 || string(encodedSnapshot) == "{}" {
-		return rules, nil
+		return allConfiguredRules(rules), nil
 	}
 	var uploadSnapshot uploadScenarioSnapshot
 	if err := json.Unmarshal(encodedSnapshot, &uploadSnapshot); err != nil {
@@ -1127,7 +1142,74 @@ func (r *Repository) RulesForUpload(ctx context.Context, uploadID, ownerOpenID s
 	if uploadSnapshot.DisableParsingRules != nil {
 		disableParsingRules = *uploadSnapshot.DisableParsingRules
 	}
+	if len(uploadSnapshot.Scenarios) == 0 {
+		return allConfiguredRules(rules), nil
+	}
 	return rulesFromScenarios(rules, uploadSnapshot.Scenarios, disableParsingRules)
+}
+
+func resolveTaskScenarioIDs(ctx context.Context, tx *sql.Tx, testTaskID, testTaskName string) ([]string, error) {
+	testTaskID = strings.TrimSpace(testTaskID)
+	testTaskName = strings.TrimSpace(testTaskName)
+	if testTaskID == "" && testTaskName == "" {
+		return nil, nil
+	}
+	if testTaskID != "" {
+		var scenarioID string
+		err := tx.QueryRowContext(ctx, `SELECT id FROM logmaster_api.test_scenarios WHERE id = $1`, testTaskID).Scan(&scenarioID)
+		if err == nil {
+			return []string{scenarioID}, nil
+		}
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrScenarioNotApplicable
+		}
+		return nil, fmt.Errorf("match test task scenario by id: %w", err)
+	}
+	if testTaskName == "" {
+		return nil, nil
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM logmaster_api.test_scenarios WHERE name = $1 ORDER BY id LIMIT 2`, testTaskName)
+	if err != nil {
+		return nil, fmt.Errorf("match test task scenario by name: %w", err)
+	}
+	defer rows.Close()
+	ids := make([]string, 0, 2)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(ids) > 1 {
+		return nil, fmt.Errorf("test task name matches multiple test scenarios")
+	}
+	if len(ids) == 0 {
+		return nil, ErrScenarioNotApplicable
+	}
+	return ids, nil
+}
+
+func allConfiguredRules(rules []ParseRule) []ParseRule {
+	selected := make([]ParseRule, 0, len(rules))
+	for _, rule := range rules {
+		if !rule.Enabled || isGenericLogLevelRule(rule) {
+			continue
+		}
+		selected = append(selected, rule)
+	}
+	return selected
+}
+
+func isGenericLogLevelRule(rule ParseRule) bool {
+	if rule.Source != "system" {
+		return false
+	}
+	keyword := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(rule.Keyword), " ", ""))
+	return keyword == "FATAL|ERROR" || keyword == "WARNING|WARN"
 }
 
 func rulesFromScenarios(available []ParseRule, scenarios []scenarioSnapshot, disableParsingRules bool) ([]ParseRule, error) {
@@ -1311,7 +1393,8 @@ func (r *Repository) AnalysisNotification(ctx context.Context, uploadID string) 
 		FROM logmaster_api.log_uploads u
 		JOIN logmaster_api.projects p ON p.id = u.project_id
 		JOIN logmaster_api.parse_tasks t ON t.upload_id = u.id
-		WHERE u.id = $1 AND t.status = 'completed'`, uploadID).Scan(
+		WHERE u.id = $1 AND t.status = 'completed'
+		  AND EXISTS (SELECT 1 FROM logmaster_api.users recipient WHERE recipient.feishu_open_id = u.created_by_open_id AND recipient.identity_type = 'feishu')`, uploadID).Scan(
 		&notification.TaskID, &notification.RecipientOpenID, &notification.ProjectName,
 		&notification.Version, &notification.OriginalName, &notification.TotalLines,
 		&notification.ErrorCount, &notification.WarningCount)
@@ -2185,6 +2268,25 @@ func (r *Repository) Projects(ctx context.Context) ([]string, error) {
 			return nil, err
 		}
 		projects = append(projects, name)
+	}
+	return projects, rows.Err()
+}
+
+// ListCollectorProjects returns active projects with the IDs required by upload sessions.
+func (r *Repository) ListCollectorProjects(ctx context.Context) ([]CollectorProject, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id::text, name
+		FROM logmaster_api.projects WHERE is_active = TRUE ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	projects := make([]CollectorProject, 0)
+	for rows.Next() {
+		var project CollectorProject
+		if err := rows.Scan(&project.ID, &project.Name); err != nil {
+			return nil, err
+		}
+		projects = append(projects, project)
 	}
 	return projects, rows.Err()
 }

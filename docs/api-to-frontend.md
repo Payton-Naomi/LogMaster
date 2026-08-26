@@ -1,5 +1,7 @@
 # LogMaster 后端与前端 API 文档
 
+> **2026/08/26 更新**：补充采集端配置同步接口契约说明，前端无需代理或修改。
+
 > **825 调整（2026-08-25）**：登录页新增“企业员工”和“外包账号”两个入口。企业员工继续跳转 `/api/auth/feishu-login`；外包账号调用 `POST /api/auth/external/login` 或 `POST /api/auth/external/register`，注册字段为 `name`、`email`、`company`、`password`、`confirm_password`。注册和登录成功后后端写入同一个 HttpOnly `session_token` Cookie，并跳转 `/upload`。后端需执行迁移 `045_external_password_accounts.sql` 与 `047_external_role_source.sql`；若注册收到 500，请先确认后端已使用包含该迁移的新版本重启。
 
 > **825 AI 配置调整**：管理后台不得编辑或提交 `llm_api_base_url`、`llm_api_key`、`clear_llm_api_key`、`llm_model`。页面将前三项仅作为环境配置的只读展示；尝试修改时后端返回 `400`。可提交的 AI 设置仅为超时、命中数量、输入字节上限、单文件 token 上限和每日 token 配额。
@@ -9,6 +11,12 @@
 外包注册不做邮箱验证码；密码只要求非空并与确认密码一致。`GET /api/user/info` 新增只读字段 `identity_type`（`feishu` 或 `external`）和 `company`。外包用户固定为普通用户，前端不能根据职位字段赋予管理入口。
 
 外包账号登录后可在“账号设置”中调用 `POST /api/auth/external/change-password` 修改密码，或调用 `POST /api/auth/external/change-email` 修改邮箱；两个接口都要求当前密码。飞书账号不显示该入口。
+
+外包登录页可提供“忘记密码”入口，调用 `POST /api/auth/external/password-reset`，请求字段为 `name`、`email`、`password`、`confirm_password`。成功后跳转外包账号登录页；失败统一展示“姓名、邮箱或账号信息不匹配”。飞书登录不显示忘记密码入口。
+
+网页服务端上传可在 multipart 表单提交 `ai_analysis_enabled=true|false` 控制该上传是否创建 AI 作业；未提交默认为开启。采集端上传会话不受前端开关影响，后端固定关闭 AI。
+
+外包账号不具备飞书消息权限。前端不要承诺外包用户会收到飞书登录或 AI 完成通知；其任务状态应通过现有任务列表、详情或站内通知查询。
 
 > **824 调整（2026-08-24）**：采集端上传人经飞书校验后，后端同步 `users.job_title`；管理员用户接口已有 `job_title` 字段，因此前端无需新增接口。
 
@@ -443,3 +451,9 @@ AI 分析是异步任务：关键字规则结果先返回，AI 结果可能延�
 - 上传返回 `202` 只表示已接收，必须继续轮询任务。
 - 查询码查看接口公开，收藏接口要求登录。
 - 页面不能通过传入用户 ID 绕过后端的数据隔离。
+## Collector synchronization contract
+
+Collector synchronization is handled by backend upload-token endpoints: `/api/projects/sync`, `/api/scenarios/sync`, and `/api/collector/sync`. The frontend does not need to proxy these endpoints or alter their payloads. The combined response contains projects, published scenarios, standard keywords, and a UTC `synced_at` timestamp.
+### Administrator role restoration (2026/08/26)
+
+When the administrator uses `PUT /api/admin/users/{user_id}/restore-feishu-role`, the backend restores external accounts to ordinary `user` and Feishu accounts according to their current Feishu job title. The frontend should display the returned `identity_type` and `role_source` so the result is clear.
