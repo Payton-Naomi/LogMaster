@@ -3,7 +3,7 @@
     <div v-if="loading" class="loading-progress" aria-hidden="true" />
     <header class="page-heading">
       <div class="title"><el-button text circle :icon="ArrowLeft" title="返回任务详情" @click="router.push(`/task/${taskId}`)" /><div><h1>解析结果</h1><p>{{ selectedFilePath || task.original_name || taskId }}</p></div></div>
-      <div class="heading-actions"><el-tag v-if="task.scenario_name" effect="plain">{{ task.scenario_name }}</el-tag><el-button :loading="agentActionLoading" @click="retryAgentAnalysis">重试 AI</el-button><el-button v-if="agentResults.length" :icon="Download" @click="downloadAgentResults">下载 AI 分析结果</el-button><el-button type="warning" plain :disabled="!agentLoading && !['queued','running'].includes(task.ai_status)" @click="cancelAgentAnalysis">取消 AI</el-button></div>
+      <div class="heading-actions"><el-tag v-if="task.scenario_name" effect="plain">{{ task.scenario_name }}</el-tag><template v-if="aiEnabled"><el-button :loading="agentActionLoading" @click="retryAgentAnalysis">重试 AI</el-button><el-button v-if="agentResults.length" :icon="Download" @click="downloadAgentResults">下载 AI 分析结果</el-button><el-button v-if="!aiRetryRequired && ['queued','running'].includes(task.ai_status)" type="warning" plain @click="cancelAgentAnalysis">取消 AI</el-button></template></div>
     </header>
     <el-alert v-if="loadError" class="page-error" :title="loadError" type="error" show-icon :closable="false" />
     <el-alert v-if="agentError" class="page-error" :title="agentError" type="warning" show-icon :closable="false" />
@@ -33,9 +33,11 @@
       </div>
     </section>
 
-    <section v-if="agentReady || agentLoading" class="panel ai-summary-panel">
-      <div class="panel-heading"><div><h2>AI 总结</h2><p>基于日志命中行及前后文生成的分析结论</p></div><span v-if="agentLoading">AI 正在分析，请稍候...</span><span v-else-if="agentResults.length">{{ agentResults.length }} 个文件 · {{ agentStatusText }}</span><span v-else>暂无 AI 结果</span></div>
-      <el-alert v-if="agentLoading" title="AI 正在分析，通常需要几秒到几十秒，请耐心等待，页面会自动更新。" type="info" :closable="false" show-icon />
+    <section v-if="aiEnabled || agentReady || agentLoading" class="panel ai-summary-panel">
+      <div class="panel-heading"><div><h2>AI 总结</h2><p>基于日志命中行及前后文生成的分析结论</p></div><span v-if="!aiEnabled">AI 功能已关闭</span><span v-else-if="aiRetryRequired">等待提交 AI 分析</span><span v-else-if="agentLoading || ['queued','running'].includes(task.ai_status)">AI 正在分析，请稍候...</span><span v-else-if="agentResults.length">{{ agentResults.length }} 个文件 · {{ agentStatusText }}</span><span v-else>暂无 AI 结果</span></div>
+      <el-alert v-if="!aiEnabled" title="AI 分析功能已关闭。请点击右上角 AI 开关开启功能，再点击“重试 AI”开始分析。" type="warning" :closable="false" show-icon />
+      <el-alert v-else-if="aiRetryRequired" title="AI 分析尚未启动，请点击右上方“重试 AI”提交分析任务。" type="warning" :closable="false" show-icon />
+      <el-alert v-else-if="agentLoading || ['queued','running'].includes(task.ai_status)" title="AI 正在分析，通常需要几秒到几十秒，请耐心等待，页面会自动更新。" type="info" :closable="false" show-icon />
       <el-alert v-else-if="!agentResults.length" title="AI 分析可能仍在后台处理中，请耐心等待后刷新页面；关键字分析结果不受影响。" type="info" :closable="false" show-icon />
       <div v-for="item in agentResults" :key="`${item.log_file_id || item.file_path}-${item.updated_at || item.created_at || item.status}`" class="ai-file-result">
         <div class="ai-file-heading"><strong>{{ item.file_path || '当前日志文件' }}</strong><div><el-button v-if="item.log_file_id && item.status === 'failed'" text size="small" @click="retryAgentFileResult(item)">重试</el-button><el-button text size="small" :icon="CopyDocument" @click="copyText(item.summary || item.error_message || '')">复制</el-button><el-tag :type="agentTagType(item.status)" effect="plain">{{ agentStatusLabel(item.status) }}</el-tag></div></div>
@@ -105,9 +107,10 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, ArrowRight, Close, CopyDocument, Download, Search } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElNotification } from 'element-plus'
 import * as echarts from 'echarts'
 import { cancelAgent, getAgentResults, getTaskDetail, getTaskResults, retryAgent, retryAgentFile } from '@/api/task'
+import { getAIEnabled } from '@/utils/aiPreference'
 
 const route = useRoute()
 const router = useRouter()
@@ -133,6 +136,8 @@ const selected = ref(null)
 const selectedAgentFinding = ref(null)
 const agentFindingDialog = ref(false)
 const agentActionLoading = ref(false)
+const aiEnabled = ref(getAIEnabled())
+const aiRetrySubmitted = ref(false)
 const timelineRef = ref(null)
 const clusterEvents = ref([])
 const clusterTitle = ref('')
@@ -143,8 +148,12 @@ const commentSaving = ref(false)
 let chart = null
 let agentRefreshTimer = null
 let agentRefreshActive = false
+let agentCompletionTimer = null
+let agentCompletionPolling = false
+function syncAIEnabled(event) { aiEnabled.value = Boolean(event?.detail); if (!aiEnabled.value) { aiRetrySubmitted.value = false; agentLoading.value = false; if (agentRefreshTimer) window.clearTimeout(agentRefreshTimer) } }
 
 const categories = computed(() => [...new Set(results.value.map(item => item.category).filter(Boolean))])
+const aiRetryRequired = computed(() => aiEnabled.value && !agentResults.value.length && !aiRetrySubmitted.value && !['queued', 'running'].includes(task.value.ai_status))
 const agentFindings = computed(() => agentResults.value.flatMap(item => (item.findings || []).map(finding => ({ ...finding, _filePath: finding.file_path || item.file_path || '' }))))
 const relatedCauseCount = computed(() => results.value.reduce((sum, item) => sum + (item.related_causes?.length || 0), 0))
 const timelineResults = computed(() => results.value.filter(item => item.level === 'error' && item.event_time))
@@ -253,7 +262,7 @@ async function load() {
     loading.value = false
     if (agentsResult.status === 'fulfilled') {
       agentResults.value = filterAgentResults(agentsResult.value || [])
-      if (!agentResults.value.length && task.value.status === 'completed') {
+      if (aiEnabled.value && !aiRetryRequired.value && !agentResults.value.length && task.value.status === 'completed') {
         refreshAgentResults()
       }
       agentReady.value = true
@@ -372,15 +381,50 @@ async function refreshAgentResults() {
   }
 }
 
-async function retryAgentAnalysis() { agentActionLoading.value = true; try { if (selectedFileId) await retryAgentFile(taskId, selectedFileId); else await retryAgent(taskId); ElMessage.success(selectedFileId ? '当前文件 AI 重试已提交' : 'AI 重试已提交'); await load() } catch (error) { ElMessage.error(errorMessage(error, 'AI 重试失败')) } finally { agentActionLoading.value = false } }
+function stopAgentCompletionPolling() { if (agentCompletionTimer) window.clearTimeout(agentCompletionTimer); agentCompletionTimer = null; agentCompletionPolling = false }
+function emitAICompletionNotification(status) {
+  const completed = status === 'completed'
+  window.dispatchEvent(new CustomEvent('logmaster-ai-notification', { detail: {
+    id: `local-ai-${taskId}-${status}-${Date.now()}`,
+    type: completed ? 'ai_completed' : 'ai_failed',
+    notification_type: completed ? 'ai_completed' : 'ai_failed',
+    task_id: taskId,
+    title: completed ? 'AI 分析完成' : 'AI 分析存在失败',
+    message: completed ? 'AI 分析已完成，可查看分析结果' : 'AI 分析未全部成功，请打开任务查看失败原因',
+    is_read: false,
+    local: true
+  } }))
+}
+async function monitorAgentCompletion() {
+  if (agentCompletionPolling || !aiEnabled.value) return
+  agentCompletionPolling = true
+  const check = async (attempt = 0) => {
+    if (!aiEnabled.value || attempt >= 40) { stopAgentCompletionPolling(); return }
+    try {
+      const detail = await getTaskDetail(taskId)
+      const currentTask = detail?.task || detail || {}
+      task.value = currentTask
+      const status = currentTask.ai_status
+      if (['completed', 'partial_failed', 'failed', 'cancelled'].includes(status)) {
+        await load()
+        emitAICompletionNotification(status)
+        stopAgentCompletionPolling()
+        return
+      }
+    } catch { /* Next poll retries transient errors. */ }
+    agentCompletionTimer = window.setTimeout(() => check(attempt + 1), 3000)
+  }
+  await check()
+}
+async function retryAgentAnalysis() { agentActionLoading.value = true; try { if (selectedFileId) await retryAgentFile(taskId, selectedFileId); else await retryAgent(taskId); aiRetrySubmitted.value = true; await load(); monitorAgentCompletion() } catch (error) { ElNotification({ title: 'AI 重试失败', message: errorMessage(error, '请稍后重试'), type: 'error', duration: 5000, position: 'top-right' }) } finally { agentActionLoading.value = false } }
 async function retryAgentFileResult(item) { agentActionLoading.value = true; try { await retryAgentFile(taskId, item.log_file_id); ElMessage.success('文件 AI 重试已提交'); await load() } catch (error) { ElMessage.error(errorMessage(error, '文件 AI 重试失败')) } finally { agentActionLoading.value = false } }
 async function cancelAgentAnalysis() { try { await cancelAgent(taskId); ElMessage.success('AI 取消请求已提交'); await load() } catch (error) { ElMessage.error(errorMessage(error, '取消 AI 失败')) } }
 async function saveComment() { const content = commentText.value.trim(); const defectId = jiraKey.value.trim(); if (!selected.value || (!content && !defectId)) return; commentSaving.value = true; try { const { addResultComment, getResultComments } = await import('@/api/result'); await addResultComment(selected.value.id, { content: content || '关联 Jira 问题', ...(defectId ? { defect_id: defectId } : {}) }); commentText.value = ''; jiraKey.value = ''; comments.value = await getResultComments(selected.value.id) || []; ElMessage.success('已保存') } catch (error) { ElMessage.error(errorMessage(error, '保存失败')) } finally { commentSaving.value = false } }
 
 watch([search, level, category, groupBy], () => { page.value = 1 })
 function resizeTimeline() { chart?.resize() }
-onMounted(() => { window.addEventListener('resize', resizeTimeline); load() })
-onBeforeUnmount(() => { window.removeEventListener('resize', resizeTimeline); if (agentRefreshTimer) window.clearTimeout(agentRefreshTimer); chart?.dispose() })
+onMounted(() => { window.addEventListener('resize', resizeTimeline); window.addEventListener('logmaster-ai-preference', syncAIEnabled); load() })
+onBeforeUnmount(() => { window.removeEventListener('resize', resizeTimeline); window.removeEventListener('logmaster-ai-preference', syncAIEnabled); if (agentRefreshTimer) window.clearTimeout(agentRefreshTimer); stopAgentCompletionPolling(); chart?.dispose() })
 </script>
 
 <style scoped>

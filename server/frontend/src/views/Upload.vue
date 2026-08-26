@@ -132,6 +132,7 @@ import { CircleCheck, Clock, Close, CopyDocument, Delete, DocumentAdd, Upload, U
 import { getProjects, getUploadConfig, uploadLogs } from '@/api/log'
 import { getScenarios } from '@/api/scenarios'
 import { getTaskDetail } from '@/api/task'
+import { getAIEnabled } from '@/utils/aiPreference'
 
 const router = useRouter()
 const input = ref(null)
@@ -324,6 +325,7 @@ async function submit() {
       collector_version: 'web',
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
       disable_parsing_rules: selectedScenarios.value.length ? disableParsingRules.value : false,
+      ai_analysis_enabled: getAIEnabled(),
       created_at: new Date().toISOString()
     }, scenarioIds.value, {
       onUploadProgress: (event) => {

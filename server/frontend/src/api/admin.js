@@ -18,6 +18,8 @@ export const updateUploadCapacity = (capacity) => service.put('/admin/upload-cap
 export const getAIAnalysisSettings = () => service.get('/admin/ai-analysis-settings', adminRequest)
 export const updateAIAnalysisSettings = (settings) => service.put('/admin/ai-analysis-settings', settings, adminRequest)
 export const getAdminKeywordRules = () => service.get('/admin/keyword-rules', adminRequest)
+export const createAdminKeywordRule = (rule) => service.post('/admin/keyword-rules', rule, adminRequest)
+export const updateAdminKeywordRule = (id, rule) => service.put(`/admin/keyword-rules/${id}`, rule, adminRequest)
 export const deleteAdminKeywordRule = (id) => service.delete(`/admin/keyword-rules/${id}`, adminRequest)
 export const getPermissionRequests = () => service.get('/admin/permission-requests', adminRequest)
 export const createPermissionRequest = (request) => service.post('/admin/permission-requests', request, adminRequest)

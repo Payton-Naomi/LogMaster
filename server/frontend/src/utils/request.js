@@ -12,8 +12,9 @@ service.interceptors.response.use(
     if (response.config.responseType === 'blob' || response.config.responseType === 'arraybuffer') return response.data
     const res = response.data
     if (res.code !== 0) {
-      ElMessage.error(res.message || '请求失败')
-      return Promise.reject(new Error(res.message || 'Error'))
+      const message = formatApiMessage(res.message)
+      ElMessage.error(message)
+      return Promise.reject(new Error(message || 'Error'))
     }
     return res.data
   },
@@ -28,15 +29,21 @@ service.interceptors.response.use(
       } else if (status === 403) {
         ElMessage.error(error.response.data?.message || '当前账号没有执行此操作的权限')
       } else {
-        ElMessage.error(error.response.data?.message || '服务器错误')
+        ElMessage.error(formatApiMessage(error.response.data?.message) || '服务器错误')
       }
     } else if (error.request) {
       ElMessage.error('网络连接异常')
     } else {
-      ElMessage.error(error.message)
+      ElMessage.error(formatApiMessage(error.message))
     }
     return Promise.reject(error)
   }
 )
 
 export default service
+
+function formatApiMessage(message) {
+  const text = String(message || '')
+  if (text.includes('check keyword rule usage failed')) return '检查规则是否被测试场景引用时发生错误，请稍后重试'
+  return message
+}
