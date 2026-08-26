@@ -7,8 +7,8 @@
       <aside class="brand-panel">
         <div class="brand-mark"><span>LM</span></div>
         <p class="eyebrow">LOGMASTER PLATFORM</p>
-        <h1>让每一份日志<br /><em>都可追溯、可行动。</em></h1>
-        <p class="brand-copy">面向研发与交付团队的统一日志分析平台，安全接入、快速定位、协同闭环。</p>
+        <h1 class="brand-statement"><span class="statement-line statement-lead">让每一份日志</span><span class="statement-line statement-trace">都可追溯</span><span class="statement-line statement-action">可行动</span></h1>
+        <p class="brand-copy">面向研发与交付团队的统一日志分析平台，安全接入、快速定位、协同闭环</p>
         <div class="brand-meta">
           <span class="meta-dot"></span>
           <span>企业级安全认证</span>
@@ -41,7 +41,7 @@
             </button>
             <button class="method-card external-card" type="button" @click="selectExternal">
               <span class="method-icon external-icon">外</span>
-              <span class="method-copy"><strong>外包账号</strong><small>使用邮箱和密码登录或注册</small></span>
+              <span class="method-copy"><strong>外部用户</strong><small>使用邮箱和密码登录或注册</small></span>
               <span class="method-arrow">→</span>
             </button>
           </div>
@@ -50,8 +50,8 @@
 
         <template v-else>
           <div class="heading-block compact-heading">
-            <p class="section-kicker">{{ mode === 'feishu' ? '企业统一认证' : (authTab === 'login' ? '外包账号登录' : '创建外包账号') }}</p>
-            <h2 id="login-title">{{ mode === 'feishu' ? '使用飞书登录' : (authTab === 'login' ? '登录 LogMaster' : '注册外包账号') }}</h2>
+            <p class="section-kicker">{{ mode === 'feishu' ? '企业统一认证' : (authTab === 'login' ? '外部用户登录' : authTab === 'reset' ? '找回外部用户密码' : '创建外部用户') }}</p>
+            <h2 id="login-title">{{ mode === 'feishu' ? '使用飞书登录' : (authTab === 'login' ? '登录 LogMaster' : authTab === 'reset' ? '重置密码' : '注册外部用户') }}</h2>
             <p>{{ mode === 'feishu' ? '通过企业飞书完成身份验证' : '请输入账号信息以继续访问工作空间' }}</p>
           </div>
 
@@ -63,18 +63,19 @@
 
           <div v-else class="external-login">
             <div class="auth-tabs" role="tablist">
-              <button type="button" :class="{ selected: authTab === 'login' }" @click="authTab = 'login'">登录</button>
-              <button type="button" :class="{ selected: authTab === 'register' }" @click="authTab = 'register'">注册</button>
+              <button type="button" :class="{ selected: authTab === 'login' }" @click="switchAuthTab('login')">登录</button>
+              <button type="button" :class="{ selected: authTab === 'register' }" @click="switchAuthTab('register')">注册</button>
             </div>
-            <form @submit.prevent="submitExternal">
-              <div v-if="authTab === 'register'" class="field-group"><label for="name">姓名</label><input id="name" v-model.trim="form.name" autocomplete="name" placeholder="请输入姓名" /></div>
-              <div class="field-group"><label for="email">邮箱地址</label><input id="email" v-model.trim="form.email" type="email" autocomplete="email" placeholder="name@company.com" /></div>
-              <div v-if="authTab === 'register'" class="field-group"><label for="company">所属公司</label><input id="company" v-model.trim="form.company" autocomplete="organization" placeholder="请输入公司名称" /></div>
-              <div class="field-group"><label for="password">密码</label><input id="password" v-model="form.password" type="password" :autocomplete="authTab === 'login' ? 'current-password' : 'new-password'" placeholder="请输入密码" /></div>
-              <div v-if="authTab === 'register'" class="field-group"><label for="confirm-password">确认密码</label><input id="confirm-password" v-model="form.confirm_password" type="password" autocomplete="new-password" placeholder="请再次输入密码" /></div>
+            <form method="post" autocomplete="on" @submit.prevent="submitExternal">
+              <div v-if="authTab === 'register' || authTab === 'reset'" class="field-group"><label for="name">姓名</label><input id="name" v-model.trim="form.name" name="name" autocomplete="name" placeholder="请输入姓名" /></div>
+              <div class="field-group"><label for="email">邮箱地址</label><input id="email" v-model.trim="form.email" name="username" type="email" inputmode="email" autocomplete="username" autocapitalize="none" spellcheck="false" :readonly="authTab === 'login' && !credentialFieldsReady" placeholder="name@company.com" @pointerdown="activateCredentialFields" @keydown="activateCredentialFields" /></div>
+              <div v-if="authTab === 'register'" class="field-group"><label for="company">所属公司</label><input id="company" v-model.trim="form.company" name="organization" autocomplete="organization" placeholder="请输入公司名称" /></div>
+              <div class="field-group"><label for="password">{{ authTab === 'reset' ? '新密码' : '密码' }}</label><input id="password" v-model="form.password" name="password" type="password" :autocomplete="authTab === 'login' ? 'current-password' : 'new-password'" :readonly="authTab === 'login' && !credentialFieldsReady" placeholder="请输入密码" @pointerdown="activateCredentialFields" @keydown="activateCredentialFields" /></div>
+              <div v-if="authTab === 'register' || authTab === 'reset'" class="field-group"><label for="confirm-password">确认密码</label><input id="confirm-password" v-model="form.confirm_password" name="confirm_password" type="password" autocomplete="new-password" placeholder="请再次输入密码" /></div>
               <div v-if="authTab === 'login'" class="form-options"><button type="button" class="text-button" @click="showForgotHint">忘记密码？</button></div>
+              <div v-if="authTab === 'reset'" class="form-options"><button type="button" class="text-button" @click="switchAuthTab('login')">返回登录</button></div>
               <p v-if="errorMessage" class="form-error" role="alert">{{ errorMessage }}</p>
-              <button class="primary-button" type="submit" :disabled="submitting">{{ submitting ? '提交中…' : (authTab === 'login' ? '登录工作空间' : '创建并登录') }} <span>→</span></button>
+              <button class="primary-button" type="submit" :disabled="submitting">{{ submitting ? '提交中…' : (authTab === 'login' ? '登录工作空间' : authTab === 'reset' ? '重置密码' : '创建并登录') }} <span>→</span></button>
             </form>
             <p class="fine-print">注册即表示你同意平台的账号使用规范</p>
           </div>
@@ -89,40 +90,48 @@
 import { reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { externalLogin, externalRegister } from '@/api/auth'
+import { externalLogin, externalPasswordReset, externalRegister } from '@/api/auth'
 
 const router = useRouter()
 const route = useRoute()
 const step = ref(1)
 const mode = ref('')
 const authTab = ref('login')
+const credentialFieldsReady = ref(false)
 const submitting = ref(false)
 const errorMessage = ref('')
 const form = reactive({ name: '', email: '', company: '', password: '', confirm_password: '' })
 const feishuLoginURL = import.meta.env.VITE_FEISHU_LOGIN_URL || '/api/auth/feishu-login'
 
 function selectFeishu () { mode.value = 'feishu'; step.value = 2; errorMessage.value = '' }
-function selectExternal () { mode.value = 'external'; step.value = 2; errorMessage.value = '' }
-function backToMethods () { step.value = 1; errorMessage.value = '' }
+function clearExternalForm () { Object.assign(form, { name: '', email: '', company: '', password: '', confirm_password: '' }) }
+function selectExternal () { clearExternalForm(); credentialFieldsReady.value = false; mode.value = 'external'; step.value = 2; errorMessage.value = '' }
+function backToMethods () { clearExternalForm(); credentialFieldsReady.value = false; step.value = 1; errorMessage.value = '' }
+function switchAuthTab (tab) { authTab.value = tab; form.password = ''; form.confirm_password = ''; credentialFieldsReady.value = tab !== 'login'; errorMessage.value = '' }
+function activateCredentialFields (event) { credentialFieldsReady.value = true; if (event?.currentTarget) event.currentTarget.readOnly = false }
 function goFeishu () { window.location.href = feishuLoginURL }
-function showForgotHint () { ElMessage.info('当前暂未开放自助找回密码，请联系平台管理员处理。') }
+function showForgotHint () { switchAuthTab('reset') }
 
 async function submitExternal () {
   errorMessage.value = ''
-  if (!form.email || !form.password) { errorMessage.value = '请输入邮箱和密码'; return }
-  if (authTab.value === 'register' && (!form.name || !form.company)) { errorMessage.value = '请完整填写姓名和所属公司'; return }
-  if (authTab.value === 'register' && form.password !== form.confirm_password) { errorMessage.value = '两次输入的密码不一致'; return }
+  if (!form.email || !form.password) { errorMessage.value = authTab.value === 'reset' ? '请填写姓名、邮箱和新密码' : '请输入邮箱和密码'; return }
+  if ((authTab.value === 'register' || authTab.value === 'reset') && !form.name) { errorMessage.value = '请输入姓名'; return }
+  if (authTab.value === 'register' && !form.company) { errorMessage.value = '请输入所属公司'; return }
+  if ((authTab.value === 'register' || authTab.value === 'reset') && form.password !== form.confirm_password) { errorMessage.value = '两次输入的密码不一致'; return }
   submitting.value = true
   try {
     const payload = authTab.value === 'login'
       ? { email: form.email, password: form.password }
-      : { name: form.name, email: form.email, company: form.company, password: form.password, confirm_password: form.confirm_password }
+      : { name: form.name, email: form.email, password: form.password, confirm_password: form.confirm_password, ...(authTab.value === 'register' ? { company: form.company } : {}) }
     if (authTab.value === 'login') await externalLogin(payload)
-    else await externalRegister(payload)
+    else if (authTab.value === 'register') await externalRegister(payload)
+    else { await externalPasswordReset(payload); switchAuthTab('login'); ElMessage.success('密码已重置，请使用新密码登录'); return }
     const redirect = typeof route.query.redirect === 'string' && route.query.redirect.startsWith('/') ? route.query.redirect : '/upload'
     await router.push(redirect)
   } catch (error) {
-    errorMessage.value = error?.response?.data?.message || error?.message || '登录失败，请稍后重试'
+    errorMessage.value = authTab.value === 'reset'
+      ? '姓名、邮箱或账号信息不匹配'
+      : error?.response?.data?.message || error?.message || '登录失败，请稍后重试'
   } finally { submitting.value = false }
 }
 </script>
@@ -137,8 +146,12 @@ async function submitExternal () {
 .brand-panel { max-width: 470px; }
 .brand-mark { display: grid; place-items: center; width: 50px; height: 50px; border-radius: 13px; background: linear-gradient(135deg, #18c4cf, #3776dc); box-shadow: 0 12px 30px rgba(27, 193, 208, .2); font-weight: 800; letter-spacing: 0; }
 .eyebrow, .section-kicker { margin: 22px 0 14px; color: #5cd2d4; font-size: 11px; font-weight: 700; letter-spacing: .14em; }
-.brand-panel h1 { margin: 0; font-size: clamp(36px, 4.4vw, 58px); line-height: 1.14; letter-spacing: 0; font-weight: 700; }
-.brand-panel h1 em { font-style: normal; color: #75d7dd; }
+.brand-statement { position: relative; width: min(470px, 100%); margin: 0; font-size: 54px; line-height: 1; letter-spacing: 0; font-weight: 750; }
+.brand-statement::before { position: absolute; top: 53%; left: 4px; width: 88%; height: 1px; background: linear-gradient(90deg, transparent, rgba(92, 210, 212, .52), transparent); content: ''; transform: rotate(-7deg); transform-origin: left center; }
+.statement-line { position: relative; display: block; width: max-content; max-width: 100%; }
+.statement-lead { color: #f0f7f8; transform: rotate(-1deg); }
+.statement-trace { z-index: 1; margin-top: 13px; margin-left: 30px; color: #75d7dd; font-style: italic; transform: skewX(-7deg); }
+.statement-action { z-index: 2; margin-top: 5px; margin-left: 174px; padding: 5px 13px 7px; color: #07131c; background: #75d7dd; font-size: 39px; font-style: italic; line-height: 1; transform: rotate(-3deg) skewX(-5deg); box-shadow: 8px 8px 0 rgba(47, 111, 191, .35); }
 .brand-copy { margin: 24px 0 0; max-width: 390px; color: #90a7b2; line-height: 1.85; font-size: 15px; }
 .brand-meta { display: flex; align-items: center; gap: 9px; margin-top: 34px; color: #6f8792; font-size: 12px; }
 .meta-dot { width: 7px; height: 7px; border-radius: 50%; background: #45d8b0; box-shadow: 0 0 0 4px rgba(69, 216, 176, .12); }.meta-divider { width: 1px; height: 14px; background: #29414d; margin: 0 4px; }
@@ -149,7 +162,8 @@ async function submitExternal () {
 .feishu-login { margin-top: 36px; text-align: center; }.feishu-visual { display: flex; align-items: center; gap: 14px; padding: 18px; text-align: left; border: 1px solid rgba(102, 207, 212, .14); border-radius: 11px; background: rgba(27, 61, 71, .35); }.feishu-visual > span { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 10px; background: #1eafb8; color: #eaffff; font-weight: 800; font-size: 19px; }.feishu-visual div { display: flex; flex-direction: column; gap: 5px; }.feishu-visual strong { font-size: 14px; }.feishu-visual small { color: #7f9da5; font-size: 12px; }
 .auth-tabs { display: flex; gap: 22px; margin-bottom: 24px; border-bottom: 1px solid rgba(155, 206, 215, .14); }.auth-tabs button { padding: 0 2px 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #718994; cursor: pointer; font-size: 14px; }.auth-tabs button.selected { border-color: #64d4d7; color: #ddf8f8; font-weight: 700; }
 .field-group { margin-bottom: 17px; }.field-group label { display: block; margin-bottom: 8px; color: #a4bbc3; font-size: 12px; }.field-group input { width: 100%; height: 44px; border: 1px solid rgba(156, 207, 214, .18); border-radius: 8px; outline: none; padding: 0 13px; background: rgba(5, 17, 26, .72); color: #e8f5f5; transition: border-color .2s, box-shadow .2s; }.field-group input::placeholder { color: #56717e; }.field-group input:focus { border-color: #4ecbd0; box-shadow: 0 0 0 3px rgba(78, 203, 208, .12); }.form-options { display: flex; justify-content: flex-end; margin: -3px 0 18px; }.form-error { margin: 0 0 14px; color: #ff9f9f; font-size: 12px; }
+.field-group input:-webkit-autofill,.field-group input:-webkit-autofill:hover,.field-group input:-webkit-autofill:focus { border-color: rgba(78,203,208,.5); box-shadow:0 0 0 1000px #0b1b27 inset;-webkit-text-fill-color:#e8f5f5;caret-color:#e8f5f5;transition:background-color 9999s ease-out 0s; }
 .primary-button { width: 100%; height: 46px; margin-top: 22px; border: 0; border-radius: 8px; background: linear-gradient(100deg, #27bfc5, #3a90dc); color: #06202a; font-weight: 750; cursor: pointer; box-shadow: 0 10px 25px rgba(37, 178, 199, .18); transition: transform .2s, filter .2s; }.primary-button:hover { filter: brightness(1.08); transform: translateY(-1px); }.primary-button:disabled { opacity: .6; cursor: wait; transform: none; }.primary-button span { float: right; margin-right: 13px; font-size: 18px; }.fine-print { margin: 16px 0 0; }.login-footer { width: min(1100px, 100%); margin: 34px auto 0; display: flex; justify-content: space-between; color: #506773; font-size: 11px; position: relative; z-index: 1; }
-@media (max-width: 800px) { .login-shell { padding: 28px 20px 18px; }.login-layout { display: block; }.brand-panel { margin: 0 auto 34px; max-width: 520px; }.brand-panel h1 { font-size: 38px; }.brand-copy { margin-top: 14px; }.brand-meta { margin-top: 20px; }.auth-panel { max-width: 520px; margin: auto; }.panel-header { margin-bottom: 30px; }.login-footer { margin-top: 22px; }.ambient { opacity: .28; } }
-@media (max-width: 460px) { .brand-panel h1 { font-size: 32px; }.brand-copy { font-size: 13px; }.auth-panel { padding: 24px 20px; }.heading-block h2 { font-size: 25px; }.login-footer { flex-direction: column; gap: 7px; text-align: center; } }
+@media (max-width: 800px) { .login-shell { padding: 28px 20px 18px; }.login-layout { display: block; }.brand-panel { margin: 0 auto 34px; max-width: 520px; }.brand-statement { font-size: 42px; }.statement-action { margin-left: 136px; font-size: 31px; }.brand-copy { margin-top: 14px; }.brand-meta { margin-top: 20px; }.auth-panel { max-width: 520px; margin: auto; }.panel-header { margin-bottom: 30px; }.login-footer { margin-top: 22px; }.ambient { opacity: .28; } }
+@media (max-width: 460px) { .brand-statement { font-size: 34px; }.statement-trace { margin-left: 18px; }.statement-action { margin-left: 100px; font-size: 27px; }.brand-copy { font-size: 13px; }.auth-panel { padding: 24px 20px; }.heading-block h2 { font-size: 25px; }.login-footer { flex-direction: column; gap: 7px; text-align: center; } }
 </style>
