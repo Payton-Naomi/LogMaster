@@ -219,6 +219,19 @@
         </el-table>
       </section>
 
+      <section v-else-if="activeModule === 'archive_passwords'" class="project-workspace settings-workspace">
+        <div class="section-heading"><div><h2>解压密码</h2><p>维护加密压缩包的候选密码，上传时后端会按列表顺序逐个尝试</p></div><el-tag effect="plain">{{ archivePasswords.length }} 个密码</el-tag></div>
+        <div class="password-toolbar"><el-input v-model.trim="newArchivePassword" type="password" show-password maxlength="256" placeholder="输入解压密码，最多 256 个字符" @keyup.enter="saveArchivePassword" /><el-button type="primary" :icon="Plus" :loading="archivePasswordSaving" :disabled="!newArchivePassword" @click="saveArchivePassword">添加密码</el-button><el-button :icon="Refresh" :loading="archivePasswordsLoading" @click="loadArchivePasswords">刷新</el-button></div>
+        <el-alert title="后端会在遇到加密压缩包时自动尝试列表中的所有密码；未加密压缩包不受影响。" type="info" :closable="false" show-icon class="password-tip" />
+        <el-table v-loading="archivePasswordsLoading" :data="archivePasswords" row-key="id" class="keyword-table">
+          <el-table-column type="index" label="#" width="60" />
+          <el-table-column prop="masked" label="密码" min-width="220" />
+          <el-table-column prop="updated_at" label="最近更新" width="190"><template #default="scope">{{ formatDate(scope.row.updated_at) }}</template></el-table-column>
+          <el-table-column label="操作" width="90" align="center"><template #default="scope"><el-button :icon="Delete" text circle type="danger" title="删除密码" @click="removeArchivePassword(scope.row)" /></template></el-table-column>
+          <template #empty><el-empty description="暂无解压密码，请先添加" :image-size="70" /></template>
+        </el-table>
+      </section>
+
       <section v-else-if="activeModule === 'keywords'" class="project-workspace settings-workspace">
         <div class="section-heading">
           <div><h2>研发异常关键词</h2><p>批量导入公共规则，导入后所有用户均可在解析规则页查看并参与日志分析</p></div>
@@ -313,7 +326,7 @@
 import { computed, markRaw, nextTick, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowRight, Check, Delete, DocumentAdd, Edit, Key, List, Loading, Plus, Search, Setting, User, UserFilled } from '@element-plus/icons-vue'
-import { cancelPermissionRequest as cancelPermissionRequestApi, createAdminKeywordRule, createAdminProject, createPermissionRequest, createProjectOption, createProjectRequest, decidePermissionRequest, decideProjectRequest, deleteAdminKeywordRule, deleteAdminProject, deleteProjectOption, getAdminKeywordRules, getAdminProjects, getAdminUsers, getAIAnalysisSettings, getPermissionRequests, getProjectOptions, getProjectRequests, getRuntimeLogs, getUploadCapacity, importAdminKeywordRules, restoreAdminUserRole, updateAdminKeywordRule, updateAdminProject, updateAdminUserRole, updateAIAnalysisSettings, updateProjectOption, updateUploadCapacity } from '@/api/admin'
+import { addArchivePassword, cancelPermissionRequest as cancelPermissionRequestApi, createAdminKeywordRule, createAdminProject, createPermissionRequest, createProjectOption, createProjectRequest, decidePermissionRequest, decideProjectRequest, deleteAdminKeywordRule, deleteAdminProject, deleteArchivePassword, deleteProjectOption, getAdminKeywordRules, getAdminProjects, getAdminUsers, getAIAnalysisSettings, getArchivePasswords, getPermissionRequests, getProjectOptions, getProjectRequests, getRuntimeLogs, getUploadCapacity, importAdminKeywordRules, restoreAdminUserRole, updateAdminKeywordRule, updateAdminProject, updateAdminUserRole, updateAIAnalysisSettings, updateProjectOption, updateUploadCapacity } from '@/api/admin'
 import { getCurrentUser } from '@/api/auth'
 
 const checking = ref(false)
@@ -372,6 +385,10 @@ const adminRuleDialog = ref(false)
 const ruleSavingId = ref(null)
 const adminRuleForm = reactive({ id: 0, name: '', category: 'system', keyword: '', scope: '', level: 'warning', description: '', enabled: true, editable: true, scenario_count: 0 })
 const keywordDefaults = reactive({ category: 'system', level: 'critical', scope: '自研通用', description: '' })
+const archivePasswords = ref([])
+const archivePasswordsLoading = ref(false)
+const archivePasswordSaving = ref(false)
+const newArchivePassword = ref('')
 const keywordCategories = [
   { value: 'power', label: '电源' }, { value: 'storage', label: '存储' }, { value: 'recording', label: '录像' },
   { value: 'system', label: '系统' }, { value: 'connectivity', label: '连接' }, { value: 'feature', label: '功能' }, { value: 'tool', label: '工具' }
@@ -396,7 +413,8 @@ const moduleDefinitions = [
   { key: 'projects', permission: 'projects', name: '项目管理', description: '项目资料与可选列表', icon: markRaw(List), ready: true },
   { key: 'capacity', permission: 'capacity', name: '资源与配额', description: '上传与 AI 用量限制', icon: markRaw(Setting), ready: true },
   { key: 'approvals', permission: 'approvals', name: '申请与审批', description: '权限及项目申请审批', icon: markRaw(Check), ready: true },
-  { key: 'keywords', permission: 'keywords', name: '异常关键词', description: '研发专属关键词上传', icon: markRaw(DocumentAdd), ready: true }
+  { key: 'keywords', permission: 'keywords', name: '异常关键词', description: '研发专属关键词上传与维护', icon: markRaw(DocumentAdd), ready: true },
+  { key: 'archive_passwords', permission: 'keywords', name: '解压密码', description: '加密压缩包候选密码', icon: markRaw(Key), ready: true }
 ]
 const modules = computed(() => moduleDefinitions.filter(module => access.permissions.includes(module.permission)))
 const availableApprovalRoles = computed(() => roleOptions.filter(item => item.value !== approvalAccess.current_role))
@@ -479,6 +497,7 @@ async function selectModule(module) {
   if (module.key === 'capacity') await Promise.all([loadCapacity(), loadAISettings()])
   if (module.key === 'approvals') await Promise.all([loadApprovals(), loadProjectRequests()])
   if (module.key === 'keywords') await loadAdminRules()
+  if (module.key === 'archive_passwords') await loadArchivePasswords()
 }
 
 async function toggleRuntimeLogs() {
@@ -690,6 +709,27 @@ async function loadAdminRules() {
     if (error.response?.status === 401) unlocked.value = false
     else if (error.response?.status !== 403) ElMessage.error(error.response?.data?.message || '解析规则加载失败')
   } finally { adminRulesLoading.value = false }
+}
+
+async function loadArchivePasswords() {
+  archivePasswordsLoading.value = true
+  try { archivePasswords.value = await getArchivePasswords() || [] }
+  catch (error) { if (error.response?.status === 401) unlocked.value = false; else ElMessage.error(error.response?.data?.message || '解压密码加载失败') }
+  finally { archivePasswordsLoading.value = false }
+}
+async function saveArchivePassword() {
+  const password = newArchivePassword.value.trim()
+  if (!password || archivePasswordSaving.value) return
+  archivePasswordSaving.value = true
+  try { await addArchivePassword(password); newArchivePassword.value = ''; ElMessage.success('解压密码已保存'); await loadArchivePasswords() }
+  catch (error) { if (error.response?.status === 401) unlocked.value = false; else ElMessage.error(error.response?.data?.message || '解压密码保存失败') }
+  finally { archivePasswordSaving.value = false }
+}
+async function removeArchivePassword(item) {
+  try {
+    await ElMessageBox.confirm(`确认删除解压密码“${item.masked}”？删除后将不再尝试该密码。`, '删除解压密码', { confirmButtonText: '确认删除', cancelButtonText: '取消', type: 'warning' })
+    await deleteArchivePassword(item.id); ElMessage.success('解压密码已删除'); await loadArchivePasswords()
+  } catch (error) { if (error?.response?.status === 401) unlocked.value = false; else if (error?.response) ElMessage.error(error.response?.data?.message || '解压密码删除失败') }
 }
 
 function resetAdminRuleForm() {
@@ -951,5 +991,6 @@ onMounted(async () => {
 .admin-rules-heading { display:flex;align-items:center;justify-content:space-between;gap:16px;margin:30px 0 14px;padding-top:24px;border-top:1px solid rgba(214,235,242,.14); }
 .admin-rules-heading h3 { margin:0;color:#e8f0f4;font-size:16px; }.admin-rules-heading p { margin:5px 0 0;color:#8299a5;font-size:11px; }
 .rule-toolbar { margin-bottom:12px; }.rule-toolbar .el-input { width:min(380px,48%); }.rule-toolbar .el-select { width:150px; }.result-count { margin-left:auto;color:#849da8;font-size:12px; }.admin-rule-table { margin-top:0; }
+.password-toolbar { display:flex;gap:10px;align-items:center;margin:22px 0 14px; }.password-toolbar .el-input { max-width:460px; }.password-tip { margin-bottom:14px; }
 @media(max-width:760px) { .admin-rules-heading { align-items:flex-start;flex-direction:column; }.rule-toolbar .el-input,.rule-toolbar .el-select { width:100%; }.result-count { margin-left:0; } }
 </style>
