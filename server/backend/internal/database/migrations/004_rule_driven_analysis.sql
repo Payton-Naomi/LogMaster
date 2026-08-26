@@ -42,7 +42,6 @@ FROM (VALUES
     ('关机原因', 'power', 'SYSTEMMNG_SHUTDOWN_', '自研通用', 'info', FALSE, '设备关机原因枚举', 300, 'keyword_document'),
     ('SD 卡枚举状态', 'storage', 'STGMNG_SD_', '自研通用', 'info', FALSE, 'SD 卡管理状态枚举', 300, 'keyword_document'),
     ('联咏出流信息命令', 'tool', 'cat /proc/hdal/comm/info|cat /proc/hdal/venc/info|cat /proc/hdal/vprc/info|cat /proc/hdal/vcap/info', '自研通用', 'info', FALSE, '辅助排查命令，不默认参与解析', 500, 'keyword_document'),
-    ('日志解压密码', 'tool', '70M_dashcam_^', '自研通用', 'info', FALSE, '日志压缩包默认密码，不参与解析', 500, 'keyword_document'),
     ('看门狗重启', 'power', '2f0050080|POWER_ID_SWRT', 'DR4800/5800', 'critical', TRUE, '看门狗或软件复位', 10, 'keyword_document'),
     ('视频丢帧', 'recording', 'queue is full!!! drop frame', '自研通用', 'warning', TRUE, '编码队列满导致视频丢帧', 20, 'keyword_document'),
     ('应用程序崩溃', 'system', 'Log_Signal_Data', '自研通用', 'critical', TRUE, '应用程序信号崩溃', 10, 'keyword_document'),

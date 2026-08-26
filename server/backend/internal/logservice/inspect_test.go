@@ -29,7 +29,7 @@ func TestInspectZIPNormalizesRootedEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	writer := zip.NewWriter(file)
-	entry, err := writer.Encrypt("/logfile_0", defaultArchivePassword, zip.AES256Encryption)
+	entry, err := writer.Encrypt("/logfile_0", archiveTestPassword, zip.AES256Encryption)
 	if err != nil {
 		t.Fatal(err)
 	}

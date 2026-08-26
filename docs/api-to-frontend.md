@@ -54,7 +54,7 @@ AI 支持整任务重试 `POST /api/tasks/{task_id}/agent-retry`、单文件重�
 新增取消接口：`POST /api/tasks/{task_id}/cancel`。任务处于 `queued` 或解析中时可取消，成功返回 `202` 和 `status=cancelled`；已完成或失败任务返回 `409`，重复取消已取消任务幂等返回 `202`。取消不会删除原始日志或已有解析结果。
 新增原始日志搜索：`GET /api/logs/{upload_id}/search`，前端可传 `file_id`、`keyword`、`case_sensitive`、`page`、`page_size`，后端返回分页命中行。
 日志下载统一使用 `GET /api/logs/{upload_id}/download`：`type=file&file_id=...` 下载单文件，`type=batch` 下载解析日志 ZIP，`type=original` 下载最初上传文件 ZIP，`type=results` 下载分析结果 ZIP。单文件支持 `Range`；不传 `type` 兼容原调用方式。结果包包含 `results.csv`、`data.json`、`report.md`。
-上传、解压或解析失败时，前端应展示响应中的中文 `message`；任务详情可读取中文 `error_message`。管理员密码维护接口为 `GET/POST /api/admin/archive-passwords` 和 `DELETE /api/admin/archive-passwords/{id}`。
+上传、解压或解析失败时，前端应展示响应中的中文 `message`；任务详情可读取中文 `error_message`。管理员密码维护接口为 `GET/POST /api/admin/archive-passwords` 和 `DELETE /api/admin/archive-passwords/{id}`。解压密码不在解析规则列表中：未加密压缩包直接解压；加密压缩包仅尝试管理员维护的密码。
 异常结果状态通过 `PATCH /api/results/{id}/status` 更新，状态值为 `pending`、`confirmed`、`false_positive`、`fixed`、`closed`。
 异常结果备注通过 `POST /api/results/{id}/comments` 添加，通过 `GET /api/results/{id}/comments` 查询；备注内容必填，缺陷单号可选。
 异常结果负责人通过 `PUT /api/results/{id}/assignment` 设置，传入用户 `open_id`；传空字符串取消分配。
