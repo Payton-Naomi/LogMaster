@@ -1,0 +1,21 @@
+LogMaster采集端 0.0.10
+
+目录内容：
+- LogCollector-0.0.10.exe：采集端程序
+- config/project-config.yaml：项目配置
+- config/task-config.yaml：任务配置
+- config/keyword-config.yaml：关键字配置
+- config/settings-config.json：全局设置
+
+配置使用：
+1. 四份配置均可直接用文本编辑器修改。
+2. 外部修改项目、任务或关键字后，在“配置管理”点击“重新加载本地配置”。
+3. 外部修改全局设置后，在“全局设置”点击“重新加载”，立即生效。
+4. 程序内也可以直接修改并保存四类配置。
+5. “同步云端”会从后端统一配置接口下载项目、已发布任务和标准关键字，校验后覆盖本地三份 YAML。
+6. 后端地址保存在 settings-config.json 的 backendUrl 中，默认是 http://localhost:8080/api。
+
+注意：
+- config 文件夹必须与 EXE 放在同一目录，程序将优先读写该目录。
+- 云端同步会覆盖项目、任务和关键字文件；需要保留的本地修改请先备份。
+- 上传 Token 仍通过环境变量提供，不写入配置文件。

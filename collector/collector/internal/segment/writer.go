@@ -166,6 +166,31 @@ func (w *Writer) Rotate(ctx context.Context) error {
 	return w.finalizeLocked(ctx, w.config.Now())
 }
 
+// ApplyConfig rotates the current segment when its directory changes and
+// applies new limits to subsequent writes without restarting the collector.
+func (w *Writer) ApplyConfig(ctx context.Context, directory string, maxAge time.Duration, maxBytes int64) error {
+	if directory == "" || maxAge <= 0 || maxBytes <= 0 {
+		return errors.New("invalid segment runtime config")
+	}
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		return err
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return errors.New("segment writer is closed")
+	}
+	if filepath.Clean(directory) != filepath.Clean(w.config.Directory) && w.current != nil {
+		if err := w.finalizeLocked(ctx, w.config.Now()); err != nil {
+			return err
+		}
+	}
+	w.config.Directory = directory
+	w.config.MaxAge = maxAge
+	w.config.MaxBytes = maxBytes
+	return nil
+}
+
 func (w *Writer) Close(ctx context.Context) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()

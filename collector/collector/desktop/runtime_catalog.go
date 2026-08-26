@@ -37,14 +37,33 @@ type CatalogFilesDTO struct {
 	CloudCache CatalogFileDTO   `json:"cloudCache"`
 }
 
+type EditableConfigFileDTO struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
+}
+
 func catalogFilesForRoot(root string) runtimeCatalogFiles {
-	directory := filepath.Join(root, "config")
+	directory := editableConfigDirectory(root)
 	return runtimeCatalogFiles{
 		Directory: directory,
 		Projects:  filepath.Join(directory, "project-config.yaml"),
 		Tasks:     filepath.Join(directory, "task-config.yaml"),
 		Keywords:  filepath.Join(directory, "keyword-config.yaml"),
 	}
+}
+
+func editableConfigDirectory(root string) string {
+	if explicit := strings.TrimSpace(os.Getenv("LOGMASTER_CONFIG_DIR")); explicit != "" {
+		return filepath.Clean(explicit)
+	}
+	// Installed builds are portable. Use the executable directory even before
+	// config exists so the first launch creates one beside the executable.
+	if base, err := os.UserConfigDir(); err == nil && strings.EqualFold(filepath.Clean(root), filepath.Join(base, "LogMaster")) {
+		if executable, executableErr := os.Executable(); executableErr == nil {
+			return filepath.Join(filepath.Dir(executable), "config")
+		}
+	}
+	return filepath.Join(root, "config")
 }
 
 func ensureRuntimeCatalogFiles(paths runtimeCatalogFiles) error {
@@ -82,6 +101,17 @@ func ensureRuntimeCatalogFiles(paths runtimeCatalogFiles) error {
 		}
 	}
 	return nil
+}
+
+func exportDefaultConfigDirectory(directory string) error {
+	paths := runtimeCatalogFiles{Directory: directory, Projects: filepath.Join(directory, "project-config.yaml"), Tasks: filepath.Join(directory, "task-config.yaml"), Keywords: filepath.Join(directory, "keyword-config.yaml")}
+	if err := ensureRuntimeCatalogFiles(paths); err != nil {
+		return err
+	}
+	settings := defaultAppSettings(filepath.Dir(directory))
+	settings.DefaultLogDirectory = filepath.Clean(packagedDefaults.Log.Directory)
+	normalizeAppSettings(&settings, filepath.Dir(directory))
+	return writeAppSettings(filepath.Join(directory, "settings-config.json"), settings)
 }
 
 func loadRuntimeCatalog(root, legacyPath string) (CatalogConfig, runtimeCatalogFiles, error) {
@@ -149,7 +179,7 @@ func catalogFileDTO(path string, editable bool) CatalogFileDTO {
 func (s *Service) GetCatalogFiles() CatalogFilesDTO {
 	paths := catalogFilesForRoot(s.rootDirectory)
 	return CatalogFilesDTO{Directory: paths.Directory, Files: []CatalogFileDTO{
-		catalogFileDTO(paths.Projects, true), catalogFileDTO(paths.Tasks, true), catalogFileDTO(paths.Keywords, true),
+		catalogFileDTO(paths.Projects, true), catalogFileDTO(paths.Tasks, true), catalogFileDTO(paths.Keywords, true), catalogFileDTO(s.settingsPath, true),
 	}, CloudCache: catalogFileDTO(s.cloudKeywordPath, false)}
 }
 
@@ -163,13 +193,71 @@ func (s *Service) ReloadCatalogFiles() (CatalogConfig, error) {
 		return CatalogConfig{}, err
 	}
 	if cache, cacheErr := readCloudKeywordCache(s.cloudKeywordPath); cacheErr == nil {
-		catalog = mergeCloudKeywords(catalog, cache.Items)
+		if !hasCloudKeywordProfile(catalog) {
+			catalog = mergeCloudKeywords(catalog, cache.Items)
+		}
 	}
 	s.mu.Lock()
 	s.catalog = catalog
 	s.mu.Unlock()
-	if s.ctx != nil {
+	if s.canEmitRuntimeEvents() {
 		runtime.EventsEmit(s.ctx, "catalog:updated", catalog)
 	}
 	return catalog, nil
+}
+
+func editableCatalogPath(directory, name string) (string, error) {
+	switch name {
+	case "project-config.yaml", "task-config.yaml", "keyword-config.yaml":
+		return filepath.Join(directory, name), nil
+	default:
+		return "", fmt.Errorf("不支持的配置文件: %s", name)
+	}
+}
+
+func (s *Service) GetEditableConfigFile(name string) (EditableConfigFileDTO, error) {
+	path, err := editableCatalogPath(s.catalogDirectory, name)
+	if err != nil {
+		return EditableConfigFileDTO{}, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return EditableConfigFileDTO{}, err
+	}
+	return EditableConfigFileDTO{Name: name, Content: string(data)}, nil
+}
+
+func (s *Service) SaveEditableConfigFile(name, content string) (CatalogConfig, error) {
+	path, err := editableCatalogPath(s.catalogDirectory, name)
+	if err != nil {
+		return CatalogConfig{}, err
+	}
+	paths := catalogFilesForRoot(s.rootDirectory)
+	projectData, err := os.ReadFile(paths.Projects)
+	if err != nil {
+		return CatalogConfig{}, err
+	}
+	taskData, err := os.ReadFile(paths.Tasks)
+	if err != nil {
+		return CatalogConfig{}, err
+	}
+	keywordData, err := os.ReadFile(paths.Keywords)
+	if err != nil {
+		return CatalogConfig{}, err
+	}
+	switch name {
+	case "project-config.yaml":
+		projectData = []byte(content)
+	case "task-config.yaml":
+		taskData = []byte(content)
+	case "keyword-config.yaml":
+		keywordData = []byte(content)
+	}
+	if _, err := parseMaintainedCatalog(projectData, taskData, keywordData); err != nil {
+		return CatalogConfig{}, err
+	}
+	if err := atomicWriteFile(path, []byte(content), 0o644); err != nil {
+		return CatalogConfig{}, err
+	}
+	return s.ReloadCatalogFiles()
 }

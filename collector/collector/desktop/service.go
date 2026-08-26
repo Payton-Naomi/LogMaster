@@ -57,6 +57,9 @@ type Service struct {
 	logWriter              *rotatingFile
 	reportedServerFailures map[string]struct{}
 	previousConfigs        map[string]DeviceConfigDTO
+	manualSavedSessions    map[string]struct{}
+	startupWarnings        []string
+	runtimeStarted         bool
 }
 
 type PortInfo struct {
@@ -163,6 +166,25 @@ type UploadBatchDTO struct {
 	StartedAt      *time.Time `json:"startedAt,omitempty"`
 	CompletedAt    *time.Time `json:"completedAt,omitempty"`
 }
+type UploadTaskDTO struct {
+	ID            string     `json:"id"`
+	State         string     `json:"state"`
+	ProjectName   string     `json:"projectName"`
+	UploaderName  string     `json:"uploaderName"`
+	UploaderEmail string     `json:"uploaderEmail"`
+	TestTaskName  string     `json:"testTaskName"`
+	PortName      string     `json:"portName"`
+	DeviceID      string     `json:"deviceId"`
+	QueryCode     string     `json:"queryCode"`
+	FileCount     int        `json:"fileCount"`
+	BytesTotal    int64      `json:"bytesTotal"`
+	BytesSent     int64      `json:"bytesSent"`
+	SpeedBytes    int64      `json:"speedBytes"`
+	LastError     string     `json:"lastError"`
+	BatchIDs      []string   `json:"batchIds"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	CompletedAt   *time.Time `json:"completedAt,omitempty"`
+}
 type desktopSettings struct {
 	Version int               `json:"version"`
 	Devices []DeviceConfigDTO `json:"devices"`
@@ -198,6 +220,13 @@ type LogRow struct {
 }
 
 func NewService() (*Service, error) {
+	// Wails executes the application once while it generates Go bindings. That
+	// process must not open an operator's active SQLite database. The build
+	// script sets this private root only for that short-lived generation step;
+	// normal desktop launches continue to use the portable/user runtime root.
+	if buildRoot := strings.TrimSpace(os.Getenv("LOGMASTER_BUILD_BINDINGS_ROOT")); buildRoot != "" {
+		return newServiceAt(filepath.Clean(buildRoot))
+	}
 	base, err := os.UserConfigDir()
 	if err != nil {
 		base = "."
@@ -265,10 +294,30 @@ func newServiceAtConfig(root string, cfg config.Config, configured bool) (*Servi
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, err
 	}
-	settingsPath := filepath.Join(root, "app-settings.json")
-	appSettings, err := loadAppSettings(settingsPath, root)
+	catalogFiles := catalogFilesForRoot(root)
+	if err := os.MkdirAll(catalogFiles.Directory, 0o755); err != nil {
+		return nil, fmt.Errorf("create portable config directory: %w", err)
+	}
+	settingsPath := filepath.Join(catalogFiles.Directory, "settings-config.json")
+	legacySettingsPath := filepath.Join(root, "app-settings.json")
+	if _, statErr := os.Stat(settingsPath); errors.Is(statErr, os.ErrNotExist) {
+		if legacyData, readErr := os.ReadFile(legacySettingsPath); readErr == nil {
+			if writeErr := atomicWriteFile(settingsPath, legacyData, 0o644); writeErr != nil {
+				return nil, fmt.Errorf("migrate app settings: %w", writeErr)
+			}
+		}
+	}
+	appSettings, settingsWarning, err := loadAppSettingsRecovered(settingsPath, root)
 	if err != nil {
 		return nil, err
+	}
+	if migrated, didMigrate, migrateErr := migrateLegacySettingsIntoUntouchedPortableConfig(settingsPath, legacySettingsPath, root); migrateErr != nil {
+		// A legacy file must never prevent startup. The portable file remains the
+		// source of truth if the old file cannot be read safely.
+		settingsWarning = "旧版全局设置无法迁移，已使用同级 config 中的设置"
+	} else if didMigrate {
+		appSettings = migrated
+		settingsWarning = "已自动迁移旧版全局设置到同级 config 目录"
 	}
 	if !configured {
 		cfg.Spool.Directory = appSettings.DefaultLogDirectory
@@ -288,6 +337,13 @@ func newServiceAtConfig(root string, cfg config.Config, configured bool) (*Servi
 		appSettings.UploadGzip = cfg.Backend.UploadGzip
 		appSettings.MaxDiskBytes = cfg.Spool.MaxDiskBytes
 	}
+	// Always materialize a complete settings file. This migrates older partial
+	// files and gives a fresh installation editable, non-empty defaults before
+	// the frontend starts.
+	normalizeAppSettings(&appSettings, root)
+	if err := writeAppSettings(settingsPath, appSettings); err != nil {
+		return nil, fmt.Errorf("persist app settings: %w", err)
+	}
 	if err := os.MkdirAll(cfg.Spool.Directory, 0o755); err != nil {
 		return nil, err
 	}
@@ -295,7 +351,7 @@ func newServiceAtConfig(root string, cfg config.Config, configured bool) (*Servi
 	if err != nil {
 		return nil, err
 	}
-	managerCfg := collector.Config{MaxDevices: collector.MaxSupportedDevices, EventCapacity: 2048, SpoolDirectory: cfg.Spool.Directory, MaxDiskBytes: cfg.Spool.MaxDiskBytes, ProjectName: cfg.Backend.ProjectName, Version: cfg.Backend.Version, Reconnect: serialagent.ReconnectConfig{InitialDelay: cfg.Serial.Reconnect.InitialDelay, Multiplier: cfg.Serial.Reconnect.Multiplier, MaxDelay: cfg.Serial.Reconnect.MaxDelay, Jitter: cfg.Serial.Reconnect.Jitter}, DiskCheckEvery: 5 * time.Second}
+	managerCfg := collector.Config{MaxDevices: collector.MaxSupportedDevices, EventCapacity: 2048, SpoolDirectory: cfg.Spool.Directory, MaxDiskBytes: cfg.Spool.MaxDiskBytes, StorageWarningPercent: appSettings.StorageWarningPercent, ProjectName: cfg.Backend.ProjectName, Version: cfg.Backend.Version, Reconnect: serialagent.ReconnectConfig{InitialDelay: cfg.Serial.Reconnect.InitialDelay, Multiplier: cfg.Serial.Reconnect.Multiplier, MaxDelay: cfg.Serial.Reconnect.MaxDelay, Jitter: cfg.Serial.Reconnect.Jitter}, DiskCheckEvery: 5 * time.Second}
 	manager, err := collector.New(managerCfg, store, nil, nil)
 	if err != nil {
 		store.Close()
@@ -316,7 +372,7 @@ func newServiceAtConfig(root string, cfg config.Config, configured bool) (*Servi
 	ctx, cancel := context.WithCancel(context.Background())
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	catalogPath := filepath.Join(root, "project-catalog.yaml")
-	catalog, catalogFiles, err := loadRuntimeCatalog(root, catalogPath)
+	catalog, loadedCatalogFiles, err := loadRuntimeCatalog(root, catalogPath)
 	if err != nil {
 		cancel()
 		workerCancel()
@@ -336,7 +392,11 @@ func newServiceAtConfig(root string, cfg config.Config, configured bool) (*Servi
 		isConfigured := strings.TrimSpace(cfg.Backend.ProjectName) != "" && strings.TrimSpace(cfg.Backend.Version) != ""
 		configs[id] = DeviceConfigDTO{DeviceID: id, Name: defaultSerialChannelName(port.PortName, i+1), PortName: port.PortName, BaudRate: port.BaudRate, DataBits: port.DataBits, StopBits: port.StopBits, Parity: port.Parity, Handshake: port.Handshake, DTR: port.DTR, RTS: port.RTS, Configured: isConfigured, ProjectID: cfg.Backend.ProjectName, ProjectName: cfg.Backend.ProjectName, Version: cfg.Backend.Version, SaveEnabled: isConfigured, UploadEnabled: isConfigured, NoLogTimeoutSeconds: appSettings.NoLogTimeoutSeconds, VID: port.PortMatch.VID, PID: port.PortMatch.PID, USBSerial: port.PortMatch.USBSerial, Location: port.PortMatch.PhysicalLocation}
 	}
-	service := &Service{manager: manager, store: store, worker: worker, backendClient: client, ctx: ctx, cancel: cancel, configs: configs, configPath: filepath.Join(root, "desktop-config.json"), rootDirectory: root, catalogPath: catalogPath, catalogDirectory: catalogFiles.Directory, cloudKeywordPath: filepath.Join(root, "cloud-keywords.json"), settingsPath: settingsPath, catalog: catalog, appSettings: appSettings, pendingImports: map[string]pendingCatalogImport{}, connectErrors: map[string]string{}, configDirty: map[string]bool{}, uploadProgress: map[string]UploadProgressDTO{}, spoolDirectory: cfg.Spool.Directory, maxDiskBytes: cfg.Spool.MaxDiskBytes, workerCtx: workerCtx, workerCancel: workerCancel, workerDone: make(chan struct{}), workerStarted: make(chan struct{}), logger: logger, logWriter: logWriter, reportedServerFailures: map[string]struct{}{}, previousConfigs: map[string]DeviceConfigDTO{}}
+	service := &Service{manager: manager, store: store, worker: worker, backendClient: client, ctx: ctx, cancel: cancel, configs: configs, configPath: filepath.Join(root, "desktop-config.json"), rootDirectory: root, catalogPath: catalogPath, catalogDirectory: loadedCatalogFiles.Directory, cloudKeywordPath: filepath.Join(root, "cloud-keywords.json"), settingsPath: settingsPath, catalog: catalog, appSettings: appSettings, pendingImports: map[string]pendingCatalogImport{}, connectErrors: map[string]string{}, configDirty: map[string]bool{}, uploadProgress: map[string]UploadProgressDTO{}, spoolDirectory: cfg.Spool.Directory, maxDiskBytes: cfg.Spool.MaxDiskBytes, workerCtx: workerCtx, workerCancel: workerCancel, workerDone: make(chan struct{}), workerStarted: make(chan struct{}), logger: logger, logWriter: logWriter, reportedServerFailures: map[string]struct{}{}, previousConfigs: map[string]DeviceConfigDTO{}, manualSavedSessions: map[string]struct{}{}}
+	if settingsWarning != "" {
+		service.startupWarnings = append(service.startupWarnings, settingsWarning)
+		logger.Warn("application settings recovered", "component", "desktop.settings", "warning", settingsWarning)
+	}
 	worker.SetProgressHandler(service.handleUploadProgress)
 	if err := service.loadSettings(); err != nil {
 		cancel()
@@ -379,17 +439,21 @@ func newServiceAtConfig(root string, cfg config.Config, configured bool) (*Servi
 }
 
 func (s *Service) startup(ctx context.Context) {
+	s.mu.Lock()
 	s.ctx = ctx
+	s.runtimeStarted = true
+	s.mu.Unlock()
 	go s.pumpEvents()
 	go s.monitorPorts()
 	go s.cleanupLoop()
-	go func() {
-		if _, err := s.SyncCloudKeywords(); err != nil && s.logger != nil {
-			s.logger.Warn("automatic cloud keyword sync failed; cached keywords retained", "component", "desktop.keywords", "error", err)
-		}
-	}()
 	go s.monitorUploadSessionFailures()
 	s.workerStart.Do(func() { close(s.workerStarted); go func() { defer close(s.workerDone); s.worker.Run(s.workerCtx) }() })
+}
+
+func (s *Service) canEmitRuntimeEvents() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.runtimeStarted
 }
 func (s *Service) shutdown() {
 	s.close.Do(func() {
@@ -401,6 +465,7 @@ func (s *Service) shutdown() {
 			<-s.workerDone
 		default:
 		}
+		s.cleanupUnexportedLocalFiles()
 		_ = s.store.Close()
 		if s.logger != nil {
 			s.logger.Info("desktop service shut down", "component", "desktop.service")
@@ -409,6 +474,93 @@ func (s *Service) shutdown() {
 			_ = s.logWriter.Close()
 		}
 	})
+}
+
+func (s *Service) markSessionManuallySaved(sessionID string) {
+	if strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	s.mu.Lock()
+	if s.manualSavedSessions == nil {
+		s.manualSavedSessions = make(map[string]struct{})
+	}
+	s.manualSavedSessions[sessionID] = struct{}{}
+	s.mu.Unlock()
+}
+
+func (s *Service) sessionWasManuallySaved(sessionID string) bool {
+	s.mu.RLock()
+	_, ok := s.manualSavedSessions[sessionID]
+	s.mu.RUnlock()
+	return ok
+}
+
+// cleanupUnexportedLocalFiles removes only current-run records that stayed
+// local-only and were never manually exported. Older history and upload queue
+// records are deliberately left intact for resume and later review.
+func (s *Service) cleanupUnexportedLocalFiles() {
+	currentSessions := make(map[string]struct{})
+	for _, state := range s.manager.GetDeviceStates() {
+		if strings.TrimSpace(state.SessionID) != "" {
+			currentSessions[state.SessionID] = struct{}{}
+		}
+	}
+	if len(currentSessions) == 0 {
+		return
+	}
+	files, err := s.store.ListLocalHistoryFiles(context.Background())
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Error("list local-only history files for shutdown cleanup failed", "component", "desktop.cleanup", "error", err)
+		}
+		return
+	}
+	removed := 0
+	for _, file := range files {
+		if _, ok := currentSessions[file.SessionID]; !ok {
+			continue
+		}
+		if s.sessionWasManuallySaved(file.SessionID) {
+			continue
+		}
+		temporaryPath := fmt.Sprintf("%s.deleting-%d", file.Path, time.Now().UnixNano())
+		if err := os.Rename(file.Path, temporaryPath); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				temporaryPath = ""
+			} else {
+				if s.logger != nil {
+					s.logger.Warn("stage local-only history file for shutdown cleanup failed", "component", "desktop.cleanup", "path", file.Path, "error", err)
+				}
+				continue
+			}
+		}
+		if _, err := s.store.DeleteLocalHistoryRecord(context.Background(), file.ID); err != nil {
+			if temporaryPath != "" {
+				_ = os.Rename(temporaryPath, file.Path)
+			}
+			if s.logger != nil {
+				s.logger.Warn("remove local-only history record on shutdown cleanup failed", "component", "desktop.cleanup", "id", file.ID, "error", err)
+			}
+			continue
+		}
+		if temporaryPath != "" {
+			if err := os.Remove(temporaryPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+				if s.logger != nil {
+					s.logger.Warn("remove staged local-only history file on shutdown cleanup failed", "component", "desktop.cleanup", "path", temporaryPath, "error", err)
+				}
+				continue
+			}
+		}
+		if _, err := os.Stat(file.Path); err == nil {
+			if s.logger != nil {
+				s.logger.Warn("local-only history file remained after shutdown cleanup", "component", "desktop.cleanup", "path", file.Path)
+			}
+		}
+		removed++
+	}
+	if removed > 0 && s.logger != nil {
+		s.logger.Info("shutdown cleanup removed local-only history files", "component", "desktop.cleanup", "count", removed)
+	}
 }
 
 // cleanupLoop periodically applies the user-configurable retention policies:
@@ -613,6 +765,19 @@ func (s *Service) configForPortLocked(value any, index int) DeviceConfigDTO {
 			return s.applyLogConfigDefaultsLocked(normalizeDeviceConfig(cfg))
 		}
 		if nameMatch {
+			// Some USB-serial adapters do not expose a serial number. When the
+			// port, VID/PID, and physical location all match, the saved record is
+			// still tied to the same hardware and its full business configuration
+			// can be restored safely. COM-only matches remain serial-only.
+			hardwareMatch := strings.TrimSpace(cfg.VID) != "" && strings.TrimSpace(cfg.PID) != "" && strings.TrimSpace(cfg.Location) != "" &&
+				strings.EqualFold(strings.TrimSpace(cfg.VID), strings.TrimSpace(port.VID)) &&
+				strings.EqualFold(strings.TrimSpace(cfg.PID), strings.TrimSpace(port.PID)) &&
+				strings.EqualFold(strings.TrimSpace(cfg.Location), strings.TrimSpace(port.Location))
+			if hardwareMatch {
+				cfg.PortName = name
+				cfg.VID, cfg.PID, cfg.USBSerial, cfg.Location = port.VID, port.PID, port.USBSerial, port.Location
+				return s.applyLogConfigDefaultsLocked(normalizeDeviceConfig(cfg))
+			}
 			if cfg.Configured || strings.TrimSpace(cfg.ProjectID) != "" || strings.TrimSpace(cfg.UploaderEmail) != "" || strings.TrimSpace(cfg.Remark) != "" {
 				if s.previousConfigs == nil {
 					s.previousConfigs = map[string]DeviceConfigDTO{}
@@ -638,6 +803,8 @@ func serialOnlyInheritedConfig(source DeviceConfigDTO, port PortInfo, index int)
 		SaveEnabled: source.SaveEnabled, UploadEnabled: false, NoLogTimeoutSeconds: source.NoLogTimeoutSeconds,
 		VID: port.VID, PID: port.PID, USBSerial: port.USBSerial, Location: port.Location,
 	}
+	dto.Configured = source.Configured
+	dto.ReadTimeoutMs, dto.WriteTimeoutMs, dto.IdleGapMs, dto.MaxFrameBytes = source.ReadTimeoutMs, source.WriteTimeoutMs, source.IdleGapMs, source.MaxFrameBytes
 	if strings.TrimSpace(dto.Name) == "" {
 		dto.Name = defaultSerialChannelName(port.Name, index+1)
 	}
@@ -706,6 +873,9 @@ func configStatus(cfg DeviceConfigDTO, catalog CatalogConfig) string {
 	if !cfg.Configured {
 		return "unconfigured"
 	}
+	if !cfg.UploadEnabled {
+		return "saved"
+	}
 	if catalogSelectionValidIn(catalog, cfg) {
 		return "saved"
 	}
@@ -745,6 +915,39 @@ func (s *Service) GetUploadQueueStatus() (QueueStatus, error) {
 		}
 	}
 	return QueueStatus{Pending: counts[spool.Pending], Uploading: counts[spool.Uploading], Uploaded: counts[spool.Uploaded], Uncertain: counts[spool.Uncertain], Dead: counts[spool.Dead], DiskUsagePercent: percent, DiskUsageText: fmt.Sprintf("%s / %s", formatBytes(used), formatBytes(s.maxDiskBytes))}, nil
+}
+
+// GetCurrentPendingUploadBytes intentionally scopes the footer number to the
+// selected channel's active upload session. Historical queues are not useful
+// while an operator is watching a live port.
+func (s *Service) GetCurrentPendingUploadBytes(deviceID string) (int64, error) {
+	s.mu.RLock()
+	cfg, ok := s.configs[deviceID]
+	s.mu.RUnlock()
+	if !ok || strings.TrimSpace(cfg.UploadSessionID) == "" {
+		return 0, nil
+	}
+	batches, _, err := s.store.ListBatches(s.ctx, spool.BatchFilter{DeviceSN: deviceID, IncludeUploaded: true, Limit: 200})
+	if err != nil {
+		return 0, err
+	}
+	var total int64
+	for _, batch := range batches {
+		if batch.UploadSessionID != cfg.UploadSessionID {
+			continue
+		}
+		switch batch.State {
+		case spool.Pending:
+			total += batch.BytesTotal
+		case spool.Uploading:
+			dto := s.toUploadBatchDTO(batch)
+			remaining := dto.BytesTotal - dto.BytesSent
+			if remaining > 0 {
+				total += remaining
+			}
+		}
+	}
+	return total, nil
 }
 func (s *Service) GetUploadQueueBatches() ([]UploadBatchDTO, error) {
 	var result []UploadBatchDTO

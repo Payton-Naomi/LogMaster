@@ -1,0 +1,4 @@
+./history.go
+./store.go
+./upload_query.go
+./store_test.go

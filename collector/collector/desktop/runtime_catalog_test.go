@@ -40,3 +40,38 @@ func TestRuntimeCatalogFilesAreCreatedAndReloaded(t *testing.T) {
 		t.Fatalf("local project file was not reloaded: %#v", loaded.Projects)
 	}
 }
+
+func TestRuntimeCatalogUsesExplicitPortableDirectory(t *testing.T) {
+	root, directory := t.TempDir(), t.TempDir()
+	t.Setenv("LOGMASTER_CONFIG_DIR", directory)
+	_, paths, err := loadRuntimeCatalog(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Clean(paths.Directory) != filepath.Clean(directory) {
+		t.Fatalf("directory = %s", paths.Directory)
+	}
+}
+
+func TestSaveEditableConfigRejectsInvalidContentWithoutOverwriting(t *testing.T) {
+	root := t.TempDir()
+	service, err := newServiceAt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.shutdown()
+	before, err := os.ReadFile(filepath.Join(root, "config", "project-config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.SaveEditableConfigFile("project-config.yaml", "schema_version: 9\nprojects: []\n"); err == nil {
+		t.Fatal("expected validation error")
+	}
+	after, err := os.ReadFile(filepath.Join(root, "config", "project-config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("invalid config overwrote the local file")
+	}
+}

@@ -1,0 +1,9 @@
+# test log
+getenv GOTMPDIR
+open C:\Users\WUSHOU~1\AppData\Local\Temp\TestLoadParsesDurationsAndDoesNotLoadSecrets3545873475\001\agent.yaml
+getenv AGENT_ANALYSIS_TOKEN
+open C:\Users\WUSHOU~1\AppData\Local\Temp\TestLoadParsesDurationsAndDoesNotLoadSecrets3545873475\001\agent.yaml
+open C:\Users\WUSHOU~1\AppData\Local\Temp
+getenv TEST_ANALYSIS_TOKEN
+getenv TEST_QWEN_KEY
+getenv TEST_ANALYSIS_TOKEN

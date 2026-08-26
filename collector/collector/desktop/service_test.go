@@ -142,6 +142,20 @@ func TestDesktopSerialSettingsPersistWithoutCloudIdentity(t *testing.T) {
 	}
 }
 
+func TestDesktopRestoresBusinessConfigWhenHardwareIdentityMatches(t *testing.T) {
+	service, err := newServiceAt(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.shutdown()
+	saved := normalizeDeviceConfig(DeviceConfigDTO{DeviceID: "COM24", Name: "串口 COM24", PortName: "COM24", BaudRate: 921600, Configured: true, ProjectID: "project-1", ProjectName: "项目一", Version: "1.0", TestTaskID: "task-1", TestTaskName: "任务一", UploaderEmail: "user@example.com", Remark: "回归", VID: "1A86", PID: "7523", Location: "USB-LOCATION"})
+	service.configs[saved.DeviceID] = saved
+	restored := service.configForPortLocked(PortInfo{Name: "COM24", VID: "1A86", PID: "7523", Location: "USB-LOCATION"}, 0)
+	if restored.ProjectName != saved.ProjectName || restored.TestTaskName != saved.TestTaskName || restored.UploaderEmail != saved.UploaderEmail || restored.Remark != saved.Remark {
+		t.Fatalf("matching hardware should restore business configuration: %+v", restored)
+	}
+}
+
 func TestFreshChannelDefaultsUploadCloudOff(t *testing.T) {
 	service, err := newServiceAt(t.TempDir())
 	if err != nil {

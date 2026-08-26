@@ -703,6 +703,41 @@ func (s *Store) DeleteExpiredUploaded(ctx context.Context, before time.Time) (in
 	return deleted, nil
 }
 
+// ClearUploadHistory removes only local upload queue records. The original log
+// files and their local history entries remain available to the user.
+func (s *Store) ClearUploadHistory(ctx context.Context) (int, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	var count int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM upload_batches`).Scan(&count); err != nil {
+		return 0, err
+	}
+	var uploading int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM upload_batches WHERE state='uploading'`).Scan(&uploading); err != nil {
+		return 0, err
+	}
+	if uploading > 0 {
+		return 0, errors.New("正在上传，不能清空上传历史记录")
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM upload_batch_metadata`); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM upload_files`); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM upload_batches`); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 func (s *Store) Get(ctx context.Context, key string) ([]byte, bool, error) {
 	var raw []byte
 	var expires string

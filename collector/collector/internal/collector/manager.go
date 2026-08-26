@@ -32,6 +32,43 @@ type Manager struct {
 	closed     bool
 }
 
+// ApplyRuntimeConfig updates limits used by future and active channels.
+func (m *Manager) ApplyRuntimeConfig(directory string, maxAge time.Duration, maxBytes int64, maxDiskBytes int64, warningPercent int) error {
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.cfg.SpoolDirectory = directory
+	if maxDiskBytes > 0 {
+		m.cfg.MaxDiskBytes = maxDiskBytes
+		m.disk.mu.Lock()
+		m.disk.directory = directory
+		m.disk.limit = maxDiskBytes
+		if warningPercent >= 1 && warningPercent <= 99 {
+			m.disk.warningPercent = warningPercent
+		}
+		m.disk.nextCheck = time.Time{}
+		m.disk.mu.Unlock()
+	}
+	for _, device := range m.devices {
+		device.mu.Lock()
+		device.config.MaxAge = maxAge
+		device.config.MaxBytes = maxBytes
+		device.mu.Unlock()
+		device.writerMu.Lock()
+		if device.writer != nil {
+			if err := device.writer.ApplyConfig(context.Background(), directory, maxAge, maxBytes); err != nil {
+				device.writerMu.Unlock()
+				m.mu.Unlock()
+				return err
+			}
+		}
+		device.writerMu.Unlock()
+	}
+	m.mu.Unlock()
+	return nil
+}
+
 type deviceRuntime struct {
 	manager  *Manager
 	config   DeviceConfig
@@ -79,7 +116,7 @@ func New(cfg Config, store *spool.Store, discovery Discovery, factory PortFactor
 	}
 	return &Manager{
 		cfg: cfg, store: store, discovery: discovery, factory: factory,
-		broker: NewBroker(cfg.EventCapacity), disk: newDiskGuard(cfg.SpoolDirectory, cfg.MaxDiskBytes, cfg.DiskCheckEvery),
+		broker: NewBroker(cfg.EventCapacity), disk: newDiskGuard(cfg.SpoolDirectory, cfg.MaxDiskBytes, cfg.StorageWarningPercent, cfg.DiskCheckEvery),
 		devices: make(map[string]*deviceRuntime), connecting: make(map[string]struct{}),
 	}, nil
 }
@@ -606,13 +643,31 @@ func (d *deviceRuntime) handleLine(ctx context.Context, line serialagent.Decoded
 	d.noLogAlert = false
 	d.mu.Unlock()
 	if persist {
-		exceeded, err := d.manager.disk.Exceeded(time.Now())
-		if err != nil {
-			return fmt.Errorf("check spool disk usage: %w", err)
+		var err error
+		diskState, measureErr := d.manager.disk.State(time.Now())
+		if measureErr != nil {
+			// Measurement failures are observable but are not a reason to tear
+			// down the serial connection. Continue with the last safe state.
+			d.publish(Event{Error: fmt.Sprintf("check spool disk usage: %v", measureErr)})
 		}
-		if exceeded {
+		switch diskState {
+		case DiskFull:
 			d.setState(StateDiskFull, "spool disk threshold reached")
 			return errDiskThreshold
+		case DiskReadOnly:
+			d.setState(StateDiskReadOnly, "spool disk usage is above 90%; local persistence paused")
+			persist = false
+		case DiskWarning:
+			d.setState(StateDiskWarning, "spool disk usage is above 80%")
+		case DiskNormal:
+			// Do not overwrite an active terminal state, but clear a previous
+			// warning once the queue has recovered.
+			d.mu.RLock()
+			current := d.state
+			d.mu.RUnlock()
+			if current == StateDiskWarning || current == StateDiskReadOnly {
+				d.setState(StateCollecting, "")
+			}
 		}
 		sequence, err = d.manager.store.NextSequence(ctx, d.config.ID)
 		if err != nil {

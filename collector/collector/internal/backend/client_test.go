@@ -178,3 +178,29 @@ func TestPlatformProjectIDOnlyAcceptsCurrentNumericIDs(t *testing.T) {
 		t.Fatalf("local catalog id must not be uploaded: %q", got)
 	}
 }
+
+func TestSyncCollectorConfigUsesUploadTokenAndParsesSnapshot(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/collector/sync" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer "+BuiltinUploadToken {
+			t.Errorf("authorization = %q", r.Header.Get("Authorization"))
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"code": 0, "message": "success", "data": map[string]any{
+			"projects":  []map[string]any{{"id": "42", "name": "DR2860"}},
+			"scenarios": []map[string]any{{"id": "aging", "name": "普通挂测", "enabled": true}},
+			"keywords":  []map[string]any{{"id": 7, "name": "断连", "category": "连接", "keyword": "disconnect", "scope": "line", "level": "warning"}},
+			"synced_at": "2026-08-26T00:00:00Z",
+		}})
+	}))
+	defer server.Close()
+	client := New(Config{BaseURL: server.URL + "/api", Timeout: time.Second})
+	result, err := client.SyncCollectorConfig(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Projects) != 1 || result.Projects[0].ID != "42" || len(result.Scenarios) != 1 || len(result.Keywords) != 1 {
+		t.Fatalf("unexpected snapshot: %+v", result)
+	}
+}

@@ -41,6 +41,8 @@ type CatalogTask struct {
 	Type                   string                  `yaml:"type" json:"type"`
 	KeywordProfileTemplate string                  `yaml:"keyword_profile_template" json:"-"`
 	KeywordProfiles        []CatalogKeywordProfile `yaml:"keyword_profiles" json:"keywordProfiles"`
+	AllProjects            bool                    `yaml:"all_projects,omitempty" json:"allProjects,omitempty"`
+	ApplicableProjects     []string                `yaml:"projects,omitempty" json:"applicableProjects,omitempty"`
 }
 
 type CatalogKeywordProfile struct {
@@ -183,6 +185,7 @@ func expandTaskKeywordProfiles(tasks []CatalogTask, templates map[string][]Catal
 func cloneCatalogTasks(tasks []CatalogTask) []CatalogTask {
 	result := append([]CatalogTask(nil), tasks...)
 	for i := range result {
+		result[i].ApplicableProjects = append([]string(nil), result[i].ApplicableProjects...)
 		result[i].KeywordProfiles = cloneCatalogProfiles(result[i].KeywordProfiles)
 	}
 	return result
@@ -366,7 +369,9 @@ func (s *Service) ApplyCatalogImport(token string) error {
 		return err
 	}
 	if cache, cacheErr := readCloudKeywordCache(s.cloudKeywordPath); cacheErr == nil {
-		pending.catalog = mergeCloudKeywords(pending.catalog, cache.Items)
+		if !hasCloudKeywordProfile(pending.catalog) {
+			pending.catalog = mergeCloudKeywords(pending.catalog, cache.Items)
+		}
 	}
 	s.mu.Lock()
 	s.catalog = pending.catalog

@@ -140,13 +140,26 @@ func parseMaintainedCatalog(projectData, taskData, keywordData []byte) (CatalogC
 	}
 	projects := append([]CatalogProject(nil), projectFile.Projects...)
 	for i := range projects {
-		projects[i].Tasks = cloneCatalogTasks(tasks)
+		for _, task := range tasks {
+			if task.AllProjects || len(task.ApplicableProjects) == 0 || containsFold(task.ApplicableProjects, projects[i].ID) || containsFold(task.ApplicableProjects, projects[i].Name) {
+				projects[i].Tasks = append(projects[i].Tasks, cloneCatalogTasks([]CatalogTask{task})...)
+			}
+		}
 	}
 	catalog := CatalogConfig{SchemaVersion: 1, Projects: projects}
 	if err := validateCatalog(catalog); err != nil {
 		return CatalogConfig{}, err
 	}
 	return catalog, nil
+}
+
+func containsFold(values []string, target string) bool {
+	for _, value := range values {
+		if strings.EqualFold(strings.TrimSpace(value), strings.TrimSpace(target)) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeMaintainedKeywordRules(profiles []CatalogKeywordProfile) {
@@ -161,6 +174,7 @@ func normalizeMaintainedKeywordRules(profiles []CatalogKeywordProfile) {
 			rule.Mode = "contains"
 		}
 		rule.Text = ""
+		rule.ReadOnly = strings.HasPrefix(rule.ID, "cloud-rule-")
 	}
 	for profileIndex := range profiles {
 		for ruleIndex := range profiles[profileIndex].Rules {

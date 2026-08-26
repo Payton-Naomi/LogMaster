@@ -1,0 +1,4 @@
+# test log
+open ..\config_template.yaml
+getenv LOGMASTER_E2E_BACKEND_URL
+getenv LOGMASTER_E2E_UPLOAD_TOKEN
