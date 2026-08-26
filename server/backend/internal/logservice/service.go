@@ -228,6 +228,14 @@ func (s *Service) prepareParseTask(task ClaimedParseTask) {
 			s.failClaimedTask(task, "extract uploaded archive", extractErr.Error())
 			return
 		}
+		decodedCount, decodeErr := decodeDeviceLogFiles(item.itemRoot, files)
+		if decodeErr != nil {
+			s.failClaimedTask(task, "decode device logs", decodeErr.Error())
+			return
+		}
+		if decodedCount > 0 {
+			log.Printf("decoded %d device log files for parse task %s", decodedCount, task.TaskID)
+		}
 		for i := range files {
 			totalParseBytes += files[i].SizeBytes
 			path := filepath.ToSlash(files[i].RelativePath)

@@ -48,7 +48,7 @@ HTTP 服务默认配置为请求头读取 10 秒、请求读取 1800 秒、响�
 `POST /api/tasks/{task_id}/cancel` 取消解析任务。`queued` 或 `running` 可取消并返回 `202`、`status=cancelled`；已完成或失败返回 `409`，重复取消已取消任务幂等返回 `202`。取消保留原始文件、解析结果和运行日志，不修改采集端上传协议。
 `GET /api/logs/{upload_id}/search` 按关键字搜索原始日志，支持 `file_id`、`case_sensitive`、`page`、`page_size`，返回命中总数和行号、路径、内容。
 `GET /api/logs/{upload_id}/download` 的 `type` 可选 `file`、`batch`、`original`、`results`；单文件需传 `file_id` 并支持 HTTP Range，结果包包含 CSV、JSON、Markdown。不传 `type` 时兼容旧行为。
-上传、解压和解析失败统一返回中文 `message`，后台任务的 `error_message` 和运行日志也使用中文。管理员可通过 `GET/POST /api/admin/archive-passwords` 管理解压密码，通过 `DELETE /api/admin/archive-passwords/{id}` 删除；普通管理员使用现有关键字管理权限即可操作。解压密码不属于解析规则，后端不再内置默认密码：未加密 ZIP 直接解压；加密 ZIP 仅依次尝试管理员维护的密码，支持标准 ZipCrypto 与 AES。任务开始会记录加载到的密码数量但不记录密码内容；读取密码表失败时任务以“读取解压密码配置失败”终止，不再误报为密码错误。
+上传、解压和解析失败统一返回中文 `message`，后台任务的 `error_message` 和运行日志也使用中文。管理员可通过 `GET/POST /api/admin/archive-passwords` 管理解压密码，通过 `DELETE /api/admin/archive-passwords/{id}` 删除；普通管理员使用现有关键字管理权限即可操作。解压密码不属于解析规则，后端不再内置默认密码：未加密 ZIP 直接解压；加密 ZIP 仅依次尝试管理员维护的密码，支持标准 ZipCrypto 与 AES。任务开始会记录加载到的密码数量但不记录密码内容；读取密码表失败时任务以“读取解压密码配置失败”终止，不再误报为密码错误。ZIP 解压后的 70mai 设备日志（`logfile`、`logfile_0` 至 `logfile_4`）会自动检测并按设备 XOR 格式解码后再解析；用户直接上传的任意受支持日志文件也会进行同样检测。仅当解码后可读文本特征足够可靠时才使用解码结果；原始上传文件保持不变，直接上传的设备日志会生成内部解码副本。
 `PATCH /api/results/{id}/status` 更新异常结果状态，允许值为 `pending`、`confirmed`、`false_positive`、`fixed`、`closed`，只允许结果有权访问者操作。
 `POST /api/results/{id}/comments` 添加异常备注，JSON 为 `{ "comment": "...", "defect_id": "BUG-123" }`；`GET /api/results/{id}/comments` 查询备注历史。
 `PUT /api/results/{id}/assignment` 分配或取消负责人，JSON 为 `{ "assigned_to": "用户 open_id" }`，空字符串表示取消分配。
