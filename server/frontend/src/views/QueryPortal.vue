@@ -17,7 +17,7 @@
         <form class="query-form" @submit.prevent="handleQuery">
           <label for="query-code">查询码</label>
           <div class="query-control">
-            <el-input id="query-code" v-model="queryCode" size="large" maxlength="32" placeholder="例如 A1B2C3D4E5" :disabled="loading" @input="normalizeCode">
+            <el-input id="query-code" v-model="queryCode" size="large" maxlength="32" placeholder="例如 DRXXXX-XXXXXXXXXX" :disabled="loading" @input="normalizeCode">
               <template #prefix><el-icon><Key /></el-icon></template>
             </el-input>
             <el-button type="primary" size="large" native-type="submit" :loading="loading">
