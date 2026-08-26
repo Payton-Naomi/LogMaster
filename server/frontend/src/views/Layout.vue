@@ -46,7 +46,11 @@
         </div>
         <div class="header-right">
           <div class="service-status" :class="serviceStatus"><span class="status-dot" /><span>{{ serviceStatusText }}</span></div>
-          <el-popover placement="bottom-end" :width="340" trigger="click" @show="loadNotifications"><template #reference><el-badge :value="unreadCount" :hidden="!unreadCount" class="notification-badge"><button class="icon-button" type="button" aria-label="通知"><el-icon><Bell /></el-icon></button></el-badge></template><div class="notification-popover"><div class="notification-head"><strong>通知</strong><div><el-button link @click="openNotificationSettings">通知设置</el-button><el-button link :disabled="!unreadCount" @click="readAll">全部已读</el-button></div></div><button v-for="item in notifications" :key="item.id" type="button" class="notification-item" :class="{ unread: !item.is_read }" @click="openNotification(item)"><strong>{{ item.title || '系统通知' }}</strong><span v-if="notificationTaskName(item)" class="notification-task">解析任务：{{ notificationTaskName(item) }}</span><span>{{ item.message || item.content }}</span></button><el-empty v-if="!notifications.length" description="暂无通知" :image-size="45" /></div></el-popover><span class="header-divider" />
+          <div class="header-ai-control" :class="{ enabled: aiEnabled }">
+            <el-icon><Cpu /></el-icon><span>AI 分析</span>
+            <button class="ai-switch" :class="{ enabled: aiEnabled }" type="button" role="switch" :aria-checked="aiEnabled" :aria-label="`AI 分析${aiEnabled ? '已开启' : '已关闭'}`" @click="toggleAI"><span /></button>
+          </div>
+          <el-popover v-model:visible="notificationPopoverOpen" placement="bottom-end" :width="340" trigger="click" @show="showNotificationPopover" @hide="clearNotificationPopoverTimer"><template #reference><el-badge :value="unreadCount" :hidden="!unreadCount" class="notification-badge"><button class="icon-button" type="button" aria-label="通知"><el-icon><Bell /></el-icon></button></el-badge></template><div class="notification-popover"><div class="notification-head"><strong>通知</strong><div><el-button link @click="openNotificationSettings">通知设置</el-button><el-button link :disabled="!unreadCount" @click="readAll">全部已读</el-button></div></div><button v-for="item in notifications" :key="item.id" type="button" class="notification-item" :class="{ unread: !item.is_read }" @click="openNotification(item)"><strong>{{ item.title || '系统通知' }}</strong><span v-if="notificationTaskName(item)" class="notification-task">解析任务：{{ notificationTaskName(item) }}</span><span>{{ item.message || item.content }}</span></button><el-empty v-if="!notifications.length" description="暂无通知" :image-size="45" /></div></el-popover><span class="header-divider" />
           <el-dropdown trigger="click" @command="handleUserCommand">
             <button class="user-menu" type="button">
               <span class="avatar">{{ userInitial }}</span><span class="user-name">{{ userInfo.name || '未登录' }}</span><el-icon class="chevron"><ArrowDown /></el-icon>
@@ -83,12 +87,13 @@
 import { computed, markRaw, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
-import { ArrowDown, ArrowRight, Bell, DataAnalysis, DataBoard, Expand, FolderOpened, Fold, Key, List, Menu, Moon, Operation, Search, Setting, Sunny, SwitchButton, Upload } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowRight, Bell, Cpu, DataAnalysis, DataBoard, Expand, FolderOpened, Fold, Key, List, Menu, Moon, Operation, Search, Setting, Sunny, SwitchButton, Upload } from '@element-plus/icons-vue'
 import { getNotificationSettings, getNotifications, markAllNotificationsRead, markNotificationRead, updateNotificationSettings } from '@/api/notification'
 import { getTaskDetail } from '@/api/task'
 import { getCurrentUser, logout } from '@/api/auth'
 import { clearVerifiedSession } from '@/router'
 import { useTheme } from '@/utils/theme'
+import { getAIEnabled, setAIEnabled } from '@/utils/aiPreference'
 
 const route = useRoute()
 const router = useRouter()
@@ -103,9 +108,12 @@ const unreadCount = ref(0)
 const notificationSettingsOpen = ref(false)
 const notificationSettingsLoading = ref(false)
 const notificationSettingsSaving = ref(false)
+const notificationPopoverOpen = ref(false)
+const aiEnabled = ref(getAIEnabled())
 const notificationSettings = ref({ task_completed: true, task_failed: true, task_cancelled: true, ai_completed: true, ai_failed: true, result_assigned: true, result_commented: true })
 const notificationSettingItems = [{ key: 'task_completed', label: '任务完成' }, { key: 'task_failed', label: '任务失败' }, { key: 'task_cancelled', label: '任务取消' }, { key: 'ai_completed', label: 'AI 分析完成' }, { key: 'ai_failed', label: 'AI 分析失败' }, { key: 'result_assigned', label: '异常结果被分配' }, { key: 'result_commented', label: '异常结果新增备注' }]
 let notificationStream = null
+let notificationPopoverTimer = null
 const baseNavGroups = [
   { label: '日志', items: [{ path: '/upload', label: '日志上传', icon: markRaw(Upload) }, { path: '/query', label: '采集日志查询', icon: markRaw(Search) }] },
   { label: '分析', items: [{ path: '/log-records', label: '日志记录', icon: markRaw(FolderOpened) }, { path: '/tasks', label: '分析任务', icon: markRaw(List) }, { path: '/dashboard', label: '数据概览', icon: markRaw(DataBoard) }] },
@@ -146,12 +154,29 @@ async function checkService() {
     serviceStatus.value = response.ok ? 'online' : 'offline'
   } catch { serviceStatus.value = 'offline' }
 }
+function toggleAI() {
+  aiEnabled.value = !aiEnabled.value
+  setAIEnabled(aiEnabled.value)
+}
 async function loadNotifications() { try { const data = await getNotifications({ page: 1, page_size: 10 }); const items = await Promise.all((data.list || []).map(async item => { if (!item.task_id || notificationTaskName(item)) return item; try { const detail = await getTaskDetail(item.task_id); const task = detail?.task || detail; if (task) return { ...item, task_name: task.original_name || task.project_name || '', project_name: task.project_name, version: task.version } } catch { /* A notification remains usable when its task was removed. */ } return item })); notifications.value = items; unreadCount.value = Number(data.unread || 0) } catch { /* Notification center is optional during backend rollout. */ } }
+function clearNotificationPopoverTimer() { if (notificationPopoverTimer) window.clearTimeout(notificationPopoverTimer); notificationPopoverTimer = null }
+function showNotificationPopover() { loadNotifications(); clearNotificationPopoverTimer(); notificationPopoverTimer = window.setTimeout(() => { notificationPopoverOpen.value = false }, 5000) }
 async function readAll() { try { await markAllNotificationsRead(); notifications.value = notifications.value.map(item => ({ ...item, is_read: true, read_at: item.read_at || new Date().toISOString() })); unreadCount.value = 0 } catch { ElMessage.error('通知标记失败') } }
 async function openNotification(item) { try { if (!item.is_read) { await markNotificationRead(item.id); item.is_read = true; item.read_at = item.read_at || new Date().toISOString(); unreadCount.value = Math.max(0, unreadCount.value - 1) } if (item.task_id) await router.push({ name: 'TaskDetail', params: { taskId: item.task_id } }) } catch { ElMessage.error('通知处理失败') } }
 async function openNotificationSettings() { notificationSettingsOpen.value = true; notificationSettingsLoading.value = true; try { notificationSettings.value = { ...notificationSettings.value, ...await getNotificationSettings() } } catch { ElMessage.error('通知设置加载失败') } finally { notificationSettingsLoading.value = false } }
 async function saveNotificationSettings() { notificationSettingsSaving.value = true; try { await updateNotificationSettings(notificationSettings.value); notificationSettingsOpen.value = false; ElMessage.success('通知设置已保存') } catch { ElMessage.error('通知设置保存失败') } finally { notificationSettingsSaving.value = false } }
-function startNotificationStream() { if (!window.EventSource) return; notificationStream = new EventSource('/api/notifications/stream', { withCredentials: true }); notificationStream.addEventListener('notification', event => { try { const item = JSON.parse(event.data); notifications.value = [item, ...notifications.value.filter(value => value.id !== item.id)].slice(0, 10); if (!item.is_read) unreadCount.value += 1; ElNotification({ title: item.title || '系统通知', message: item.message || '你有一条新通知', type: 'info', duration: 5000 }) } catch { /* Ignore malformed SSE payload. */ } }) }
+function notificationKey(item) { return `${item.notification_type || item.type || ''}:${item.task_id || item.upload_id || item.result_id || item.id || ''}` }
+function handleIncomingNotification(item) {
+  const key = notificationKey(item)
+  const exists = notifications.value.some(value => notificationKey(value) === key)
+  if (!exists) {
+    notifications.value = [item, ...notifications.value].slice(0, 10)
+    if (!item.is_read) unreadCount.value += 1
+  }
+  if (!exists || item.local) ElNotification({ title: item.title || '系统通知', message: item.message || item.content || '你有一条新通知', type: (item.type || '').includes('failed') ? 'error' : 'success', duration: 6000 })
+}
+function handleLocalNotification(event) { if (event?.detail) handleIncomingNotification(event.detail) }
+function startNotificationStream() { if (!window.EventSource) return; notificationStream = new EventSource('/api/notifications/stream', { withCredentials: true }); notificationStream.addEventListener('notification', event => { try { handleIncomingNotification(JSON.parse(event.data)) } catch { /* Ignore malformed SSE payload. */ } }) }
 
 async function handleUserCommand(command) {
   if (command !== 'logout') return
@@ -172,11 +197,14 @@ onMounted(() => {
   loadUser()
   checkService()
   loadNotifications()
+  window.addEventListener('logmaster-ai-notification', handleLocalNotification)
   startNotificationStream()
 })
 onBeforeUnmount(() => {
   window.removeEventListener('resize', updateViewport)
+  clearNotificationPopoverTimer()
   notificationStream?.close()
+  window.removeEventListener('logmaster-ai-notification', handleLocalNotification)
 })
 </script>
 
@@ -187,6 +215,10 @@ onBeforeUnmount(() => {
 .brand-mark{display:grid;width:36px;height:36px;flex:0 0 36px;place-items:center;border-radius:6px;background:#2877e8;color:#fff;font-size:20px}
 .brand-copy{display:flex;min-width:0;flex-direction:column;gap:3px;white-space:nowrap}.brand-copy strong{font-size:16px}.brand-copy span{color:#929cab;font-size:11px}
 .navigation{flex:1;overflow-y:auto;padding:12px 10px 20px}.menu{border-right:0;background:transparent}.menu-group-label{padding:13px 12px 7px;color:#747f8e;font-size:11px;font-weight:600}
+.ai-switch{position:relative;width:36px;height:20px;flex:0 0 36px;padding:0;border:1px solid rgba(255,255,255,.12);border-radius:10px;background:#303943;cursor:pointer;transition:border-color .18s ease,background .18s ease,box-shadow .18s ease}
+.ai-switch span{position:absolute;top:3px;left:3px;width:12px;height:12px;border-radius:50%;background:#94a0aa;box-shadow:0 2px 5px rgba(0,0,0,.35);transition:transform .18s ease,background .18s ease}
+.ai-switch.enabled{border-color:rgba(34,211,238,.45);background:rgba(8,145,178,.55);box-shadow:0 0 12px rgba(6,182,212,.12)}.ai-switch.enabled span{background:#d7fbff;transform:translateX(16px)}
+.ai-switch:focus-visible{outline:2px solid #67e8f9;outline-offset:2px}
 .menu :deep(.el-menu-item){height:42px;margin:3px 0;border-radius:5px;color:#aeb7c4}.menu :deep(.el-menu-item:hover){background:#222a35;color:#fff}.menu :deep(.el-menu-item.is-active){background:#243a57;color:#73aefc}
 .menu :deep(.el-menu-item.is-active::before){position:absolute;left:0;width:3px;height:20px;border-radius:0 3px 3px 0;background:#4c94f5;content:''}.menu.el-menu--collapse{width:52px}.menu.el-menu--collapse :deep(.el-menu-item){justify-content:center;padding:0!important}
 .workspace{min-width:0}.header{display:flex;height:64px;flex:0 0 64px;align-items:center;justify-content:space-between;padding:0 22px;border-bottom:1px solid var(--lm-border);background:#fff}
@@ -194,6 +226,7 @@ onBeforeUnmount(() => {
 .icon-button,.user-menu{border:0;background:transparent;cursor:pointer}.icon-button{display:grid;width:36px;height:36px;flex:0 0 36px;place-items:center;border-radius:5px;color:#556171;font-size:18px}.icon-button:hover{background:#f0f3f6;color:#1e2937}
 .breadcrumb{min-width:0;gap:7px;color:#8a94a3;font-size:13px;white-space:nowrap}.breadcrumb .el-icon{font-size:11px}.breadcrumb strong{overflow:hidden;color:#26313e;font-weight:600;text-overflow:ellipsis}
 .service-status{gap:7px;color:#657180;font-size:12px}.status-dot{width:7px;height:7px;border-radius:50%;background:#a9b1bc}.online .status-dot{background:#27936c;box-shadow:0 0 0 3px #e3f3ed}.offline .status-dot{background:#cf4f4f;box-shadow:0 0 0 3px #fbe8e8}.header-divider{width:1px;height:22px;background:#e7eaee}
+.header-ai-control{display:flex;height:36px;flex:0 0 auto;align-items:center;gap:7px;padding:0 9px;border:1px solid rgba(148,163,184,.2);border-radius:7px;background:rgba(255,255,255,.035);color:#94a3b8;white-space:nowrap}.header-ai-control>.el-icon{width:16px;height:16px;font-size:16px}.header-ai-control>span{font-size:12px;font-weight:600}.header-ai-control.enabled{border-color:rgba(34,211,238,.25);background:rgba(6,182,212,.08);color:#67e8f9}
 .user-menu{max-width:210px;gap:9px;padding:4px 5px;border-radius:6px;color:#344152}.user-menu:hover{background:#f5f7f9}.avatar{display:grid;width:30px;height:30px;flex:0 0 30px;place-items:center;border-radius:50%;background:#e7effb;color:#286dc8;font-size:12px;font-weight:700}.user-name{overflow:hidden;font-size:13px;font-weight:500;text-overflow:ellipsis;white-space:nowrap}.chevron{flex:0 0 auto;color:#8a94a3;font-size:11px}
 .notification-badge{display:flex}.notification-popover{display:grid;max-height:420px;gap:4px;overflow:auto}.notification-head{display:flex;align-items:center;justify-content:space-between;padding-bottom:8px;border-bottom:1px solid rgba(255,255,255,.12)}.notification-head>div{display:flex;gap:6px}.notification-item{display:flex;width:100%;flex-direction:column;gap:4px;padding:10px 8px;border:0;border-radius:5px;background:transparent;color:inherit;text-align:left;cursor:pointer}.notification-item:hover,.notification-item.unread{background:rgba(6,182,212,.12)}.notification-item strong{font-size:12px}.notification-item span{overflow:hidden;color:#8b9099;font-size:11px;text-overflow:ellipsis;white-space:nowrap}.notification-item .notification-task{color:#67e8f9;font-size:11px}.notification-settings{display:grid;gap:16px}.notification-settings :deep(.el-switch){justify-content:space-between}
 .notification-badge :deep(.el-badge__content){z-index:auto}
@@ -201,8 +234,8 @@ onBeforeUnmount(() => {
 .notification-popover{min-width:0}.notification-item{min-width:0}.notification-item strong,.notification-item span{overflow-wrap:anywhere;white-space:normal}.notification-item span{line-height:1.5}
 .main{height:calc(100dvh - 64px);min-width:0;overflow:hidden;padding:20px 22px;background:var(--lm-surface-page)}.main>*,.main :deep(>*){min-width:0}.mobile-brand{color:#fff}
 :global(.mobile-drawer.el-drawer){background:#171c24}:global(.mobile-drawer .el-drawer__body){display:flex;overflow:hidden;flex-direction:column;padding:0}
-@media(max-width:1439px) and (min-width:768px){.main{padding:14px 16px}.header{padding:0 16px}.service-status span:last-child,.header-divider{display:none}.header-right{gap:10px}}
-@media(max-width:767px){.desktop-aside{display:none}.header{padding:0 14px}.breadcrumb>span,.breadcrumb>.el-icon,.service-status span:last-child,.header-divider,.user-name,.chevron{display:none}.header-right{gap:12px}.service-status{padding:0 5px}.main{padding:14px}}
+@media(max-width:1439px) and (min-width:768px){.main{padding:14px 16px}.header{padding:0 16px}.service-status span:last-child,.header-divider{display:none}.header-right{gap:10px}.header-ai-control>span{display:none}.header-ai-control{padding:0 8px}}
+@media(max-width:767px){.desktop-aside{display:none}.header{padding:0 14px}.breadcrumb>span,.breadcrumb>.el-icon,.service-status span:last-child,.header-divider,.user-name,.chevron{display:none}.header-right{gap:8px}.service-status{display:none}.header-ai-control>span{display:none}.header-ai-control{height:34px;padding:0 7px}.header-ai-control>.el-icon{display:none}.main{padding:14px}}
 </style>
 <style scoped>
 .workspace, .main, .main > *, .main :deep(.page) { min-width: 0; }

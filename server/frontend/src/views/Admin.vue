@@ -219,10 +219,23 @@
         </el-table>
       </section>
 
+      <section v-else-if="activeModule === 'archive_passwords'" class="project-workspace settings-workspace">
+        <div class="section-heading"><div><h2>解压密码</h2><p>维护加密压缩包的候选密码，上传时后端会按列表顺序逐个尝试</p></div><el-tag effect="plain">{{ archivePasswords.length }} 个密码</el-tag></div>
+        <div class="password-toolbar"><el-input v-model.trim="newArchivePassword" type="password" show-password maxlength="256" placeholder="输入解压密码，最多 256 个字符" @keyup.enter="saveArchivePassword" /><el-button type="primary" :icon="Plus" :loading="archivePasswordSaving" :disabled="!newArchivePassword" @click="saveArchivePassword">添加密码</el-button><el-button :icon="Refresh" :loading="archivePasswordsLoading" @click="loadArchivePasswords">刷新</el-button></div>
+        <el-alert title="后端会在遇到加密压缩包时自动尝试列表中的所有密码；未加密压缩包不受影响。" type="info" :closable="false" show-icon class="password-tip" />
+        <el-table v-loading="archivePasswordsLoading" :data="archivePasswords" row-key="id" class="keyword-table">
+          <el-table-column type="index" label="#" width="60" />
+          <el-table-column prop="masked" label="密码" min-width="220" />
+          <el-table-column prop="updated_at" label="最近更新" width="190"><template #default="scope">{{ formatDate(scope.row.updated_at) }}</template></el-table-column>
+          <el-table-column label="操作" width="90" align="center"><template #default="scope"><el-button :icon="Delete" text circle type="danger" title="删除密码" @click="removeArchivePassword(scope.row)" /></template></el-table-column>
+          <template #empty><el-empty description="暂无解压密码，请先添加" :image-size="70" /></template>
+        </el-table>
+      </section>
+
       <section v-else-if="activeModule === 'keywords'" class="project-workspace settings-workspace">
         <div class="section-heading">
           <div><h2>研发异常关键词</h2><p>批量导入公共规则，导入后所有用户均可在解析规则页查看并参与日志分析</p></div>
-          <el-tag effect="plain">{{ keywordRules.length }} 条已上传</el-tag>
+          <el-tag effect="plain">{{ adminRules.length }} 条规则</el-tag>
         </div>
         <div class="keyword-layout">
           <el-form class="keyword-import" label-position="top" @submit.prevent="submitKeywordImport">
@@ -245,16 +258,38 @@
             <p>仅 keyword 为必填列。CSV 行内填写的分类、级别和范围会覆盖左侧默认值；重复的关键词会更新原规则。</p>
           </div>
         </div>
-        <el-table v-loading="keywordRulesLoading" :data="keywordRules" class="keyword-table" row-key="id">
-          <el-table-column prop="name" label="规则名称" min-width="170" show-overflow-tooltip />
-          <el-table-column prop="keyword" label="关键词" min-width="220" show-overflow-tooltip />
-          <el-table-column label="分类" width="100"><template #default="scope">{{ categoryLabel(scope.row.category) }}</template></el-table-column>
+        <div class="admin-rules-heading">
+          <div><h3>现有解析规则</h3><p>查看全部生效规则，维护可编辑规则的内容和启用状态</p></div>
+          <el-button type="primary" :icon="Plus" @click="openRuleCreate">新增解析规则</el-button>
+        </div>
+        <div class="toolbar rule-toolbar">
+          <el-input v-model="adminRuleSearch" clearable :prefix-icon="Search" placeholder="搜索规则名称、关键字或说明" />
+          <el-select v-model="adminRuleCategory" clearable placeholder="全部分类"><el-option v-for="item in keywordCategories" :key="item.value" :label="item.label" :value="item.value" /></el-select>
+          <el-select v-model="adminRuleLevel" clearable placeholder="全部级别"><el-option label="严重" value="critical" /><el-option label="警告" value="warning" /><el-option label="信息" value="info" /></el-select>
+          <span class="result-count">共 {{ filteredAdminRules.length }} 条</span>
+        </div>
+        <el-table v-loading="adminRulesLoading" :data="filteredAdminRules" class="keyword-table admin-rule-table" row-key="id">
+          <el-table-column prop="name" label="规则名称" min-width="165" show-overflow-tooltip />
+          <el-table-column prop="keyword" label="关键字" min-width="220" show-overflow-tooltip />
+          <el-table-column label="分类" width="105"><template #default="scope">{{ categoryLabel(scope.row.category) }}</template></el-table-column>
           <el-table-column label="级别" width="90"><template #default="scope"><el-tag :type="levelTagType(scope.row.level)" effect="plain" size="small">{{ levelLabel(scope.row.level) }}</el-tag></template></el-table-column>
-          <el-table-column prop="scope" label="适用范围" min-width="120" show-overflow-tooltip />
-          <el-table-column label="操作" width="70" align="center"><template #default="scope"><el-tooltip content="删除规则"><el-button :icon="Delete" text circle type="danger" @click="removeKeywordRule(scope.row)" /></el-tooltip></template></el-table-column>
-          <template #empty><el-empty description="还没有管理员上传的关键词规则" :image-size="70" /></template>
+          <el-table-column prop="scope" label="适用范围" min-width="130" show-overflow-tooltip />
+          <el-table-column label="来源" width="110"><template #default="scope"><el-tag effect="plain" size="small">{{ ruleSourceLabel(scope.row.source) }}</el-tag></template></el-table-column>
+          <el-table-column label="状态" width="88"><template #default="scope"><el-switch v-model="scope.row.enabled" :disabled="!scope.row.editable || ruleSavingId === scope.row.id" @change="saveAdminRuleState(scope.row)" /></template></el-table-column>
+          <el-table-column label="操作" width="145" align="center"><template #default="scope"><el-button link type="primary" @click="openRuleEdit(scope.row)">{{ scope.row.editable ? '编辑' : '查看' }}</el-button><el-button v-if="scope.row.editable" link type="danger" :disabled="Boolean(scope.row.scenario_count) || ruleSavingId === scope.row.id" @click="removeAdminRule(scope.row)">删除</el-button></template></el-table-column>
+          <template #empty><el-empty description="暂无解析规则" :image-size="70" /></template>
         </el-table>
       </section>
+
+    <el-dialog v-model="adminRuleDialog" class="admin-glass-dialog" :title="adminRuleForm.id ? (adminRuleForm.editable ? '编辑解析规则' : '规则详情') : '新增解析规则'" width="min(620px, 92vw)" destroy-on-close>
+      <el-form label-position="top" :disabled="Boolean(adminRuleForm.id && !adminRuleForm.editable)">
+        <div class="form-grid"><el-form-item label="规则名称" required><el-input v-model.trim="adminRuleForm.name" placeholder="例如：设备重启异常" /></el-form-item><el-form-item label="分类" required><el-select v-model="adminRuleForm.category" style="width:100%"><el-option v-for="item in keywordCategories" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item></div>
+        <el-form-item label="关键字" required><el-input v-model.trim="adminRuleForm.keyword" type="textarea" :rows="3" placeholder="多个关键字可用逗号分隔" /></el-form-item>
+        <div class="form-grid"><el-form-item label="适用范围"><el-input v-model.trim="adminRuleForm.scope" placeholder="例如 自研通用、DR2861" /></el-form-item><el-form-item label="级别"><el-select v-model="adminRuleForm.level" style="width:100%"><el-option label="严重" value="critical" /><el-option label="警告" value="warning" /><el-option label="信息" value="info" /></el-select></el-form-item></div>
+        <el-form-item label="规则说明"><el-input v-model="adminRuleForm.description" type="textarea" :rows="2" /></el-form-item><el-checkbox v-model="adminRuleForm.enabled">启用规则</el-checkbox>
+      </el-form>
+      <template #footer><el-button @click="adminRuleDialog = false">{{ adminRuleForm.id && !adminRuleForm.editable ? '关闭' : '取消' }}</el-button><el-button v-if="!adminRuleForm.id || adminRuleForm.editable" type="primary" :loading="ruleSavingId === 'form'" @click="saveAdminRule">保存</el-button></template>
+    </el-dialog>
 
     <el-dialog v-model="dialogVisible" class="admin-glass-dialog" :title="editingId ? '编辑项目' : '新建项目'" width="min(520px, 92vw)" destroy-on-close>
       <el-form label-position="top" @submit.prevent="saveProject">
@@ -291,7 +326,7 @@
 import { computed, markRaw, nextTick, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowRight, Check, Delete, DocumentAdd, Edit, Key, List, Loading, Plus, Search, Setting, User, UserFilled } from '@element-plus/icons-vue'
-import { cancelPermissionRequest as cancelPermissionRequestApi, createAdminProject, createPermissionRequest, createProjectOption, createProjectRequest, decidePermissionRequest, decideProjectRequest, deleteAdminKeywordRule, deleteAdminProject, deleteProjectOption, getAdminKeywordRules, getAdminProjects, getAdminUsers, getAIAnalysisSettings, getPermissionRequests, getProjectOptions, getProjectRequests, getRuntimeLogs, getUploadCapacity, importAdminKeywordRules, restoreAdminUserRole, updateAdminProject, updateAdminUserRole, updateAIAnalysisSettings, updateProjectOption, updateUploadCapacity } from '@/api/admin'
+import { addArchivePassword, cancelPermissionRequest as cancelPermissionRequestApi, createAdminKeywordRule, createAdminProject, createPermissionRequest, createProjectOption, createProjectRequest, decidePermissionRequest, decideProjectRequest, deleteAdminKeywordRule, deleteAdminProject, deleteArchivePassword, deleteProjectOption, getAdminKeywordRules, getAdminProjects, getAdminUsers, getAIAnalysisSettings, getArchivePasswords, getPermissionRequests, getProjectOptions, getProjectRequests, getRuntimeLogs, getUploadCapacity, importAdminKeywordRules, restoreAdminUserRole, updateAdminKeywordRule, updateAdminProject, updateAdminUserRole, updateAIAnalysisSettings, updateProjectOption, updateUploadCapacity } from '@/api/admin'
 import { getCurrentUser } from '@/api/auth'
 
 const checking = ref(false)
@@ -341,7 +376,19 @@ const keywordFile = ref(null)
 const keywordImporting = ref(false)
 const keywordRulesLoading = ref(false)
 const keywordRules = ref([])
+const adminRulesLoading = ref(false)
+const adminRules = ref([])
+const adminRuleSearch = ref('')
+const adminRuleCategory = ref('')
+const adminRuleLevel = ref('')
+const adminRuleDialog = ref(false)
+const ruleSavingId = ref(null)
+const adminRuleForm = reactive({ id: 0, name: '', category: 'system', keyword: '', scope: '', level: 'warning', description: '', enabled: true, editable: true, scenario_count: 0 })
 const keywordDefaults = reactive({ category: 'system', level: 'critical', scope: '自研通用', description: '' })
+const archivePasswords = ref([])
+const archivePasswordsLoading = ref(false)
+const archivePasswordSaving = ref(false)
+const newArchivePassword = ref('')
 const keywordCategories = [
   { value: 'power', label: '电源' }, { value: 'storage', label: '存储' }, { value: 'recording', label: '录像' },
   { value: 'system', label: '系统' }, { value: 'connectivity', label: '连接' }, { value: 'feature', label: '功能' }, { value: 'tool', label: '工具' }
@@ -366,7 +413,8 @@ const moduleDefinitions = [
   { key: 'projects', permission: 'projects', name: '项目管理', description: '项目资料与可选列表', icon: markRaw(List), ready: true },
   { key: 'capacity', permission: 'capacity', name: '资源与配额', description: '上传与 AI 用量限制', icon: markRaw(Setting), ready: true },
   { key: 'approvals', permission: 'approvals', name: '申请与审批', description: '权限及项目申请审批', icon: markRaw(Check), ready: true },
-  { key: 'keywords', permission: 'keywords', name: '异常关键词', description: '研发专属关键词上传', icon: markRaw(DocumentAdd), ready: true }
+  { key: 'keywords', permission: 'keywords', name: '异常关键词', description: '研发专属关键词上传与维护', icon: markRaw(DocumentAdd), ready: true },
+  { key: 'archive_passwords', permission: 'keywords', name: '解压密码', description: '加密压缩包候选密码', icon: markRaw(Key), ready: true }
 ]
 const modules = computed(() => moduleDefinitions.filter(module => access.permissions.includes(module.permission)))
 const availableApprovalRoles = computed(() => roleOptions.filter(item => item.value !== approvalAccess.current_role))
@@ -398,6 +446,12 @@ const filteredUsers = computed(() => {
   return users.value.filter(user => (!text || `${user.name}${user.email}${user.feishu_open_id}`.toLowerCase().includes(text))
     && (!userRoleFilter.value || user.role === userRoleFilter.value))
 })
+const filteredAdminRules = computed(() => {
+  const text = adminRuleSearch.value.trim().toLowerCase()
+  return adminRules.value.filter(rule => (!adminRuleCategory.value || rule.category === adminRuleCategory.value)
+    && (!adminRuleLevel.value || rule.level === adminRuleLevel.value)
+    && (!text || `${rule.name || ''}${rule.keyword || ''}${rule.description || ''}`.toLowerCase().includes(text)))
+})
 const superAdminCount = computed(() => users.value.filter(user => user.role === 'super_admin').length)
 
 function rolePermissions(role) {
@@ -425,6 +479,7 @@ function formatTokenQuota(value) {
 function categoryLabel(value) { return keywordCategories.find(item => item.value === value)?.label || value }
 function levelLabel(value) { return ({ critical: '严重', warning: '警告', info: '信息' })[value] || value }
 function levelTagType(value) { return value === 'critical' ? 'danger' : value === 'warning' ? 'warning' : 'info' }
+function ruleSourceLabel(value) { return ({ keyword_document: '关键字文档', admin_keyword_upload: '管理员上传', derived: '关联分析', system: '系统', manual: '手动' })[value] || value || '手动' }
 function roleLabel(value) { return roleOptions.find(item => item.value === value)?.label || value }
 function roleTagType(value) { return value === 'super_admin' ? 'danger' : value === 'admin' ? 'warning' : value === 'developer' ? 'primary' : 'info' }
 function roleDescription(value) { return ({ user: '正常使用业务功能，可申请调整权限', developer: '可维护异常关键词并提交权限申请', admin: '可管理项目、异常关键词并提交权限申请', super_admin: '拥有全部管理及权限审批能力' })[value] || '-' }
@@ -441,7 +496,8 @@ async function selectModule(module) {
   if (module.key === 'projects') await loadProjectData()
   if (module.key === 'capacity') await Promise.all([loadCapacity(), loadAISettings()])
   if (module.key === 'approvals') await Promise.all([loadApprovals(), loadProjectRequests()])
-  if (module.key === 'keywords') await loadKeywordRules()
+  if (module.key === 'keywords') await loadAdminRules()
+  if (module.key === 'archive_passwords') await loadArchivePasswords()
 }
 
 async function toggleRuntimeLogs() {
@@ -646,6 +702,78 @@ async function loadKeywordRules() {
   } finally { keywordRulesLoading.value = false }
 }
 
+async function loadAdminRules() {
+  adminRulesLoading.value = true
+  try { adminRules.value = await getAdminKeywordRules() || [] }
+  catch (error) {
+    if (error.response?.status === 401) unlocked.value = false
+    else if (error.response?.status !== 403) ElMessage.error(error.response?.data?.message || '解析规则加载失败')
+  } finally { adminRulesLoading.value = false }
+}
+
+async function loadArchivePasswords() {
+  archivePasswordsLoading.value = true
+  try { archivePasswords.value = await getArchivePasswords() || [] }
+  catch (error) { if (error.response?.status === 401) unlocked.value = false; else ElMessage.error(error.response?.data?.message || '解压密码加载失败') }
+  finally { archivePasswordsLoading.value = false }
+}
+async function saveArchivePassword() {
+  const password = newArchivePassword.value.trim()
+  if (!password || archivePasswordSaving.value) return
+  archivePasswordSaving.value = true
+  try { await addArchivePassword(password); newArchivePassword.value = ''; ElMessage.success('解压密码已保存'); await loadArchivePasswords() }
+  catch (error) { if (error.response?.status === 401) unlocked.value = false; else ElMessage.error(error.response?.data?.message || '解压密码保存失败') }
+  finally { archivePasswordSaving.value = false }
+}
+async function removeArchivePassword(item) {
+  try {
+    await ElMessageBox.confirm(`确认删除解压密码“${item.masked}”？删除后将不再尝试该密码。`, '删除解压密码', { confirmButtonText: '确认删除', cancelButtonText: '取消', type: 'warning' })
+    await deleteArchivePassword(item.id); ElMessage.success('解压密码已删除'); await loadArchivePasswords()
+  } catch (error) { if (error?.response?.status === 401) unlocked.value = false; else if (error?.response) ElMessage.error(error.response?.data?.message || '解压密码删除失败') }
+}
+
+function resetAdminRuleForm() {
+  Object.assign(adminRuleForm, { id: 0, name: '', category: 'system', keyword: '', scope: '自研通用', level: 'warning', description: '', enabled: true, editable: true, scenario_count: 0 })
+}
+function openRuleCreate() { resetAdminRuleForm(); adminRuleDialog.value = true }
+function openRuleEdit(rule) { Object.assign(adminRuleForm, rule); adminRuleDialog.value = true }
+async function saveAdminRule() {
+  if (!adminRuleForm.name.trim() || !adminRuleForm.keyword.trim() || ruleSavingId.value) { if (!adminRuleForm.name.trim() || !adminRuleForm.keyword.trim()) ElMessage.warning('请填写规则名称和关键字'); return }
+  ruleSavingId.value = 'form'
+  try {
+    const payload = { name: adminRuleForm.name.trim(), category: adminRuleForm.category, keyword: adminRuleForm.keyword.trim(), scope: adminRuleForm.scope.trim(), level: adminRuleForm.level, description: adminRuleForm.description.trim(), enabled: Boolean(adminRuleForm.enabled) }
+    if (adminRuleForm.id) await updateAdminKeywordRule(adminRuleForm.id, payload)
+    else await createAdminKeywordRule(payload)
+    adminRuleDialog.value = false
+    ElMessage.success(adminRuleForm.id ? '解析规则已保存' : '解析规则已新增')
+    await loadAdminRules()
+  } catch (error) {
+    if (error.response?.status === 401) unlocked.value = false
+    else ElMessage.error(error.response?.data?.message || error.message || '解析规则保存失败')
+  } finally { ruleSavingId.value = null }
+}
+async function saveAdminRuleState(rule) {
+  if (!rule.editable) return
+  ruleSavingId.value = rule.id
+  try { await updateAdminKeywordRule(rule.id, { ...rule, enabled: Boolean(rule.enabled) }); ElMessage.success(rule.enabled ? '规则已启用' : '规则已停用') }
+  catch (error) { rule.enabled = !rule.enabled; if (error.response?.status === 401) unlocked.value = false; else ElMessage.error(error.response?.data?.message || '规则状态保存失败') }
+  finally { ruleSavingId.value = null }
+}
+async function removeAdminRule(rule) {
+  if (rule.scenario_count) { ElMessage.warning('该规则已被测试场景引用，请先移除引用'); return }
+  try {
+    await ElMessageBox.confirm(`确认删除解析规则“${rule.name}”？删除后将不再参与日志解析。`, '删除解析规则', { confirmButtonText: '确认删除', cancelButtonText: '取消', type: 'warning' })
+    ruleSavingId.value = rule.id
+    await deleteAdminKeywordRule(rule.id)
+    ElMessage.success('解析规则已删除')
+    await loadAdminRules()
+  } catch (error) {
+    if (error?.response?.status === 401) unlocked.value = false
+    else if (error?.response?.status === 409) ElMessage.warning(error.response?.data?.message || '规则已被测试场景引用，无法删除')
+    else if (error?.response) ElMessage.error(error.response?.data?.message || '解析规则删除失败')
+  } finally { ruleSavingId.value = null }
+}
+
 function selectKeywordFile(event) {
   const file = event.target.files?.[0]
   event.target.value = ''
@@ -662,7 +790,7 @@ async function submitKeywordImport() {
     const result = await importAdminKeywordRules(keywordFile.value, keywordDefaults)
     ElMessage.success(`导入完成：新增 ${result.created || 0} 条，更新 ${result.updated || 0} 条，跳过 ${result.skipped || 0} 条`)
     keywordFile.value = null
-    await loadKeywordRules()
+    await loadAdminRules()
   } catch (error) {
     if (error.response?.status === 401) unlocked.value = false
   } finally { keywordImporting.value = false }
@@ -860,4 +988,9 @@ onMounted(async () => {
 @media(max-width:760px) { .admin-page { padding:18px 14px 34px; }.unlock-view { margin:0; }.project-workspace { padding:14px; } }
 @media(prefers-reduced-motion:reduce) { .module-card,.project-workspace :deep(.el-table__row) { animation:none;transition:none; } }
 .ai-quota-overview { grid-template-columns:repeat(2,1fr); }
+.admin-rules-heading { display:flex;align-items:center;justify-content:space-between;gap:16px;margin:30px 0 14px;padding-top:24px;border-top:1px solid rgba(214,235,242,.14); }
+.admin-rules-heading h3 { margin:0;color:#e8f0f4;font-size:16px; }.admin-rules-heading p { margin:5px 0 0;color:#8299a5;font-size:11px; }
+.rule-toolbar { margin-bottom:12px; }.rule-toolbar .el-input { width:min(380px,48%); }.rule-toolbar .el-select { width:150px; }.result-count { margin-left:auto;color:#849da8;font-size:12px; }.admin-rule-table { margin-top:0; }
+.password-toolbar { display:flex;gap:10px;align-items:center;margin:22px 0 14px; }.password-toolbar .el-input { max-width:460px; }.password-tip { margin-bottom:14px; }
+@media(max-width:760px) { .admin-rules-heading { align-items:flex-start;flex-direction:column; }.rule-toolbar .el-input,.rule-toolbar .el-select { width:100%; }.result-count { margin-left:0; } }
 </style>

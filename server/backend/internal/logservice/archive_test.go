@@ -9,7 +9,9 @@ import (
 	zip "github.com/yeka/zip"
 )
 
-func TestExtractEncryptedZIPWithDefaultPassword(t *testing.T) {
+const archiveTestPassword = "test-archive-password"
+
+func TestExtractEncryptedZIPWithConfiguredPassword(t *testing.T) {
 	root := t.TempDir()
 	archivePath := filepath.Join(root, "logs.zip")
 	archive, err := os.Create(archivePath)
@@ -17,7 +19,7 @@ func TestExtractEncryptedZIPWithDefaultPassword(t *testing.T) {
 		t.Fatal(err)
 	}
 	writer := zip.NewWriter(archive)
-	entry, err := writer.Encrypt("device/system.log", defaultArchivePassword, zip.AES256Encryption)
+	entry, err := writer.Encrypt("device/system.log", archiveTestPassword, zip.AES256Encryption)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +33,7 @@ func TestExtractEncryptedZIPWithDefaultPassword(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	files, err := collectLogFiles(archivePath, filepath.Join(root, "upload"), 1024*1024)
+	files, err := collectLogFilesWithPasswords(archivePath, filepath.Join(root, "upload"), 1024*1024, []string{archiveTestPassword})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,6 +46,41 @@ func TestExtractEncryptedZIPWithDefaultPassword(t *testing.T) {
 	}
 	if string(content) != "INFO started\nERROR failed\n" {
 		t.Fatalf("unexpected content: %q", content)
+	}
+
+	if _, err := collectLogFiles(archivePath, filepath.Join(root, "without-password"), 1024*1024); err == nil {
+		t.Fatal("encrypted archive should not use an undeclared fallback password")
+	}
+}
+
+func TestExtractZipCryptoWithConfiguredPassword(t *testing.T) {
+	root := t.TempDir()
+	archivePath := filepath.Join(root, "logs.zip")
+	archive, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := zip.NewWriter(archive)
+	entry, err := writer.Encrypt("keyword-rule.txt", "123456", zip.StandardEncryption)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := entry.Write([]byte("ZipCrypto log content\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := collectLogFilesWithPasswords(archivePath, filepath.Join(root, "upload"), 1024*1024, []string{"123456"})
+	if err != nil {
+		t.Fatalf("extract ZipCrypto archive: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("file count = %d, want 1", len(files))
 	}
 }
 
