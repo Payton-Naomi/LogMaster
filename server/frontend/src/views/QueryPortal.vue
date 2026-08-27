@@ -69,10 +69,14 @@
           <div><dt>最近更新</dt><dd>{{ formatDate(result.updated_at) }}</dd></div>
         </dl>
         <div v-if="result.batches?.length" class="batch-list">
-          <div v-for="batch in result.batches" :key="batch.upload_id" class="batch-row">
+          <div v-for="batch in pagedBatches" :key="batch.upload_id" class="batch-row">
             <code>{{ batch.upload_id }}</code><span>{{ batch.status }}</span><span>{{ batch.processed_files || 0 }} / {{ batch.total_files || 0 }} 文件</span>
           </div>
         </div>
+        <footer v-if="batchTotal" class="batch-pagination-bar">
+          <span class="batch-pagination-total">共 {{ batchTotal }} 批次</span>
+          <el-pagination v-model:current-page="page" :page-size="pageSize" :total="batchTotal" :page-sizes="[10,20,50,100]" :pager-count="5" layout="total, sizes, prev, pager, next, jumper" @size-change="onSizeChange" />
+        </footer>
         <div class="result-actions">
           <el-button :icon="Refresh" :loading="loading" @click="handleQuery">查询进度</el-button>
           <el-button v-if="!linked" type="primary" :loading="linking" @click="collectResult">加入我的日志</el-button>
@@ -105,6 +109,13 @@ const inputError = ref('')
 const linked = ref(false)
 const linking = ref(false)
 const queryStateKey = 'logmaster.collector-query-state.v1'
+const page = ref(1)
+const pageSize = ref(Number(localStorage.getItem('queryPortalPageSize')) || 20)
+const batchTotal = computed(() => result.value?.batches?.length || 0)
+const pagedBatches = computed(() => {
+  const list = result.value?.batches || []
+  return list.slice((page.value - 1) * pageSize.value, page.value * pageSize.value)
+})
 
 const progressPercent = computed(() => {
   const total = Number(result.value?.total_files || 0)
@@ -123,6 +134,13 @@ function normalizeCode() {
   inputError.value = ''
 }
 
+function onSizeChange(size) {
+  const valid = [10, 20, 50, 100].includes(size) ? size : 20
+  pageSize.value = valid
+  page.value = 1
+  localStorage.setItem('queryPortalPageSize', String(valid))
+}
+
 async function handleQuery() {
   const code = queryCode.value.trim()
   if (!code) {
@@ -132,6 +150,7 @@ async function handleQuery() {
   loading.value = true
   result.value = null
   linked.value = false
+  page.value = 1
   inputError.value = ''
   persistQueryState()
   try {
@@ -234,6 +253,8 @@ html[data-log-theme="dark"] .query-page .summary-item{
 }
 .result-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:18px;padding-top:16px;border-top:1px solid rgba(127,145,160,.2)}
 @media(max-width:620px){.result-actions{align-items:stretch;flex-direction:column}.result-actions .el-button{width:100%;margin-left:0}}
+.batch-pagination-bar{display:flex;align-items:center;justify-content:flex-end;gap:12px;margin-top:14px;padding:10px 12px;border:1px solid rgba(127,145,160,.25);border-radius:8px;background:rgba(127,145,160,.08)}
+.batch-pagination-total{font-size:12px;color:var(--el-text-color-secondary)}
 html[data-log-theme="dark"] .query-page .page-heading h1,
 html[data-log-theme="dark"] .query-page .result-heading h2,
 html[data-log-theme="dark"] .query-page .empty-panel h2,
@@ -243,6 +264,16 @@ html[data-log-theme="dark"] .query-page .stats-grid small,
 html[data-log-theme="dark"] .query-page .stats-grid em,
 html[data-log-theme="dark"] .query-page .metadata-grid dt{color:#b7bec8!important}
 html[data-log-theme="dark"] .query-page .progress-section{border-color:rgba(255,255,255,.1);background:rgba(0,0,0,.18)}
+html[data-log-theme="dark"] .query-page .batch-pagination-bar{border-color:rgba(255,255,255,.12);background:rgba(0,0,0,.22)}
+html[data-log-theme="dark"] .query-page .batch-pagination-total{color:#a0aec0}
+html[data-log-theme="dark"] .query-page .batch-pagination-bar .el-pagination{color:#e2e8f0}
+html[data-log-theme="dark"] .query-page .batch-pagination-bar .el-pagination .el-pager li{color:#e2e8f0;background:transparent}
+html[data-log-theme="dark"] .query-page .batch-pagination-bar .el-pagination .el-pager li.is-active{color:#fff;background:#0891b2}
+html[data-log-theme="dark"] .query-page .batch-pagination-bar .el-pagination .el-pager li:hover{color:#67e8f9}
+html[data-log-theme="dark"] .query-page .batch-pagination-bar .el-pagination button{color:#e2e8f0;background:transparent}
+html[data-log-theme="dark"] .query-page .batch-pagination-bar .el-pagination button:hover{color:#67e8f9}
+html[data-log-theme="dark"] .query-page .batch-pagination-bar .el-pagination .el-input__wrapper{background:rgba(255,255,255,.08);box-shadow:0 0 0 1px rgba(255,255,255,.15) inset}
+html[data-log-theme="dark"] .query-page .batch-pagination-bar .el-pagination .el-input__inner{color:#e2e8f0}
 </style>
 
 <style scoped>
