@@ -120,6 +120,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowRight, Check, Delete, Plus, Search } from '@element-plus/icons-vue'
 import { getProjects } from '@/api/log'
 import { createScenario, deleteScenario, getScenarios, updateScenario } from '@/api/scenarios'
+import { uuid } from '@/utils/uuid'
 
 const ALL_PROJECTS = '__all__'
 const scenarios = ref([])
@@ -245,7 +246,7 @@ async function startCreate() {
   creating.value = true
   selectedId.value = ''
   editor.value = {
-    id: crypto.randomUUID(),
+    id: uuid(),
     name: '',
     description: '',
     keywordsText: '',

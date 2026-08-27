@@ -69,7 +69,7 @@
         <el-table-column label="备注" width="150"><template #default="scope"><el-button type="primary" link @click.stop="openResult(scope.row)">添加/查看备注</el-button></template></el-table-column>
         <template #empty><el-empty description="数据库中暂无解析结果" /></template>
       </el-table>
-      <footer><span>点击结果行查看关键字前后各 50 行日志和可能原因</span><el-pagination v-model:current-page="page" :page-size="pageSize" :total="filtered.length" layout="prev, pager, next" /></footer>
+      <footer><span>点击结果行查看关键字前后各 50 行日志和可能原因</span><el-pagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="[10, 20, 50, 100]" :total="filtered.length" layout="total, sizes, prev, pager, next, jumper" @size-change="onSizeChange" /></footer>
     </section>
 
     <el-drawer v-model="drawer" class="analysis-context-drawer" title="错误上下文" size="680px">
@@ -130,7 +130,7 @@ const level = ref('')
 const category = ref('')
 const groupBy = ref('time_desc')
 const page = ref(1)
-const pageSize = 20
+const pageSize = ref(20)
 const drawer = ref(false)
 const selected = ref(null)
 const selectedAgentFinding = ref(null)
@@ -191,7 +191,7 @@ const filtered = computed(() => {
     return groupBy.value === 'time_asc' ? difference : -difference
   })
 })
-const paged = computed(() => filtered.value.slice((page.value - 1) * pageSize, page.value * pageSize))
+const paged = computed(() => filtered.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value))
 
 const levelLabel = value => ({ critical: '严重', error: '错误', warning: '警告', info: '信息' }[value] || value || '未知')
 const levelType = value => ({ critical: 'danger', error: 'danger', warning: 'warning', info: 'info' }[value] || 'info')
@@ -421,9 +421,20 @@ async function retryAgentFileResult(item) { agentActionLoading.value = true; try
 async function cancelAgentAnalysis() { try { await cancelAgent(taskId); ElMessage.success('AI 取消请求已提交'); await load() } catch (error) { ElMessage.error(errorMessage(error, '取消 AI 失败')) } }
 async function saveComment() { const content = commentText.value.trim(); const defectId = jiraKey.value.trim(); if (!selected.value || (!content && !defectId)) return; commentSaving.value = true; try { const { addResultComment, getResultComments } = await import('@/api/result'); await addResultComment(selected.value.id, { content: content || '关联 Jira 问题', ...(defectId ? { defect_id: defectId } : {}) }); commentText.value = ''; jiraKey.value = ''; comments.value = await getResultComments(selected.value.id) || []; ElMessage.success('已保存') } catch (error) { ElMessage.error(errorMessage(error, '保存失败')) } finally { commentSaving.value = false } }
 
+function onSizeChange(size) {
+  localStorage.setItem('analysisResultPageSize', String(size))
+  page.value = 1
+}
 watch([search, level, category, groupBy], () => { page.value = 1 })
+watch(pageSize, () => { page.value = 1 })
 function resizeTimeline() { chart?.resize() }
-onMounted(() => { window.addEventListener('resize', resizeTimeline); window.addEventListener('logmaster-ai-preference', syncAIEnabled); load() })
+onMounted(() => {
+  const saved = Number(localStorage.getItem('analysisResultPageSize'))
+  if ([10, 20, 50, 100].includes(saved)) pageSize.value = saved
+  window.addEventListener('resize', resizeTimeline)
+  window.addEventListener('logmaster-ai-preference', syncAIEnabled)
+  load()
+})
 onBeforeUnmount(() => { window.removeEventListener('resize', resizeTimeline); window.removeEventListener('logmaster-ai-preference', syncAIEnabled); if (agentRefreshTimer) window.clearTimeout(agentRefreshTimer); stopAgentCompletionPolling(); chart?.dispose() })
 </script>
 

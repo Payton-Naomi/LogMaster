@@ -293,6 +293,10 @@ http://<公网IP>:8080/api/auth/callback
 
 ## 5. 本次实际踩过的坑及修复
 
+### 浏览器提示 `crypto.randomUUID is not a function`
+
+这是前端浏览器兼容性问题，不是 Docker、数据库或后端接口错误。公网 HTTP、旧版浏览器或部分 WebView 可能不提供 `crypto.randomUUID()`。前端统一通过 `src/utils/uuid.js` 生成 UUID：支持该 API 时使用浏览器实现，不支持时使用本地 UUID v4 回退。代码更新后必须重新构建并发布前端镜像：`docker compose up -d --build`。
+
 | 现象 | 原因 | 修复 |
 |---|---|---|
 | 拉 golang/node 镜像几十 KB/s | 公共镜像源限速 | 换 DaoCloud 镜像源 |

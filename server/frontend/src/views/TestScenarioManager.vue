@@ -169,6 +169,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, ArrowRight, Check, Delete, Edit, Plus, Search } from '@element-plus/icons-vue'
 import { getProjects } from '@/api/log'
 import { createScenario, deleteScenario, getScenario, getScenarios, setScenarioEnabled, updateScenario } from '@/api/scenarios'
+import { uuid } from '@/utils/uuid'
 
 const ALL_PROJECTS = '__all__'
 const scenarios = ref([])
@@ -184,7 +185,7 @@ const saving = ref(false)
 const togglingId = ref('')
 
 const severityOptions = [{ value: 'critical', label: '严重' }, { value: 'warning', label: '警告' }, { value: 'info', label: '信息' }]
-const newKeywordRule = (keyword = '', severity = 'critical', remark = '') => ({ id: crypto.randomUUID(), keyword, severity, remark })
+const newKeywordRule = (keyword = '', severity = 'critical', remark = '') => ({ id: uuid(), keyword, severity, remark })
 const enabledCount = computed(() => scenarios.value.filter(item => item.enabled).length)
 const editorKeywords = computed(() => [...new Set((editor.value?.keywordRules || []).map(item => item.keyword.trim()).filter(Boolean))])
 const filteredScenarios = computed(() => {
@@ -235,7 +236,7 @@ function backToList() {
 }
 
 function startCreate() {
-  editor.value = { id: crypto.randomUUID(), name: '', remark: '', enabled: true, projectValues: [ALL_PROJECTS], keywordRules: [newKeywordRule()] }
+  editor.value = { id: uuid(), name: '', remark: '', enabled: true, projectValues: [ALL_PROJECTS], keywordRules: [newKeywordRule()] }
   mode.value = 'create'
 }
 
