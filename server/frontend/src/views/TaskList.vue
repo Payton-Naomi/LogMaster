@@ -62,7 +62,7 @@
         <div v-if="!pagedTasks.length" class="mobile-empty"><el-empty :description="hasFilters ? '没有符合条件的分析任务' : '还没有分析任务'" /></div>
       </div>
 
-      <footer v-if="totalTasks"><span>共 {{ totalTasks }} 个任务</span><el-pagination v-model:current-page="page" :page-size="pageSize" :total="totalTasks" :pager-count="5" layout="prev, pager, next" @current-change="loadTasks" /></footer>
+      <footer v-if="totalTasks"><span>共 {{ totalTasks }} 个任务</span><el-pagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="[10, 20, 50, 100]" :total="totalTasks" :pager-count="5" layout="total, sizes, prev, pager, next, jumper" @current-change="loadTasks" @size-change="onSizeChange" /></footer>
     </section>
   </div>
 </template>
@@ -93,7 +93,7 @@ const selectedTaskIds = ref([])
 const page = ref(1)
 const lastUpdated = ref('')
 const projects = ref([])
-const pageSize = 20
+const pageSize = ref(20)
 const totalTasks = ref(0)
 let refreshTimer = null
 let stopped = false
@@ -169,7 +169,7 @@ const filteredTasks = computed(() => {
     return matchesStatus && matchesProject && matchesVersion && matchesAi && matchesDate && matchesErrors && (!search || item.searchable.includes(search))
   })
 })
-const pagedTasks = computed(() => filteredTasks.value)
+const pagedTasks = computed(() => filteredTasks.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value))
 const hasFilters = computed(() => Boolean(keyword.value.trim() || project.value || version.value || aiStatus.value || status.value !== 'all'))
 const progressStatus = (task) => task.status === 'failed' ? 'exception' : task.status === 'completed' ? 'success' : ''
 const pageIds = computed(() => pagedTasks.value.map(item => item.id))
@@ -184,7 +184,7 @@ async function focusRouteTask() {
 	const index = filteredTasks.value.findIndex((item) => item.id === taskId)
 	if (index < 0) return
 	focusedTaskId = taskId
-	page.value = Math.floor(index / pageSize) + 1
+	page.value = Math.floor(index / pageSize.value) + 1
 	await nextTick()
 	const target = tasks.value.find((item) => item.id === taskId)
 	taskTable.value?.setCurrentRow(target)
@@ -194,7 +194,7 @@ async function loadTasks() {
 	if (loading.value) return
   loading.value = true
   try {
-	const response = await getTasks({ page: page.value, page_size: pageSize, status: status.value === 'all' ? undefined : status.value === 'active' ? undefined : status.value, project: project.value || undefined, version: version.value || undefined, sort: sortBy.value, ai_status: aiStatus.value || undefined })
+	const response = await getTasks({ page: page.value, page_size: pageSize.value, status: status.value === 'all' ? undefined : status.value === 'active' ? undefined : status.value, project: project.value || undefined, version: version.value || undefined, sort: sortBy.value, ai_status: aiStatus.value || undefined })
 	const mapped = (response.list || []).map(mapTask)
 	totalTasks.value = Number(response.total || 0)
 	if (previousStatuses.size) {
@@ -288,9 +288,16 @@ async function loadProjects() {
   try { projects.value = await getProjects() || [] }
   catch { projects.value = [] }
 }
+function onSizeChange(size) {
+  localStorage.setItem('taskListPageSize', String(size))
+  page.value = 1
+  loadTasks()
+}
 onMounted(() => {
-	refreshLoop()
-	loadProjects()
+  const saved = Number(localStorage.getItem('taskListPageSize'))
+  if ([10, 20, 50, 100].includes(saved)) pageSize.value = saved
+  refreshLoop()
+  loadProjects()
 })
 watch(() => route.query.task_id, () => {
 	focusedTaskId = ''

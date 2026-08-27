@@ -133,6 +133,7 @@ import { getProjects, getUploadConfig, uploadLogs } from '@/api/log'
 import { getScenarios } from '@/api/scenarios'
 import { getTaskDetail } from '@/api/task'
 import { getAIEnabled } from '@/utils/aiPreference'
+import { uuid } from '@/utils/uuid'
 
 const router = useRouter()
 const input = ref(null)
@@ -321,7 +322,7 @@ async function submit() {
       version: version.value.trim(),
       uploader_name: uploaderName.value,
       remark: remark.value.trim(),
-      client_request_id: crypto.randomUUID(),
+      client_request_id: uuid(),
       collector_version: 'web',
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
       disable_parsing_rules: selectedScenarios.value.length ? disableParsingRules.value : false,

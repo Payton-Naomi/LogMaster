@@ -529,15 +529,19 @@ func (r *Repository) DeleteScenario(ctx context.Context, id string) error {
 }
 
 type DashboardStats struct {
-	TotalLines     int64            `json:"total_lines"`
-	ErrorCount     int64            `json:"error_count"`
-	WarningCount   int64            `json:"warning_count"`
-	TaskCount      int64            `json:"task_count"`
-	CompletedCount int64            `json:"completed_count"`
-	FailedCount    int64            `json:"failed_count"`
-	Trend          []DashboardTrend `json:"trend"`
-	TopMatches     []DashboardMatch `json:"top_matches"`
-	RecentTasks    []Upload         `json:"recent_tasks"`
+	TotalLines      int64            `json:"total_lines"`
+	ErrorCount      int64            `json:"error_count"`
+	WarningCount    int64            `json:"warning_count"`
+	TaskCount       int64            `json:"task_count"`
+	CompletedCount  int64            `json:"completed_count"`
+	FailedCount     int64            `json:"failed_count"`
+	TodayTasks      int64            `json:"today_tasks"`
+	TodayFailed     int64            `json:"today_failed"`
+	TodayErrors     int64            `json:"today_errors"`
+	YesterdayErrors int64            `json:"yesterday_errors"`
+	Trend           []DashboardTrend `json:"trend"`
+	TopMatches      []DashboardMatch `json:"top_matches"`
+	RecentTasks     []Upload         `json:"recent_tasks"`
 }
 
 type DashboardTrend struct {
@@ -555,11 +559,19 @@ func (r *Repository) Dashboard(ctx context.Context, ownerOpenID string, days int
 	var stats DashboardStats
 	err := r.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(total_lines),0), COALESCE(SUM(error_count),0),
 		COALESCE(SUM(warning_count),0), COUNT(*), COUNT(*) FILTER (WHERE t.status='completed'),
-		COUNT(*) FILTER (WHERE t.status='failed')
+		COUNT(*) FILTER (WHERE t.status='failed'),
+		COUNT(*) FILTER (WHERE t.created_at::date = CURRENT_DATE),
+		COUNT(*) FILTER (WHERE t.created_at::date = CURRENT_DATE AND t.status='failed'),
+		COALESCE(SUM(error_count) FILTER (WHERE t.created_at::date = CURRENT_DATE),0),
+		COALESCE(SUM(error_count) FILTER (WHERE t.created_at::date = CURRENT_DATE - 1),0)
 		FROM logmaster_api.parse_tasks t
 		JOIN logmaster_api.log_uploads u ON u.id = t.upload_id
-		WHERE u.created_by_open_id = $1`, ownerOpenID).Scan(
-		&stats.TotalLines, &stats.ErrorCount, &stats.WarningCount, &stats.TaskCount, &stats.CompletedCount, &stats.FailedCount)
+		WHERE (u.created_by_open_id = $1 OR EXISTS (
+			SELECT 1 FROM logmaster_api.user_collected_upload_sessions access
+			WHERE access.user_open_id = $1 AND access.upload_session_id = u.upload_session_id
+		))`, ownerOpenID).Scan(
+		&stats.TotalLines, &stats.ErrorCount, &stats.WarningCount, &stats.TaskCount, &stats.CompletedCount, &stats.FailedCount,
+		&stats.TodayTasks, &stats.TodayFailed, &stats.TodayErrors, &stats.YesterdayErrors)
 	if err != nil {
 		return stats, err
 	}
@@ -569,7 +581,10 @@ func (r *Repository) Dashboard(ctx context.Context, ownerOpenID string, days int
 		LEFT JOIN (
 			SELECT t.* FROM logmaster_api.parse_tasks t
 			JOIN logmaster_api.log_uploads u ON u.id = t.upload_id
-			WHERE u.created_by_open_id = $1
+			WHERE (u.created_by_open_id = $1 OR EXISTS (
+				SELECT 1 FROM logmaster_api.user_collected_upload_sessions access
+				WHERE access.user_open_id = $1 AND access.upload_session_id = u.upload_session_id
+			))
 		) t ON t.created_at::date=day::date
 		GROUP BY day ORDER BY day`, ownerOpenID, days)
 	if err != nil {
@@ -589,7 +604,10 @@ func (r *Repository) Dashboard(ctx context.Context, ownerOpenID string, days int
 		FROM logmaster_api.parse_results r
 		JOIN logmaster_api.log_files f ON f.id = r.log_file_id
 		JOIN logmaster_api.log_uploads u ON u.id = f.upload_id
-		WHERE u.created_by_open_id = $1
+		WHERE (u.created_by_open_id = $1 OR EXISTS (
+			SELECT 1 FROM logmaster_api.user_collected_upload_sessions access
+			WHERE access.user_open_id = $1 AND access.upload_session_id = u.upload_session_id
+		))
 		GROUP BY r.matched_text ORDER BY COUNT(*) DESC LIMIT 8`, ownerOpenID)
 	if err != nil {
 		return stats, err
@@ -604,7 +622,7 @@ func (r *Repository) Dashboard(ctx context.Context, ownerOpenID string, days int
 		stats.TopMatches = append(stats.TopMatches, item)
 	}
 	rows.Close()
-	recent, _, err := r.ListUploads(ctx, ownerOpenID, "", 5, 0)
+	recent, _, err := r.ListUploads(ctx, ownerOpenID, "", UploadFilters{}, 5, 0)
 	stats.RecentTasks = recent
 	return stats, err
 }

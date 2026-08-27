@@ -74,7 +74,7 @@ func TestUserUploadAndRuleIsolation(t *testing.T) {
 	if err := repository.CreateUpload(ctx, uploadTwo, taskTwo, projectTwo, "v2", nil, "test/path/two", userTwo); err != nil {
 		t.Fatal(err)
 	}
-	uploads, total, err := repository.ListUploads(ctx, userOne, "", 20, 0)
+	uploads, total, err := repository.ListUploads(ctx, userOne, "", logservice.UploadFilters{}, 20, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

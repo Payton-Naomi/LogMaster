@@ -129,6 +129,7 @@ import { Check, CopyDocument, Delete, Link, Plus, Search, Setting, Warning } fro
 import { getProjects } from '@/api/log'
 import { getRules } from '@/api/rules'
 import { createScenario, deleteScenario, getScenarios, updateScenario } from '@/api/scenarios'
+import { uuid } from '@/utils/uuid'
 
 const statuses = [{ value: 'draft', label: '草稿' }, { value: 'published', label: '已发布' }, { value: 'disabled', label: '已停用' }]
 const colors = ['blue', 'green', 'orange', 'red']
@@ -167,7 +168,7 @@ const filteredScenarios = computed(() => {
 
 function normalizeCheck(check = {}) {
   return {
-    id: check.id || crypto.randomUUID(), name: check.name || '', description: check.description || '',
+    id: check.id || uuid(), name: check.name || '', description: check.description || '',
     severity: check.severity || 'warning', enabled: check.enabled !== false,
     source: check.source || (check.rule_id ? 'rule' : 'custom'), rule_id: check.rule_id || null,
     rule_name: check.rule_name || '', rule_updated_at: check.rule_updated_at || null,
@@ -227,7 +228,7 @@ async function selectScene(id) {
 }
 
 async function create() {
-  const id = crypto.randomUUID()
+  const id = uuid()
   const item = { id, name: '新测试场景', description: '', color: 'blue', judgement: 'any-error', metadata: { status: 'draft', project_scope: 'all', projects: [], tags: [] }, checks: [] }
   await createScenario(toAPI(item))
   await load(id)
@@ -240,7 +241,7 @@ function addSelectedRules() {
   selectedRuleIds.value.forEach(ruleId => {
     const rule = rules.value.find(item => item.id === ruleId)
     if (!rule || isRuleAdded(ruleId)) return
-    editor.value.checks.push(normalizeCheck({ id: crypto.randomUUID(), name: rule.name, description: rule.description, severity: rule.level, enabled: true, source: 'rule', rule_id: rule.id, rule_name: rule.name, rule_updated_at: rule.updated_at, match_type: 'forbidden', min_count: 1, time_window: 0, keywords: [rule.keyword] }))
+    editor.value.checks.push(normalizeCheck({ id: uuid(), name: rule.name, description: rule.description, severity: rule.level, enabled: true, source: 'rule', rule_id: rule.id, rule_name: rule.name, rule_updated_at: rule.updated_at, match_type: 'forbidden', min_count: 1, time_window: 0, keywords: [rule.keyword] }))
   })
   rulePickerOpen.value = false
 }
@@ -277,10 +278,10 @@ async function save() {
 
 async function duplicate() {
   const clone = structuredClone(editor.value)
-  clone.id = crypto.randomUUID()
+  clone.id = uuid()
   clone.name = `${clone.name} - 副本`
   clone.metadata.status = 'draft'
-  clone.checks = clone.checks.map(item => ({ ...item, id: crypto.randomUUID() }))
+  clone.checks = clone.checks.map(item => ({ ...item, id: uuid() }))
   await createScenario(toAPI(clone))
   ElMessage.success('已创建场景副本')
   await load(clone.id)

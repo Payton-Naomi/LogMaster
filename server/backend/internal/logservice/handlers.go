@@ -445,12 +445,34 @@ func (s *Service) listUploadsHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid source_type")
 		return
 	}
-	items, total, err := s.repo.ListUploads(r.Context(), ownerOpenID, sourceType, pageSize, (page-1)*pageSize)
+	filters := UploadFilters{
+		Keyword:     strings.TrimSpace(r.URL.Query().Get("keyword")),
+		Project:     strings.TrimSpace(r.URL.Query().Get("project")),
+		StatusGroup: strings.TrimSpace(r.URL.Query().Get("status_group")),
+		Sort:        strings.TrimSpace(r.URL.Query().Get("sort")),
+	}
+	if raw := r.URL.Query().Get("start"); raw != "" {
+		if t, err := time.Parse(time.RFC3339, raw); err == nil {
+			filters.Start = &t
+		}
+	}
+	if raw := r.URL.Query().Get("end"); raw != "" {
+		if t, err := time.Parse(time.RFC3339, raw); err == nil {
+			filters.End = &t
+		}
+	}
+	items, total, err := s.repo.ListUploads(r.Context(), ownerOpenID, sourceType, filters, pageSize, (page-1)*pageSize)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query uploads failed")
 		return
 	}
-	response.JSON(w, response.APIResponse{Code: 0, Message: "success", Data: map[string]any{"total": total, "list": items}})
+	summary, err := s.repo.UploadSummary(r.Context(), ownerOpenID, sourceType, filters)
+	if err != nil {
+		summary = UploadSummary{}
+	}
+	response.JSON(w, response.APIResponse{Code: 0, Message: "success", Data: map[string]any{
+		"total": total, "page": page, "page_size": pageSize, "list": items, "summary": summary,
+	}})
 }
 
 func (s *Service) logDetailHandler(w http.ResponseWriter, r *http.Request) {

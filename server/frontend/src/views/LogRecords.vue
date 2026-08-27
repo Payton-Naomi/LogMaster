@@ -38,18 +38,18 @@
 
       <div v-if="selectedRecords.length" class="batch-bar">
         <div><el-icon><Select /></el-icon><strong>已选择 {{ selectedRecords.length }} 条</strong><span>约 {{ formatSize(selectedSize) }}</span></div>
-        <div><el-button v-if="selectedRecords.length < filtered.length" link @click="selectAllFiltered">选择全部 {{ filtered.length }} 条结果</el-button><el-button link @click="clearSelection">取消选择</el-button><el-button type="danger" :icon="Delete" :loading="batchDeleting" @click="removeSelected">批量删除</el-button></div>
+        <div><el-button v-if="selectedRecords.length < selectableCount" link @click="selectAllFiltered">选择本页全部 {{ selectableCount }} 条</el-button><el-button link @click="clearSelection">取消选择</el-button><el-button type="danger" :icon="Delete" :loading="batchDeleting" @click="removeSelected">批量删除</el-button></div>
       </div>
 
       <div class="list-meta">
         <strong>记录列表</strong>
-        <span>显示 {{ filtered.length }} 条<span v-if="lastUpdated"> · 更新于 {{ lastUpdated }}</span></span>
+        <span>共 {{ total }} 条<span v-if="lastUpdated"> · 更新于 {{ lastUpdated }}</span></span>
       </div>
 
       <div v-if="loading && !records.length" class="skeleton-table" aria-hidden="true">
         <div v-for="row in 7" :key="row" class="skeleton-row"><i v-for="cell in 6" :key="cell" /></div>
       </div>
-      <el-table class="desktop-table" :data="paged" row-key="id" @row-click="viewTask">
+      <el-table class="desktop-table" :data="records" row-key="id" @row-click="viewTask">
         <el-table-column width="46" align="center">
           <template #header><el-checkbox :model-value="pageSelected" :indeterminate="pagePartiallySelected" aria-label="选择当前页" @change="togglePageSelection" /></template>
           <template #default="scope"><el-checkbox :model-value="selectedIds.has(scope.row.id)" :disabled="!scope.row.task_id" :aria-label="`选择 ${scope.row.original_name}`" @click.stop @change="(checked) => toggleSelection(scope.row, checked)" /></template>
@@ -85,17 +85,16 @@
       </el-table>
 
       <div class="mobile-list">
-        <article v-for="record in paged" :key="record.id" class="record-card" :class="{ selected: selectedIds.has(record.id) }" @click="viewTask(record)">
+        <article v-for="record in records" :key="record.id" class="record-card" :class="{ selected: selectedIds.has(record.id) }" @click="viewTask(record)">
           <div class="record-card-head"><el-checkbox :model-value="selectedIds.has(record.id)" :disabled="!record.task_id" :aria-label="`选择 ${record.original_name}`" @click.stop @change="(checked) => toggleSelection(record, checked)" /><div class="file-icon"><el-icon><Document /></el-icon></div><div class="record-title"><strong>{{ record.original_name || '-' }}</strong><span>{{ record.project_name || '-' }} · {{ record.version || '未填写版本' }}</span></div><el-tag :type="statusMeta[record.statusKey].type" effect="plain">{{ statusMeta[record.statusKey].label }}</el-tag></div>
           <div class="record-details"><span><el-icon><Files /></el-icon>{{ record.file_count || 0 }} 个文件</span><span>{{ formatSize(record.original_size) }}</span><span class="error-count">{{ record.error_count || 0 }} 错误</span><span class="warning-count">{{ record.warning_count || 0 }} 警告</span><time>{{ formatDate(record.created_at) }}</time></div>
           <div class="record-card-foot"><code>{{ record.id }}</code><div @click.stop><el-button type="primary" link :icon="View" @click="viewTask(record)">查看</el-button><el-button type="danger" link :icon="Delete" @click="remove(record)">删除</el-button></div></div>
         </article>
-        <div v-if="!paged.length" class="mobile-empty"><el-empty :description="hasFilters ? '没有符合条件的日志记录' : '还没有上传日志'" /></div>
+        <div v-if="!records.length" class="mobile-empty"><el-empty :description="hasFilters ? '没有符合条件的日志记录' : '还没有上传日志'" /></div>
       </div>
 
-      <footer v-if="filtered.length">
-        <span>共 {{ filtered.length }} 条记录</span>
-        <el-pagination v-model:current-page="page" :page-size="pageSize" :total="filtered.length" :pager-count="5" layout="prev, pager, next" />
+      <footer v-if="total">
+        <el-pagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="[10, 20, 50, 100]" :total="total" :pager-count="5" layout="total, sizes, prev, pager, next, jumper" @current-change="load" @size-change="load" />
       </footer>
     </section>
     <el-dialog v-model="commandOpen" class="command-dialog" width="520px" :show-close="false" append-to-body>
@@ -131,6 +130,8 @@ const status = ref('all')
 const dateRange = ref([])
 const sortBy = ref('created_desc')
 const page = ref(1)
+const total = ref(0)
+const summaryData = ref({ total_records: 0, total_files: 0, total_size: 0, total_projects: 0 })
 const lastUpdated = ref('')
 const projects = ref([])
 const selectedIds = ref(new Set())
@@ -141,7 +142,7 @@ const lowPerformance = ref(false)
 const commandOpen = ref(false)
 const commandQuery = ref('')
 const commandItems = computed(() => [{ label: '刷新日志记录', hint: '重新请求最新数据', icon: '↻', action: 'refresh' }, { label: '上传新的日志', hint: '进入日志上传页面', icon: '↑', action: 'upload' }, { label: '清空当前筛选', hint: '恢复默认筛选条件', icon: '⌘', action: 'clear' }].filter((item) => !commandQuery.value.trim() || `${item.label}${item.hint}`.includes(commandQuery.value.trim())))
-const pageSize = 10
+const pageSize = ref(20)
 
 const statusMeta = {
   uploading: { label: '上传中', type: 'info', group: 'active' },
@@ -158,43 +159,17 @@ const statusOptions = [
   { label: '失败', value: 'failed' }
 ]
 const normalizeRecord = (item) => ({ ...item, statusKey: statusMeta[item.status] ? item.status : 'unknown' })
-const totals = computed(() => {
-  const projects = new Set(records.value.map((item) => item.project_name).filter(Boolean))
-  return records.value.reduce((sum, item) => ({
-    files: sum.files + (item.file_count || 0),
-    size: sum.size + (item.original_size || 0),
-    projects: projects.size
-  }), { files: 0, size: 0, projects: projects.size })
-})
 const summary = computed(() => [
-  { label: '上传记录', value: records.value.length.toLocaleString(), tone: 'blue', icon: markRaw(DataLine) },
-  { label: '日志文件', value: totals.value.files.toLocaleString(), tone: 'violet', icon: markRaw(Files) },
-  { label: '占用空间', value: formatSize(totals.value.size), tone: 'green', icon: markRaw(Document) },
-  { label: '关联项目', value: totals.value.projects.toLocaleString(), tone: 'gold', icon: markRaw(FolderOpened) }
+  { label: '上传记录', value: (summaryData.value.total_records || 0).toLocaleString(), tone: 'blue', icon: markRaw(DataLine) },
+  { label: '日志文件', value: (summaryData.value.total_files || 0).toLocaleString(), tone: 'violet', icon: markRaw(Files) },
+  { label: '占用空间', value: formatSize(summaryData.value.total_size || 0), tone: 'green', icon: markRaw(Document) },
+  { label: '关联项目', value: (summaryData.value.total_projects || 0).toLocaleString(), tone: 'gold', icon: markRaw(FolderOpened) }
 ])
-const filtered = computed(() => {
-  const text = keyword.value.trim().toLowerCase()
-  const startTime = dateRange.value?.[0] ? new Date(dateRange.value[0]).setHours(0, 0, 0, 0) : 0
-  const endTime = dateRange.value?.[1] ? new Date(dateRange.value[1]).setHours(23, 59, 59, 999) : Number.POSITIVE_INFINITY
-  const result = records.value.filter((item) => {
-    const matchesText = !text || `${item.original_name}${item.project_name}${item.version}${item.id}`.toLowerCase().includes(text)
-    const matchesProject = !project.value || item.project_name === project.value
-    const matchesStatus = status.value === 'all' || statusMeta[item.statusKey].group === status.value
-    const createdTime = item.created_at ? new Date(item.created_at).getTime() : 0
-    return matchesText && matchesProject && matchesStatus && createdTime >= startTime && createdTime <= endTime
-  })
-  return result.sort((left, right) => {
-    if (sortBy.value === 'created_asc') return new Date(left.created_at) - new Date(right.created_at)
-    if (sortBy.value === 'size_desc') return (right.original_size || 0) - (left.original_size || 0)
-    if (sortBy.value === 'errors_desc') return (right.error_count || 0) - (left.error_count || 0)
-    return new Date(right.created_at) - new Date(left.created_at)
-  })
-})
-const paged = computed(() => filtered.value.slice((page.value - 1) * pageSize, page.value * pageSize))
+const selectableOnPage = computed(() => records.value.filter((item) => item.task_id))
+const selectableCount = computed(() => selectableOnPage.value.length)
 const hasFilters = computed(() => Boolean(keyword.value.trim() || project.value || status.value !== 'all' || dateRange.value?.length))
 const selectedRecords = computed(() => records.value.filter((item) => selectedIds.value.has(item.id)))
 const selectedSize = computed(() => selectedRecords.value.reduce((sum, item) => sum + (item.original_size || 0), 0))
-const selectableOnPage = computed(() => paged.value.filter((item) => item.task_id))
 const pageSelected = computed(() => Boolean(selectableOnPage.value.length) && selectableOnPage.value.every((item) => selectedIds.value.has(item.id)))
 const pagePartiallySelected = computed(() => !pageSelected.value && selectableOnPage.value.some((item) => selectedIds.value.has(item.id)))
 const formatSize = (bytes) => { if (!bytes) return '0 B'; const units = ['B', 'KB', 'MB', 'GB']; const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), 3); return `${(bytes / 1024 ** i).toFixed(i ? 1 : 0)} ${units[i]}` }
@@ -233,17 +208,32 @@ function togglePageSelection(checked) {
   selectedIds.value = next
 }
 function selectAllFiltered() {
-  selectedIds.value = new Set(filtered.value.filter((item) => item.task_id).map((item) => item.id))
+  selectedIds.value = new Set(selectableOnPage.value.map((item) => item.id))
 }
 function clearSelection() { selectedIds.value = new Set() }
+function buildParams() {
+  const params = { page: page.value, page_size: pageSize.value }
+  if (keyword.value.trim()) params.keyword = keyword.value.trim()
+  if (project.value) params.project = project.value
+  if (status.value !== 'all') params.status_group = status.value
+  if (dateRange.value?.[0]) params.start = new Date(dateRange.value[0]).toISOString()
+  if (dateRange.value?.[1]) params.end = new Date(dateRange.value[1]).toISOString()
+  if (sortBy.value !== 'created_desc') params.sort = sortBy.value
+  return params
+}
 async function load() {
   if (loading.value) return
   loading.value = true
   try {
-    const first = await getLogs({ page: 1, page_size: 200 })
-    const pages = Math.ceil((first.total || 0) / 200)
-    const remaining = pages > 1 ? await Promise.all(Array.from({ length: pages - 1 }, (_, index) => getLogs({ page: index + 2, page_size: 200 }))) : []
-    records.value = [first, ...remaining].flatMap((data) => data.list || []).map(normalizeRecord)
+    let data = await getLogs(buildParams())
+    const maxPage = Math.max(1, Math.ceil((data.total || 0) / pageSize.value))
+    if (page.value > maxPage) {
+      page.value = maxPage
+      data = await getLogs(buildParams())
+    }
+    records.value = (data.list || []).map(normalizeRecord)
+    total.value = data.total || 0
+    summaryData.value = data.summary || { total_records: data.total || 0, total_files: 0, total_size: 0, total_projects: 0 }
     selectedIds.value = new Set([...selectedIds.value].filter((id) => records.value.some((item) => item.id === id)))
     lastUpdated.value = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
   } catch {
@@ -257,8 +247,8 @@ async function remove(record) {
     await ElMessageBox.confirm(`将永久删除“${record.original_name}”、${record.file_count || 0} 个日志文件及全部分析结果。`, '删除日志记录', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' })
     await deleteTask(record.task_id)
     ElMessage.success('日志记录已删除')
-    records.value = records.value.filter((item) => item.id !== record.id)
     const next = new Set(selectedIds.value); next.delete(record.id); selectedIds.value = next
+    await load()
   } catch (error) {
     if (error !== 'cancel' && error !== 'close') ElMessage.error('删除失败，请稍后重试')
   }
@@ -272,10 +262,10 @@ async function removeSelected() {
     const results = await Promise.allSettled(targets.map((record) => deleteTask(record.task_id)))
     const deletedIds = new Set(targets.filter((_, index) => results[index].status === 'fulfilled').map((item) => item.id))
     const failed = results.length - deletedIds.size
-    records.value = records.value.filter((item) => !deletedIds.has(item.id))
     selectedIds.value = new Set([...selectedIds.value].filter((id) => !deletedIds.has(id)))
     if (deletedIds.size) ElMessage.success(`已删除 ${deletedIds.size} 条日志记录`)
     if (failed) ElMessage.warning(`${failed} 条记录删除失败，可稍后重试`)
+    if (deletedIds.size) await load()
   } catch (error) {
     if (error !== 'cancel' && error !== 'close') ElMessage.error('批量删除失败，请稍后重试')
   } finally { batchDeleting.value = false }
@@ -284,15 +274,30 @@ async function loadProjects() {
   try { projects.value = await getProjects() || [] }
   catch { projects.value = [] }
 }
-watch([keyword, project, status, dateRange, sortBy], () => { page.value = 1 })
-watch(() => filtered.value.length, (length) => { page.value = Math.min(page.value, Math.max(1, Math.ceil(length / pageSize))) })
+let reloadTimer = null
+function scheduleReload() {
+  page.value = 1
+  window.clearTimeout(reloadTimer)
+  reloadTimer = window.setTimeout(load, 200)
+}
+watch([keyword, project, status, dateRange, sortBy], scheduleReload)
+watch(pageSize, (newSize) => {
+  localStorage.setItem('logRecordsPageSize', String(newSize))
+  page.value = 1
+  load()
+})
 onMounted(() => {
+  const saved = Number(localStorage.getItem('logRecordsPageSize'))
+  if ([10, 20, 50, 100].includes(saved)) pageSize.value = saved
   load()
   loadProjects()
   lowPerformance.value = navigator.hardwareConcurrency > 0 && navigator.hardwareConcurrency < 4
   window.addEventListener('keydown', handleShortcut)
 })
-onBeforeUnmount(() => window.removeEventListener('keydown', handleShortcut))
+onBeforeUnmount(() => {
+  window.clearTimeout(reloadTimer)
+  window.removeEventListener('keydown', handleShortcut)
+})
 function trackGlass(event) { if (lowPerformance.value) return; const target = event.target.closest?.('.glass-panel'); if (!target) return; const rect = target.getBoundingClientRect(); target.style.setProperty('--mx', `${event.clientX - rect.left}px`); target.style.setProperty('--my', `${event.clientY - rect.top}px`) }
 function handleShortcut(event) { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); commandOpen.value = true } if (event.key === 'Escape') commandOpen.value = false }
 function runCommand(action) { commandOpen.value = false; commandQuery.value = ''; if (action === 'refresh') load(); if (action === 'upload') router.push('/upload'); if (action === 'clear') clearFilters() }

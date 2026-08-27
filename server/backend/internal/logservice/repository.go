@@ -1649,21 +1649,90 @@ func taskRetryDisposition(status string, manualRetryRequested bool) (bool, error
 	return false, nil
 }
 
-func (r *Repository) ListUploads(ctx context.Context, ownerOpenID, sourceType string, limit, offset int) ([]Upload, int, error) {
-	sourcePredicate := uploadSourcePredicate(sourceType)
+// UploadFilters carries the server-side list filters for the uploads endpoint.
+type UploadFilters struct {
+	Keyword     string
+	Project     string
+	StatusGroup string // "active" | "completed" | "failed"; empty means all
+	Sort        string
+	Start       *time.Time
+	End         *time.Time
+}
+
+// UploadSummary aggregates totals for the uploads list header cards.
+type UploadSummary struct {
+	TotalRecords  int   `json:"total_records"`
+	TotalFiles    int   `json:"total_files"`
+	TotalSize     int64 `json:"total_size"`
+	TotalProjects int   `json:"total_projects"`
+}
+
+// uploadWhere builds the shared WHERE clause for the uploads list, count and
+// summary queries. It requires the uploads table to be aliased as `u` and the
+// projects table as `p`.
+func uploadWhere(ownerOpenID, sourceType string, filters UploadFilters) (string, []any) {
+	where := []string{"(u.created_by_open_id = $1 OR EXISTS (SELECT 1 FROM logmaster_api.user_collected_upload_sessions access WHERE access.user_open_id = $1 AND access.upload_session_id = u.upload_session_id))"}
+	args := []any{ownerOpenID}
+	add := func(condition string, value any) {
+		args = append(args, value)
+		where = append(where, fmt.Sprintf(condition, len(args)))
+	}
+	switch sourceType {
+	case "collector":
+		add("u.created_by_open_id = $%d", "logmaster-internal-collector")
+	case "uploaded":
+		add("u.created_by_open_id <> $%d", "logmaster-internal-collector")
+	}
+	if filters.Keyword != "" {
+		kw := "%" + filters.Keyword + "%"
+		base := len(args) + 1
+		args = append(args, kw, kw, kw, kw)
+		where = append(where, fmt.Sprintf("(u.original_name ILIKE $%d OR p.name ILIKE $%d OR u.version ILIKE $%d OR u.id::text ILIKE $%d)", base, base+1, base+2, base+3))
+	}
+	if filters.Project != "" {
+		add("p.name = $%d", filters.Project)
+	}
+	switch filters.StatusGroup {
+	case "active":
+		where = append(where, "u.status NOT IN ('completed','failed')")
+	case "completed":
+		where = append(where, "u.status = 'completed'")
+	case "failed":
+		where = append(where, "u.status = 'failed'")
+	}
+	if filters.Start != nil {
+		add("u.created_at >= $%d", *filters.Start)
+	}
+	if filters.End != nil {
+		add("u.created_at <= $%d", *filters.End)
+	}
+	return strings.Join(where, " AND "), args
+}
+
+func uploadSort(sort string) string {
+	switch sort {
+	case "created_asc":
+		return "u.created_at ASC"
+	case "size_desc":
+		return "u.original_size DESC, u.created_at DESC"
+	case "errors_desc":
+		return "t.error_count DESC, u.created_at DESC"
+	default:
+		return "u.created_at DESC"
+	}
+}
+
+func (r *Repository) ListUploads(ctx context.Context, ownerOpenID, sourceType string, filters UploadFilters, limit, offset int) ([]Upload, int, error) {
+	whereSQL, args := uploadWhere(ownerOpenID, sourceType, filters)
 	var total int
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM logmaster_api.log_uploads u
-		WHERE (u.created_by_open_id = $1 OR EXISTS (
-			SELECT 1 FROM logmaster_api.user_collected_upload_sessions access
-			WHERE access.user_open_id = $1 AND access.upload_session_id = u.upload_session_id
-		))`+sourcePredicate, ownerOpenID).Scan(&total); err != nil {
+		JOIN logmaster_api.projects p ON p.id = u.project_id WHERE `+whereSQL, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := r.db.QueryContext(ctx, uploadSelect+` WHERE (u.created_by_open_id = $1 OR EXISTS (
-			SELECT 1 FROM logmaster_api.user_collected_upload_sessions access
-			WHERE access.user_open_id = $1 AND access.upload_session_id = u.upload_session_id
-		))`+sourcePredicate+`
-		GROUP BY u.id, t.id, p.name ORDER BY u.created_at DESC LIMIT $2 OFFSET $3`, ownerOpenID, limit, offset)
+	queryArgs := append([]any{}, args...)
+	queryArgs = append(queryArgs, limit, offset)
+	rows, err := r.db.QueryContext(ctx, uploadSelect+` WHERE `+whereSQL+`
+		GROUP BY u.id, t.id, p.name ORDER BY `+uploadSort(filters.Sort)+` LIMIT $`+strconv.Itoa(len(args)+1)+` OFFSET $`+strconv.Itoa(len(args)+2), queryArgs...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1677,6 +1746,22 @@ func (r *Repository) ListUploads(ctx context.Context, ownerOpenID, sourceType st
 		uploads = append(uploads, u)
 	}
 	return uploads, total, rows.Err()
+}
+
+func (r *Repository) UploadSummary(ctx context.Context, ownerOpenID, sourceType string, filters UploadFilters) (UploadSummary, error) {
+	whereSQL, args := uploadWhere(ownerOpenID, sourceType, filters)
+	var s UploadSummary
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(u.original_size),0), COUNT(DISTINCT u.project_id)
+		FROM logmaster_api.log_uploads u
+		JOIN logmaster_api.projects p ON p.id = u.project_id WHERE `+whereSQL, args...).Scan(&s.TotalRecords, &s.TotalSize, &s.TotalProjects); err != nil {
+		return s, err
+	}
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM logmaster_api.log_files f
+		JOIN logmaster_api.log_uploads u ON u.id = f.upload_id
+		JOIN logmaster_api.projects p ON p.id = u.project_id WHERE `+whereSQL, args...).Scan(&s.TotalFiles); err != nil {
+		return s, err
+	}
+	return s, nil
 }
 
 func uploadSourcePredicate(sourceType string) string {
