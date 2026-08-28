@@ -8,38 +8,67 @@ import (
 )
 
 type diskGuard struct {
-	directory string
-	limit     int64
-	interval  time.Duration
-	mu        sync.Mutex
-	nextCheck time.Time
-	exceeded  bool
-	measure   func(string) (int64, error)
+	directory      string
+	limit          int64
+	warningPercent int
+	interval       time.Duration
+	mu             sync.Mutex
+	nextCheck      time.Time
+	exceeded       bool
+	state          DiskState
+	lastErr        error
+	measure        func(string) (int64, error)
 }
 
-func newDiskGuard(directory string, limit int64, interval time.Duration) *diskGuard {
+func newDiskGuard(directory string, limit int64, warningPercent int, interval time.Duration) *diskGuard {
 	if interval <= 0 {
 		interval = time.Second
 	}
-	return &diskGuard{directory: directory, limit: limit, interval: interval, measure: directoryBytes}
+	if warningPercent < 1 || warningPercent > 99 {
+		warningPercent = 80
+	}
+	return &diskGuard{directory: directory, limit: limit, warningPercent: warningPercent, interval: interval, measure: directoryBytes, state: DiskNormal}
 }
 
-func (g *diskGuard) Exceeded(now time.Time) (bool, error) {
+// State returns the cached protection level.  A zero limit disables protection.
+func (g *diskGuard) State(now time.Time) (DiskState, error) {
 	if g.limit <= 0 {
-		return false, nil
+		return DiskNormal, nil
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if now.Before(g.nextCheck) {
-		return g.exceeded, nil
+		return g.state, g.lastErr
 	}
 	used, err := g.measure(g.directory)
-	if err != nil {
-		return false, err
-	}
-	g.exceeded = used >= g.limit
 	g.nextCheck = now.Add(g.interval)
-	return g.exceeded, nil
+	if err != nil {
+		// Keep the last known protection level. A transient WalkDir error must not
+		// disconnect an otherwise healthy serial port.
+		g.lastErr = err
+		return g.state, err
+	}
+	g.lastErr = nil
+	percent := float64(used) / float64(g.limit)
+	warning := float64(g.warningPercent) / 100
+	readOnly := float64(min(g.warningPercent+10, 99)) / 100
+	switch {
+	case percent >= 1:
+		g.state = DiskFull
+	case percent >= readOnly:
+		g.state = DiskReadOnly
+	case percent >= warning:
+		g.state = DiskWarning
+	default:
+		g.state = DiskNormal
+	}
+	g.exceeded = g.state == DiskFull
+	return g.state, nil
+}
+
+func (g *diskGuard) Exceeded(now time.Time) (bool, error) {
+	state, err := g.State(now)
+	return state == DiskFull, err
 }
 
 func directoryBytes(root string) (int64, error) {

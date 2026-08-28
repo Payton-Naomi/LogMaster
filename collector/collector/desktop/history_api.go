@@ -48,6 +48,7 @@ type HistoryFileDTO struct {
 	SHA256        string    `json:"sha256"`
 	UploadState   string    `json:"uploadState"`
 	QueryCode     string    `json:"queryCode"`
+	SegmentCount  int       `json:"segmentCount"`
 	CreatedAt     time.Time `json:"createdAt"`
 	CompletedAt   time.Time `json:"completedAt"`
 }
@@ -97,6 +98,14 @@ func (s *Service) ReadHistoryPreview(id string) (HistoryPreviewDTO, error) {
 	}
 	file, err := os.Open(record.Path)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			if cleanupErr := s.store.RemoveMissingLogFile(s.ctx, record.ID); cleanupErr != nil {
+				s.logger.Warn("missing history record cleanup failed", "component", "desktop.history", "log_file_id", record.ID, "error", cleanupErr)
+			} else {
+				s.logger.Warn("local history file missing; record removed", "component", "desktop.history", "log_file_id", record.ID, "path", record.Path)
+			}
+			return HistoryPreviewDTO{}, nil
+		}
 		return HistoryPreviewDTO{}, err
 	}
 	defer file.Close()
@@ -142,6 +151,15 @@ func (s *Service) SaveLogAs(deviceID, sessionID, scope, windowContent string) (s
 		if err := os.WriteFile(target, []byte(windowContent), 0o644); err != nil {
 			return "", err
 		}
+		if sessionID == "" {
+			for _, state := range s.manager.GetDeviceStates() {
+				if state.DeviceID == deviceID {
+					sessionID = state.SessionID
+					break
+				}
+			}
+		}
+		s.markSessionManuallySaved(sessionID)
 		return target, nil
 	}
 	files, err := s.store.SessionFiles(s.ctx, sessionID)
@@ -159,6 +177,14 @@ func (s *Service) SaveLogAs(deviceID, sessionID, scope, windowContent string) (s
 		input, openErr := os.Open(record.Path)
 		if openErr != nil {
 			output.Close()
+			if errors.Is(openErr, os.ErrNotExist) {
+				if cleanupErr := s.store.RemoveMissingLogFile(s.ctx, record.ID); cleanupErr != nil {
+					s.logger.Warn("missing history record cleanup failed", "component", "desktop.history", "log_file_id", record.ID, "error", cleanupErr)
+				} else {
+					s.logger.Warn("local history file missing; record removed", "component", "desktop.history", "log_file_id", record.ID, "path", record.Path)
+				}
+				return "", errors.New("本地日志文件已不存在，记录已清理")
+			}
 			return "", openErr
 		}
 		_, copyErr := io.Copy(output, input)
@@ -175,6 +201,7 @@ func (s *Service) SaveLogAs(deviceID, sessionID, scope, windowContent string) (s
 	if err := output.Close(); err != nil {
 		return "", err
 	}
+	s.markSessionManuallySaved(sessionID)
 	return target, nil
 }
 
@@ -190,6 +217,10 @@ func (s *Service) OpenLogFolder(path string) error {
 	if err == nil && !info.IsDir() {
 		path = filepath.Dir(path)
 	} else if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			s.logger.Warn("history folder missing", "component", "desktop.history", "path", path)
+			return errors.New("本地日志目录不存在")
+		}
 		return err
 	}
 	absolute, err := filepath.Abs(path)
@@ -214,6 +245,15 @@ func (s *Service) DeleteHistoryFile(id string, deleteLocalFile bool) error {
 	if err != nil {
 		return err
 	}
+	if record.SessionID != "" {
+		files, listErr := s.store.SessionFiles(s.ctx, record.SessionID)
+		if listErr != nil {
+			return listErr
+		}
+		if len(files) > 1 {
+			return errors.New("该历史记录包含多个物理分片，请保留会话完整性后再处理")
+		}
+	}
 	if record.UploadState != "local" {
 		return errors.New("只有未进入上传队列的本地文件可以删除")
 	}
@@ -231,6 +271,60 @@ func (s *Service) DeleteHistoryFile(id string, deleteLocalFile bool) error {
 		return fmt.Errorf("历史记录已删除，但删除本地文件失败: %w", err)
 	}
 	return nil
+}
+
+// DeleteHistorySession removes every physical file represented by one history
+// row, then removes their local history and upload-queue associations.
+func (s *Service) DeleteHistorySession(sessionID, fallbackID string) (int, error) {
+	var records []spool.LogFileRecord
+	var err error
+	if strings.TrimSpace(sessionID) != "" {
+		records, err = s.store.SessionFiles(s.ctx, sessionID)
+	} else {
+		var record spool.LogFileRecord
+		record, err = s.store.GetLogFile(s.ctx, fallbackID)
+		records = []spool.LogFileRecord{record}
+	}
+	if err != nil {
+		return 0, err
+	}
+	if len(records) == 0 {
+		return 0, errors.New("未找到历史文件")
+	}
+
+	staged := make([]struct{ original, temporary string }, 0, len(records))
+	for _, record := range records {
+		if _, err := os.Stat(record.Path); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return 0, fmt.Errorf("读取本地日志文件失败: %w", err)
+		}
+		temporary := fmt.Sprintf("%s.deleting-%d", record.Path, time.Now().UnixNano())
+		if err := os.Rename(record.Path, temporary); err != nil {
+			for index := len(staged) - 1; index >= 0; index-- {
+				_ = os.Rename(staged[index].temporary, staged[index].original)
+			}
+			return 0, fmt.Errorf("暂存待删除文件失败: %w", err)
+		}
+		staged = append(staged, struct{ original, temporary string }{record.Path, temporary})
+	}
+	ids := make([]string, 0, len(records))
+	for _, record := range records {
+		ids = append(ids, record.ID)
+	}
+	if err := s.store.DeleteHistoryRecords(s.ctx, ids); err != nil {
+		for index := len(staged) - 1; index >= 0; index-- {
+			_ = os.Rename(staged[index].temporary, staged[index].original)
+		}
+		return 0, err
+	}
+	for _, file := range staged {
+		if err := os.Remove(file.temporary); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return len(records), fmt.Errorf("历史记录已删除，但删除本地文件失败: %w", err)
+		}
+	}
+	return len(records), nil
 }
 
 func (s *Service) GetDeviceStorage() ([]DeviceStorageDTO, error) {
@@ -276,7 +370,7 @@ func (s *Service) GetDeviceStorage() ([]DeviceStorageDTO, error) {
 }
 
 func toHistoryDTO(item spool.LogFileRecord) HistoryFileDTO {
-	return HistoryFileDTO{ID: item.ID, SessionID: item.SessionID, Path: item.Path, FileName: item.FileName, DeviceID: item.DeviceSN, PortName: item.PortName, ProjectID: item.ProjectID, ProjectName: item.ProjectName, Version: item.Version, TestTaskID: item.TestTaskID, TestTaskName: item.TestTaskName, FirstSequence: item.FirstSequence, LastSequence: item.LastSequence, LineCount: item.LineCount, SizeBytes: item.SizeBytes, SHA256: item.SHA256, UploadState: item.UploadState, QueryCode: item.QueryCode, CreatedAt: item.CreatedAt, CompletedAt: item.CompletedAt}
+	return HistoryFileDTO{ID: item.ID, SessionID: item.SessionID, Path: item.Path, FileName: item.FileName, DeviceID: item.DeviceSN, PortName: item.PortName, ProjectID: item.ProjectID, ProjectName: item.ProjectName, Version: item.Version, TestTaskID: item.TestTaskID, TestTaskName: item.TestTaskName, FirstSequence: item.FirstSequence, LastSequence: item.LastSequence, LineCount: item.LineCount, SizeBytes: item.SizeBytes, SHA256: item.SHA256, UploadState: item.UploadState, QueryCode: item.QueryCode, SegmentCount: item.SegmentCount, CreatedAt: item.CreatedAt, CompletedAt: item.CompletedAt}
 }
 
 func (s *Service) configForDevice(id string) DeviceConfigDTO {
@@ -288,7 +382,7 @@ func (s *Service) configForDevice(id string) DeviceConfigDTO {
 var invalidExportName = regexp.MustCompile(`[<>:"/\\|?*]+`)
 
 func defaultExportName(cfg DeviceConfigDTO) string {
-	parts := []string{cfg.PortName, cfg.ProjectName, cfg.Version, cfg.TestTaskName, time.Now().Format("20060102_150405")}
+	parts := []string{cfg.DeviceID, cfg.PortName, time.Now().Format("20060102150405"), cfg.ProjectName}
 	for i := range parts {
 		parts[i] = strings.TrimSpace(invalidExportName.ReplaceAllString(parts[i], "_"))
 		if parts[i] == "" {

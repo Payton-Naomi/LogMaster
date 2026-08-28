@@ -56,22 +56,13 @@
           <div class="draft-toolbar"><span>表单内容会自动保存，返回后可继续编辑。</span><el-button v-if="hasDraft" text :icon="Delete" :disabled="filesLocked" @click="clearDraft">清除草稿</el-button></div>
           <el-form-item label="项目名称" required>
             <el-select v-model="projectName" filterable placeholder="请选择项目" :disabled="filesLocked">
-              <el-option v-for="item in projectOptions" :key="item" :label="item" :value="item" />
-            </el-select>
+               <el-option v-for="item in projectOptions" :key="item" :label="item" :value="item" />
+             </el-select>
+             <p v-if="!projectOptions.length" class="project-warning">暂无可用项目，请联系管理员创建并授权后再上传。</p>
+             <p v-else-if="projectName && !projectOptions.includes(projectName)" class="project-warning">当前项目已不可用，请重新选择有效项目。</p>
           </el-form-item>
-          <el-form-item label="版本标识" required>
+          <el-form-item class="version-field" label="版本标识" required>
             <el-input v-model="version" maxlength="64" placeholder="例如 V1.2.0" :disabled="filesLocked" />
-          </el-form-item>
-          <div class="field-pair">
-            <el-form-item label="测试任务 ID">
-              <el-input v-model="testTaskId" maxlength="128" placeholder="选填" :disabled="filesLocked" />
-            </el-form-item>
-            <el-form-item label="测试任务名称">
-              <el-input v-model="testTaskName" maxlength="256" placeholder="选填" :disabled="filesLocked" />
-            </el-form-item>
-          </div>
-          <el-form-item label="上传人" required>
-            <el-input v-model="uploaderName" maxlength="128" placeholder="必填" :disabled="filesLocked" />
           </el-form-item>
           <el-form-item label="备注">
             <el-input v-model="remark" type="textarea" :rows="2" maxlength="4000" show-word-limit placeholder="选填" :disabled="filesLocked" />
@@ -120,7 +111,7 @@
             <div><dt>错误</dt><dd class="danger">{{ formatNumber(task.error_count) }}</dd></div>
             <div><dt>警告</dt><dd class="warning">{{ formatNumber(task.warning_count) }}</dd></div>
           </dl>
-          <el-alert v-if="task.error_message" :title="task.error_message" type="error" :closable="false" show-icon />
+          <el-alert v-if="task.error_message" :title="task.error_message" type="error" :closable="false" show-icon><template #default><div class="upload-error"><span>{{ task.error_message }}</span><el-button text size="small" :icon="CopyDocument" @click="copyText(task.error_message)">复制错误</el-button></div></template></el-alert>
           <div class="task-actions">
             <el-button v-if="task.status === 'completed'" type="primary" @click="router.push(`/analysis/${task.task_id}`)">查看解析结果</el-button>
             <el-button :plain="task.status !== 'completed'" @click="startNewUpload">上传另一批</el-button>
@@ -141,6 +132,8 @@ import { CircleCheck, Clock, Close, CopyDocument, Delete, DocumentAdd, Upload, U
 import { getProjects, getUploadConfig, uploadLogs } from '@/api/log'
 import { getScenarios } from '@/api/scenarios'
 import { getTaskDetail } from '@/api/task'
+import { getAIEnabled } from '@/utils/aiPreference'
+import { uuid } from '@/utils/uuid'
 
 const router = useRouter()
 const input = ref(null)
@@ -149,9 +142,14 @@ const projectOptions = ref([])
 const scenarios = ref([])
 const projectName = ref('')
 const version = ref('')
-const testTaskId = ref('')
-const testTaskName = ref('')
-const uploaderName = ref(window.localStorage.getItem('logmaster_uploader_name') || '')
+const uploaderName = ref((() => {
+  try {
+    const user = JSON.parse(window.localStorage.getItem('user_info') || '{}')
+    return String(user.name || user.email || 'Web User').trim()
+  } catch {
+    return 'Web User'
+  }
+})())
 const remark = ref('')
 const scenarioIds = ref([])
 const disableParsingRules = ref(true)
@@ -170,7 +168,7 @@ const terminalStatuses = new Set(['completed', 'failed'])
 const uploadDraftKey = 'logmaster_upload_draft_v1'
 const totalSize = computed(() => files.value.reduce((sum, item) => sum + item.raw.size, 0))
 const filesLocked = computed(() => submitting.value || Boolean(task.value && !terminalStatuses.has(task.value.status)))
-const submitDisabled = computed(() => !files.value.length || !projectName.value.trim() || !version.value.trim() || !uploaderName.value.trim() || totalSize.value > maxUploadBytes.value || files.value.length > maxFilesPerUpload.value || submitting.value || Boolean(task.value))
+const submitDisabled = computed(() => !files.value.length || !projectName.value.trim() || !version.value.trim() || totalSize.value > maxUploadBytes.value || files.value.length > maxFilesPerUpload.value || submitting.value || Boolean(task.value))
 const applicableScenarios = computed(() => scenarios.value.filter(item => {
   const metadata = item.metadata || {}
   const published = typeof item.enabled === 'boolean' ? item.enabled : (metadata.status || 'published') === 'published'
@@ -188,7 +186,7 @@ const analysisModeLabel = computed(() => {
   if (!selectedScenarios.value.length) return '按解析规则开关'
   return disableParsingRules.value ? '仅测试场景' : '场景 + 解析规则'
 })
-const hasDraft = computed(() => Boolean(projectName.value || version.value || testTaskId.value || testTaskName.value || remark.value || scenarioIds.value.length || disableParsingRules.value !== true))
+const hasDraft = computed(() => Boolean(projectName.value || version.value || remark.value || scenarioIds.value.length || disableParsingRules.value !== true))
 
 const progress = computed(() => {
   const current = task.value
@@ -305,6 +303,10 @@ async function submit() {
     ElMessage.error('无法读取当前上传限制，请稍后重试')
     return
   }
+  if (!projectName.value || !projectOptions.value.includes(projectName.value)) {
+    ElMessage.warning('请选择有效项目后再上传，用户端不能自行创建项目')
+    return
+  }
   if (files.value.length > maxFilesPerUpload.value || totalSize.value > maxUploadBytes.value) {
     ElMessage.warning(`当前单次上传限制为 ${maxFilesPerUpload.value} 个文件、${formatSize(maxUploadBytes.value)}`)
     return
@@ -318,14 +320,13 @@ async function submit() {
     const created = await uploadLogs(files.value.map((item) => item.raw), {
       project_name: projectName.value.trim(),
       version: version.value.trim(),
-      test_task_id: testTaskId.value.trim(),
-      test_task_name: testTaskName.value.trim(),
-      uploader_name: uploaderName.value.trim(),
+      uploader_name: uploaderName.value,
       remark: remark.value.trim(),
-      client_request_id: crypto.randomUUID(),
+      client_request_id: uuid(),
       collector_version: 'web',
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
       disable_parsing_rules: selectedScenarios.value.length ? disableParsingRules.value : false,
+      ai_analysis_enabled: getAIEnabled(),
       created_at: new Date().toISOString()
     }, scenarioIds.value, {
       onUploadProgress: (event) => {
@@ -337,8 +338,10 @@ async function submit() {
     task.value = { task_id: created.task_id, status: created.status, progress: 25, total_files: created.file_count || 0, processed_files: 0, total_lines: 0, error_count: 0, warning_count: 0, error_message: '' }
     ElMessage.success('日志已上传，后台开始解析')
     await poll(created.task_id, generation)
-  } catch {
-    task.value = null
+  } catch (error) {
+    const message = error?.response?.data?.message || error?.message || '上传失败，请检查网络和文件后重试'
+    task.value = { ...task.value, status: 'failed', progress: 100, error_message: message }
+    ElMessage.error(message)
   } finally {
     submitting.value = false
   }
@@ -368,14 +371,16 @@ async function copyTaskId() {
     ElMessage.warning('无法访问剪贴板')
   }
 }
+async function copyText(value) {
+  try { await navigator.clipboard.writeText(String(value || '')); ElMessage.success('错误信息已复制') }
+  catch { ElMessage.warning('复制失败，请检查浏览器剪贴板权限') }
+}
 
 function startNewUpload() {
   pollGeneration++
   window.clearTimeout(pollTimer)
   files.value = []
   version.value = ''
-  testTaskId.value = ''
-  testTaskName.value = ''
   remark.value = ''
   task.value = null
   uploadPercent.value = 0
@@ -387,14 +392,12 @@ watch(projectName, () => {
   const applicableIds = new Set(applicableScenarios.value.map(item => item.id))
   scenarioIds.value = scenarioIds.value.filter(id => applicableIds.has(id))
 })
-watch(uploaderName, value => window.localStorage.setItem('logmaster_uploader_name', value.trim()))
-watch([projectName, version, testTaskId, testTaskName, uploaderName, remark, scenarioIds, disableParsingRules], saveDraft, { deep: true })
+watch([projectName, version, remark, scenarioIds, disableParsingRules], saveDraft, { deep: true })
 
 function saveDraft() {
   if (task.value || submitting.value) return
   window.localStorage.setItem(uploadDraftKey, JSON.stringify({
-    projectName: projectName.value, version: version.value, testTaskId: testTaskId.value,
-    testTaskName: testTaskName.value, uploaderName: uploaderName.value, remark: remark.value,
+    projectName: projectName.value, version: version.value, remark: remark.value,
     scenarioIds: scenarioIds.value, disableParsingRules: disableParsingRules.value
   }))
 }
@@ -405,9 +408,6 @@ function restoreDraft() {
     if (!draft || typeof draft !== 'object') return
     projectName.value = typeof draft.projectName === 'string' ? draft.projectName : ''
     version.value = typeof draft.version === 'string' ? draft.version : ''
-    testTaskId.value = typeof draft.testTaskId === 'string' ? draft.testTaskId : ''
-    testTaskName.value = typeof draft.testTaskName === 'string' ? draft.testTaskName : ''
-    uploaderName.value = typeof draft.uploaderName === 'string' ? draft.uploaderName : uploaderName.value
     remark.value = typeof draft.remark === 'string' ? draft.remark : ''
     scenarioIds.value = Array.isArray(draft.scenarioIds) ? draft.scenarioIds : []
     disableParsingRules.value = typeof draft.disableParsingRules === 'boolean' ? draft.disableParsingRules : true
@@ -418,8 +418,6 @@ function clearDraft() {
   window.localStorage.removeItem(uploadDraftKey)
   projectName.value = ''
   version.value = ''
-  testTaskId.value = ''
-  testTaskName.value = ''
   remark.value = ''
   scenarioIds.value = []
   disableParsingRules.value = true
@@ -448,6 +446,8 @@ onBeforeUnmount(() => {
 .file-list { margin-top: 16px; }.list-heading { display: flex; justify-content: space-between; padding: 0 2px 8px; border-bottom: 1px solid #e8ecf0; color: #7b8796; font-size: 10px; }.file-row { display: grid; grid-template-columns: 46px minmax(0,1fr) 64px 32px; align-items: center; gap: 10px; min-height: 58px; padding: 8px 2px; border-bottom: 1px solid #edf0f3; }.extension { display: grid; width: 42px; height: 34px; place-items: center; border-radius: 4px; background: #edf3fb; color: #3976bf; font-size: 9px; font-weight: 700; }.file-info { display: flex; min-width: 0; flex-direction: column; gap: 4px; }.file-info strong { overflow: hidden; color: #384555; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.file-info span { color: #8a94a3; font-size: 10px; }.file-ready { display: flex; align-items: center; gap: 4px; color: #438a70; font-size: 10px; }
 .file-empty { display: flex; min-height: 76px; align-items: center; justify-content: center; flex-direction: column; gap: 5px; color: #788595; font-size: 11px; }.file-empty small { color: #9aa3ae; }
 .upload-panel { position: sticky; top: 0; }.upload-panel .el-select { width: 100%; }.upload-panel :deep(.el-form-item__label) { color: #536174; font-size: 12px; font-weight: 600; }.upload-panel :deep(.el-form-item) { margin-bottom: 15px; }
+.project-warning { margin: -8px 0 14px; color: #b45309; font-size: 11px; line-height: 1.5; }
+.upload-panel :deep(.el-form-item__content) { display: block; width: 100%; }
 .draft-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:-2px 0 14px;padding:8px 10px;border:1px solid #d8e3ee;border-radius:5px;background:#f5f8fc;color:#667789;font-size:11px}.draft-toolbar .el-button{margin:0}
 .field-pair{display:grid;grid-template-columns:1fr 1fr;gap:10px}.field-pair :deep(.el-form-item){min-width:0}
 .scenario-rule-count{float:right;margin-left:18px;color:#8a94a3;font-size:11px}.scenario-note{display:flex;width:100%;align-items:flex-start;gap:5px;margin-top:7px;color:#39785f;font-size:10px;line-height:1.5}.scenario-note .el-icon{margin-top:2px;flex:0 0 auto}
@@ -468,7 +468,7 @@ onBeforeUnmount(() => {
 .drop-zone{position:relative;min-height:224px;border:1px dashed #315478;border-radius:8px;background:#081525;transition:border-color .18s ease,background .18s ease,transform .18s ease,box-shadow .18s ease}.drop-zone:before{position:absolute;inset:10px;pointer-events:none;border:1px solid rgba(56,189,248,.08);border-radius:5px;content:''}.drop-zone:hover,.drop-zone:focus-visible,.drop-zone.dragging{border-color:#38bdf8;background:#0a1d32;box-shadow:0 0 0 3px rgba(56,189,248,.1),0 18px 36px rgba(2,132,199,.12);transform:translateY(-2px)}.drop-zone.locked{opacity:.55}.upload-icon{background:#082f49;color:#38bdf8;box-shadow:0 0 22px rgba(14,165,233,.18);animation:floatIcon 3s ease-in-out infinite}.drop-zone strong{color:#f8fafc;font-size:15px}.drop-zone>div span{color:#7f93aa}.browse-action{border:1px solid #2b5f87;background:#0b2036;color:#7dd3fc;transition:background .18s ease,border-color .18s ease}.browse-action:hover{border-color:#38bdf8;background:#0e304e}
 .file-list{margin-top:18px}.list-heading{border-bottom-color:#1e293b;color:#64748b;text-transform:uppercase;letter-spacing:.12em}.file-row{border-bottom-color:#172236;transition:background .16s ease,transform .16s ease}.file-row:hover{background:#0f1d30;transform:translateX(4px)}.extension{background:#172554;color:#93c5fd}.file-info strong{color:#e2e8f0}.file-info span{color:#64748b}.file-ready{color:#4ade80}.file-empty{color:#94a3b8}.file-empty small{color:#64748b}
 .upload-panel{top:10px}.upload-panel :deep(.el-form-item__label){color:#cbd5e1;font-size:11px;letter-spacing:.04em}.upload-panel :deep(.el-input__wrapper),.upload-panel :deep(.el-select__wrapper),.upload-panel :deep(.el-textarea__inner){box-shadow:0 0 0 1px #263449 inset;background:#0f1b2d;color:#e2e8f0;transition:box-shadow .18s ease,background .18s ease}.upload-panel :deep(.el-input__wrapper:hover),.upload-panel :deep(.el-select__wrapper:hover),.upload-panel :deep(.el-textarea__inner:hover),.upload-panel :deep(.is-focus){box-shadow:0 0 0 1px #38bdf8 inset,0 0 0 3px rgba(56,189,248,.1);background:#111f33}.upload-panel :deep(input),.upload-panel :deep(textarea),.upload-panel :deep(.el-select__selected-item){color:#e2e8f0}.upload-panel :deep(input::placeholder),.upload-panel :deep(textarea::placeholder){color:#5f748c}.field-pair{gap:12px}.scenario-note{color:#4ade80}.analysis-mode{border-color:#24527b;background:#081a2d}.analysis-mode.exclusive{border-color:#805a22;background:#261b0a}.analysis-mode-heading strong{color:#e2e8f0}.analysis-mode-heading span{color:#8298b0}.analysis-mode-status{border-top-color:#1d4668;background:#0b243b;color:#7dd3fc}.analysis-mode.exclusive .analysis-mode-status{border-top-color:#63471b;background:#35230d;color:#fbbf24}
-.upload-summary{border-color:#1e293b}.upload-summary div+div{border-top-color:#172236}.upload-summary div{color:#64748b}.upload-summary strong{color:#e2e8f0}.submit-button{position:relative;overflow:hidden;border:0;background:#2563eb;box-shadow:0 10px 24px rgba(37,99,235,.24);transition:transform .18s ease,box-shadow .18s ease}.submit-button:after{position:absolute;top:0;bottom:0;left:-45%;width:28%;background:rgba(255,255,255,.24);content:'';transform:skewX(-18deg);animation:buttonSweep 3.8s ease-in-out infinite}.submit-button:hover{background:#3b82f6;box-shadow:0 14px 30px rgba(37,99,235,.34);transform:translateY(-1px)}.submit-hint{color:#64748b}.waiting-state,.task-state{border-top-color:#1e293b}.waiting-state>span{background:#111c2f;color:#64748b}.waiting-state strong,.task-heading>div>span{color:#cbd5e1}.waiting-state p{color:#64748b}.task-state dl div{border-right-color:#1e293b}.task-state dt{color:#64748b}.task-state dd{color:#e2e8f0}.copy-task{color:#7dd3fc}.poll-warning{color:#fbbf24}
+.upload-summary{border-color:#1e293b}.upload-summary div+div{border-top-color:#172236}.upload-summary div{color:#64748b}.upload-summary strong{color:#e2e8f0}.project-warning{color:#fbbf24}.submit-button{position:relative;overflow:hidden;border:0;background:#2563eb;box-shadow:0 10px 24px rgba(37,99,235,.24);transition:transform .18s ease,box-shadow .18s ease}.submit-button:after{position:absolute;top:0;bottom:0;left:-45%;width:28%;background:rgba(255,255,255,.24);content:'';transform:skewX(-18deg);animation:buttonSweep 3.8s ease-in-out infinite}.submit-button:hover{background:#3b82f6;box-shadow:0 14px 30px rgba(37,99,235,.34);transform:translateY(-1px)}.submit-hint{color:#64748b}.waiting-state,.task-state{border-top-color:#1e293b}.waiting-state>span{background:#111c2f;color:#64748b}.waiting-state strong,.task-heading>div>span{color:#cbd5e1}.waiting-state p{color:#64748b}.task-state dl div{border-right-color:#1e293b}.task-state dt{color:#64748b}.task-state dd{color:#e2e8f0}.copy-task{color:#7dd3fc}.poll-warning{color:#fbbf24}
 @keyframes floatIcon{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}@keyframes buttonSweep{0%,60%,100%{left:-45%;opacity:0}15%{opacity:1}45%{left:120%;opacity:0}}
 @media(max-width:820px){.upload-panel{top:0}}@media(max-width:560px){.page-heading h1{font-size:23px}.panel{padding:15px}.selection-summary{align-self:flex-start}}
 </style>
@@ -481,6 +481,14 @@ html[data-log-theme="light"] .upload-page .step-indicator {
   background: rgba(255, 255, 255, .48);
   color: #46616d;
 }
+html[data-log-theme="light"] .upload-page .selection-summary {
+  border-color: rgba(47, 116, 137, .28);
+  background: rgba(255, 255, 255, .7);
+  color: #496575;
+  box-shadow: 0 4px 14px rgba(47, 116, 137, .08);
+}
+html[data-log-theme="light"] .upload-page .selection-summary strong { color: #173f52; }
+html[data-log-theme="light"] .upload-page .selection-summary i { background: rgba(47, 116, 137, .3); }
 html[data-log-theme="light"] .upload-page .browse-action {
   border-color: rgba(6, 150, 180, .38);
   background: rgba(6, 150, 180, .13);

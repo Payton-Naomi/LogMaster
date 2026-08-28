@@ -1,0 +1,4 @@
+./doc.go
+./enumerator.go
+./syscall_windows.go
+./usb_windows.go

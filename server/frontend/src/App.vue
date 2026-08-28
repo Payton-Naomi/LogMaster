@@ -426,6 +426,76 @@ html[data-log-theme="light"] body #app .shared-particle-surface:not(.tasks-page)
   box-shadow: inset 0 1px rgba(255,255,255,.78), 0 16px 34px rgba(32,70,86,.17), 0 0 22px rgba(6,182,212,.12) !important;
 }
 
+html[data-log-theme="light"] body #app .shared-particle-surface:not(.tasks-page) .permission-guide {
+  border-color: rgba(34, 92, 110, .34) !important;
+  background: rgba(241, 249, 251, .88) !important;
+  box-shadow: inset 0 1px rgba(255, 255, 255, .9) !important;
+}
+html[data-log-theme="light"] body #app .shared-particle-surface:not(.tasks-page) .permission-guide-item {
+  border-color: rgba(43, 83, 98, .28) !important;
+  background: rgba(255, 255, 255, .82) !important;
+  color: #19313b !important;
+}
+html[data-log-theme="light"] body #app .shared-particle-surface:not(.tasks-page) .permission-guide-item.current {
+  border-color: rgba(0, 128, 153, .68) !important;
+  background: rgba(211, 241, 246, .92) !important;
+  box-shadow: inset 3px 0 #0086a0 !important;
+}
+html[data-log-theme="light"] body #app .shared-particle-surface:not(.tasks-page) .permission-guide-item ul {
+  color: #334f5b !important;
+}
+
+html[data-log-theme="light"] body #app .shared-particle-surface:not(.tasks-page) .ai-quota-section {
+  border-color: rgba(67, 98, 112, .2) !important;
+}
+html[data-log-theme="light"] body #app .shared-particle-surface:not(.tasks-page) .resource-setting-heading span,
+html[data-log-theme="light"] body #app .shared-particle-surface:not(.tasks-page) .ai-quota-overview span {
+  color: #55727d !important;
+}
+html[data-log-theme="light"] body #app .shared-particle-surface:not(.tasks-page) .ai-quota-overview > div {
+  border-color: rgba(67, 98, 112, .2) !important;
+  background: rgba(255, 255, 255, .38) !important;
+}
+html[data-log-theme="light"] body #app .shared-particle-surface:not(.tasks-page) .capacity-form {
+  border-color: rgba(67, 98, 112, .22) !important;
+  background: rgba(248, 252, 253, .92) !important;
+  box-shadow: inset 0 1px rgba(255, 255, 255, .88) !important;
+}
+html[data-log-theme="light"] body #app .shared-particle-surface:not(.tasks-page) .capacity-form .el-input-number {
+  border-color: rgba(67, 98, 112, .25) !important;
+  background: rgba(255, 255, 255, .86) !important;
+  color: #263d47 !important;
+}
+html[data-log-theme="light"] body #app .shared-particle-surface:not(.tasks-page) .capacity-form .el-input-number .el-input__wrapper {
+  background: rgba(255, 255, 255, .86) !important;
+}
+html[data-log-theme="light"] body #app .shared-particle-surface:not(.tasks-page) .capacity-form .el-input-number__increase,
+html[data-log-theme="light"] body #app .shared-particle-surface:not(.tasks-page) .capacity-form .el-input-number__decrease {
+  border-color: rgba(67, 98, 112, .18) !important;
+  background: rgba(230, 241, 244, .9) !important;
+  color: #46616d !important;
+}
+html[data-log-theme="light"] body #app .shared-particle-surface:not(.tasks-page) .capacity-form .field-help {
+  color: #46616d !important;
+  font-size: 12px !important;
+}
+html[data-log-theme="light"] body #app .shared-particle-surface:not(.tasks-page) .ai-summary-panel {
+  border-color: rgba(67, 98, 112, .2) !important;
+  background: rgba(255, 255, 255, .38) !important;
+  box-shadow: inset 0 1px rgba(255, 255, 255, .68) !important;
+}
+html[data-log-theme="light"] body #app .shared-particle-surface:not(.tasks-page) .ai-summary-panel .ai-file-result {
+  border-bottom-color: rgba(67, 98, 112, .16) !important;
+}
+html[data-log-theme="light"] body #app .shared-particle-surface:not(.tasks-page) .ai-summary-panel .ai-summary-copy,
+html[data-log-theme="light"] body #app .shared-particle-surface:not(.tasks-page) .ai-summary-panel .ai-finding dd {
+  color: #334f5b !important;
+}
+html[data-log-theme="light"] body #app .shared-particle-surface:not(.tasks-page) .ai-summary-panel .ai-finding {
+  border-color: rgba(67, 98, 112, .18) !important;
+  background: rgba(245, 250, 251, .72) !important;
+}
+
 html[data-log-theme="light"] body #app .shared-particle-surface:not(.tasks-page) .drop-zone,
 html[data-log-theme="light"] body #app .shared-particle-surface:not(.tasks-page) .analysis-mode,
 html[data-log-theme="light"] body #app .shared-particle-surface:not(.tasks-page) .keyword-drop {

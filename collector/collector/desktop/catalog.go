@@ -41,6 +41,8 @@ type CatalogTask struct {
 	Type                   string                  `yaml:"type" json:"type"`
 	KeywordProfileTemplate string                  `yaml:"keyword_profile_template" json:"-"`
 	KeywordProfiles        []CatalogKeywordProfile `yaml:"keyword_profiles" json:"keywordProfiles"`
+	AllProjects            bool                    `yaml:"all_projects,omitempty" json:"allProjects,omitempty"`
+	ApplicableProjects     []string                `yaml:"projects,omitempty" json:"applicableProjects,omitempty"`
 }
 
 type CatalogKeywordProfile struct {
@@ -61,8 +63,12 @@ type CatalogKeywordRule struct {
 	ID            string `yaml:"id" json:"id"`
 	Name          string `yaml:"name" json:"name"`
 	Match         string `yaml:"match" json:"match"`
+	Text          string `yaml:"text,omitempty" json:"-"`
 	Mode          string `yaml:"mode" json:"mode"`
 	CaseSensitive bool   `yaml:"case_sensitive" json:"caseSensitive"`
+	Level         string `yaml:"level,omitempty" json:"level,omitempty"`
+	Description   string `yaml:"description,omitempty" json:"description,omitempty"`
+	ReadOnly      bool   `yaml:"-" json:"readOnly,omitempty"`
 }
 
 type CatalogChangeDTO struct {
@@ -179,6 +185,7 @@ func expandTaskKeywordProfiles(tasks []CatalogTask, templates map[string][]Catal
 func cloneCatalogTasks(tasks []CatalogTask) []CatalogTask {
 	result := append([]CatalogTask(nil), tasks...)
 	for i := range result {
+		result[i].ApplicableProjects = append([]string(nil), result[i].ApplicableProjects...)
 		result[i].KeywordProfiles = cloneCatalogProfiles(result[i].KeywordProfiles)
 	}
 	return result
@@ -360,6 +367,11 @@ func (s *Service) ApplyCatalogImport(token string) error {
 	}
 	if err := atomicWriteFile(s.catalogPath, pending.content, 0o644); err != nil {
 		return err
+	}
+	if cache, cacheErr := readCloudKeywordCache(s.cloudKeywordPath); cacheErr == nil {
+		if !hasCloudKeywordProfile(pending.catalog) {
+			pending.catalog = mergeCloudKeywords(pending.catalog, cache.Items)
+		}
 	}
 	s.mu.Lock()
 	s.catalog = pending.catalog

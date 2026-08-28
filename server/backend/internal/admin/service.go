@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 
 	"logmaster-agent/internal/config"
 	"logmaster-agent/internal/response"
+	"logmaster-agent/internal/rolepolicy"
 )
 
 var projectNamePattern = regexp.MustCompile(`^[A-Z0-9][A-Z0-9-]{1,127}$`)
@@ -40,14 +42,15 @@ const (
 )
 
 type Project struct {
-	ID          int64     `json:"id"`
-	Name        string    `json:"name"`
-	ProductLine string    `json:"product_line"`
-	ProductType string    `json:"product_type"`
-	Stage       string    `json:"stage"`
-	Description string    `json:"description"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID                 int64     `json:"id"`
+	Name               string    `json:"name"`
+	ProductLine        string    `json:"product_line"`
+	ProductType        string    `json:"product_type"`
+	Stage              string    `json:"stage"`
+	Description        string    `json:"description"`
+	SchedulingPriority int       `json:"scheduling_priority"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 type ProjectOption struct {
@@ -90,8 +93,11 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/admin/project-requests", s.projectRequestsHandler)
 	mux.HandleFunc("/api/admin/project-requests/", s.projectRequestHandler)
 	mux.HandleFunc("/api/admin/upload-capacity", s.uploadCapacityHandler)
+	mux.HandleFunc("/api/admin/ai-analysis-settings", s.aiAnalysisSettingsHandler)
 	mux.HandleFunc("/api/admin/keyword-rules/import", s.keywordRulesImportHandler)
 	mux.HandleFunc("/api/admin/keyword-rules", s.keywordRulesHandler)
+	mux.HandleFunc("/api/admin/archive-passwords/", s.archivePasswordsHandler)
+	mux.HandleFunc("/api/admin/archive-passwords", s.archivePasswordsHandler)
 	mux.HandleFunc("/api/admin/keyword-rules/", s.keywordRuleHandler)
 	mux.HandleFunc("/api/admin/projects", s.projectsHandler)
 	mux.HandleFunc("/api/admin/projects/", s.projectHandler)
@@ -135,9 +141,40 @@ func (s *Service) projectHandler(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requirePermission(w, r, permissionProjects); !ok {
 		return
 	}
-	id, err := strconv.ParseInt(strings.TrimPrefix(r.URL.Path, "/api/admin/projects/"), 10, 64)
+	remainder := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/admin/projects/"), "/")
+	parts := strings.Split(remainder, "/")
+	id, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil || id <= 0 {
 		writeError(w, http.StatusBadRequest, "invalid project id")
+		return
+	}
+	if len(parts) == 2 && parts[1] == "priority" {
+		if r.Method != http.MethodPut {
+			methodNotAllowed(w)
+			return
+		}
+		var input struct {
+			Priority int `json:"priority"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&input) != nil || input.Priority < -1000 || input.Priority > 1000 {
+			writeError(w, http.StatusBadRequest, "项目优先级必须在 -1000 到 1000 之间")
+			return
+		}
+		result, updateErr := s.db.ExecContext(r.Context(), `UPDATE logmaster_api.projects SET scheduling_priority=$2,updated_at=NOW() WHERE id=$1 AND is_active=TRUE`, id, input.Priority)
+		if updateErr != nil {
+			writeError(w, http.StatusInternalServerError, "更新项目优先级失败")
+			return
+		}
+		rows, _ := result.RowsAffected()
+		if rows == 0 {
+			writeError(w, http.StatusNotFound, "项目不存在")
+			return
+		}
+		response.JSON(w, response.APIResponse{Code: 0, Message: "项目优先级已更新", Data: map[string]any{"project_id": id, "scheduling_priority": input.Priority}})
+		return
+	}
+	if len(parts) != 1 {
+		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
 	switch r.Method {
@@ -362,7 +399,7 @@ func (s *Service) decodeProject(w http.ResponseWriter, r *http.Request) (Project
 }
 
 func (s *Service) listProjects(ctx context.Context) ([]Project, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, product_line, product_type, stage, description, created_at, updated_at
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, product_line, product_type, stage, description, scheduling_priority, created_at, updated_at
 		FROM logmaster_api.projects WHERE is_active = TRUE ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -372,7 +409,7 @@ func (s *Service) listProjects(ctx context.Context) ([]Project, error) {
 	for rows.Next() {
 		var project Project
 		if err := rows.Scan(&project.ID, &project.Name, &project.ProductLine, &project.ProductType, &project.Stage,
-			&project.Description, &project.CreatedAt, &project.UpdatedAt); err != nil {
+			&project.Description, &project.SchedulingPriority, &project.CreatedAt, &project.UpdatedAt); err != nil {
 			return nil, err
 		}
 		projects = append(projects, project)
@@ -391,10 +428,10 @@ func (s *Service) createProject(ctx context.Context, project Project) (Project, 
 			is_active = TRUE,
 			updated_at = NOW()
 		WHERE projects.is_active = FALSE
-		RETURNING id, name, product_line, product_type, stage, description, created_at, updated_at`,
+		RETURNING id, name, product_line, product_type, stage, description, scheduling_priority, created_at, updated_at`,
 		project.Name, project.ProductLine, project.ProductType, project.Stage, project.Description).
 		Scan(&project.ID, &project.Name, &project.ProductLine, &project.ProductType, &project.Stage,
-			&project.Description, &project.CreatedAt, &project.UpdatedAt)
+			&project.Description, &project.SchedulingPriority, &project.CreatedAt, &project.UpdatedAt)
 	return project, err
 }
 
@@ -402,10 +439,10 @@ func (s *Service) updateProject(ctx context.Context, id int64, project Project) 
 	err := s.db.QueryRowContext(ctx, `UPDATE logmaster_api.projects
 		SET name = $2, product_line = $3, product_type = $4, stage = $5, description = $6, updated_at = NOW()
 		WHERE id = $1
-		RETURNING id, name, product_line, product_type, stage, description, created_at, updated_at`,
+		RETURNING id, name, product_line, product_type, stage, description, scheduling_priority, created_at, updated_at`,
 		id, project.Name, project.ProductLine, project.ProductType, project.Stage, project.Description).
 		Scan(&project.ID, &project.Name, &project.ProductLine, &project.ProductType, &project.Stage,
-			&project.Description, &project.CreatedAt, &project.UpdatedAt)
+			&project.Description, &project.SchedulingPriority, &project.CreatedAt, &project.UpdatedAt)
 	return project, err
 }
 
@@ -438,14 +475,7 @@ func (s *Service) roleForUser(ctx context.Context, openID string) (string, error
 	if s.roleResolver != nil {
 		return s.roleResolver(ctx, openID)
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE logmaster_api.users SET role = $2, updated_at = NOW()
-		WHERE feishu_open_id = $1 AND name = '刘欣彤' AND role = $3
-		AND NOT EXISTS (SELECT 1 FROM logmaster_api.users WHERE role = $2)`, openID, roleSuperAdmin, roleUser); err != nil {
-		return "", err
-	}
-	var role string
-	err := s.db.QueryRowContext(ctx, `SELECT role FROM logmaster_api.users WHERE feishu_open_id = $1`, openID).Scan(&role)
-	return role, err
+	return "", fmt.Errorf("admin role resolver is not configured")
 }
 
 func permissionsForRole(role string) []string {
@@ -471,22 +501,7 @@ func roleHasPermission(role, permission string) bool {
 }
 
 func (s *Service) automaticRole(openID, jobTitle string) string {
-	for _, id := range strings.Split(s.config.FeishuSuperAdminIDs, ",") {
-		if openID != "" && strings.TrimSpace(id) == openID {
-			return roleSuperAdmin
-		}
-	}
-	for _, rule := range strings.Split(s.config.FeishuRoleTitleRules, ";") {
-		parts := strings.SplitN(rule, "=", 2)
-		if len(parts) != 2 || !strings.Contains(strings.ToLower(jobTitle), strings.ToLower(strings.TrimSpace(parts[0]))) {
-			continue
-		}
-		role := strings.TrimSpace(parts[1])
-		if role == roleUser || role == roleDeveloper || role == roleAdmin {
-			return role
-		}
-	}
-	return roleUser
+	return rolepolicy.ForJobTitle(jobTitle)
 }
 
 func isUniqueViolation(err error) bool {

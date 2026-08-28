@@ -15,7 +15,7 @@ import (
 
 	"logmaster-agent/internal/config"
 	"logmaster-agent/internal/database"
-	"logmaster-agent/internal/logs"
+	"logmaster-agent/internal/logservice"
 )
 
 func TestUserUploadAndRuleIsolation(t *testing.T) {
@@ -55,7 +55,7 @@ func TestUserUploadAndRuleIsolation(t *testing.T) {
 		_, _ = db.ExecContext(ctx, `DELETE FROM logmaster_api.projects WHERE name IN ($1, $2)`, projectOne, projectTwo)
 	}()
 
-	repository := logs.NewRepository(db)
+	repository := logservice.NewRepository(db)
 	storageOne := t.TempDir()
 	storedRelativePath := filepath.ToSlash(filepath.Join("items", "0", "sample.log"))
 	storedPath := filepath.Join(storageOne, filepath.FromSlash(storedRelativePath))
@@ -68,13 +68,13 @@ func TestUserUploadAndRuleIsolation(t *testing.T) {
 	if err := repository.CreateUpload(ctx, uploadOne, taskOne, projectOne, "v1", nil, storageOne, userOne); err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.QueueUpload(ctx, uploadOne, "sample.log", 40, []logs.LogFile{{RelativePath: storedRelativePath, SizeBytes: 40}}); err != nil {
+	if err := repository.QueueUpload(ctx, uploadOne, "sample.log", 40, []logservice.LogFile{{RelativePath: storedRelativePath, SizeBytes: 40}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := repository.CreateUpload(ctx, uploadTwo, taskTwo, projectTwo, "v2", nil, "test/path/two", userTwo); err != nil {
 		t.Fatal(err)
 	}
-	uploads, total, err := repository.ListUploads(ctx, userOne, "", 20, 0)
+	uploads, total, err := repository.ListUploads(ctx, userOne, "", logservice.UploadFilters{}, 20, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestUserUploadAndRuleIsolation(t *testing.T) {
 	if _, _, err := repository.GetUploadByTask(ctx, taskTwo, userOne); err != sql.ErrNoRows {
 		t.Fatalf("cross-user task detail error = %v, want sql.ErrNoRows", err)
 	}
-	service := logs.NewServiceWithAgent(config.Config{}, repository, nil)
+	service := logservice.NewServiceWithAgent(config.Config{}, repository, nil)
 	activeUser := userOne
 	service.SetCurrentUserResolver(func(*http.Request) (string, bool) { return activeUser, true })
 	mux := http.NewServeMux()
@@ -126,7 +126,7 @@ func TestUserUploadAndRuleIsolation(t *testing.T) {
 		t.Fatalf("user one dashboard contains unexpected tasks: %#v", stats)
 	}
 
-	created, err := repository.SaveRule(ctx, userOne, logs.ParseRule{
+	created, err := repository.SaveRule(ctx, userOne, logservice.ParseRule{
 		Name: "private rule", Category: "system", Keyword: "private-keyword",
 		Level: "warning", Enabled: true,
 	})
@@ -139,7 +139,7 @@ func TestUserUploadAndRuleIsolation(t *testing.T) {
 	if containsRule(t, repository, ctx, userTwo, created.ID) {
 		t.Fatal("user-created rule is visible to another user")
 	}
-	infoRule, err := repository.SaveRule(ctx, userOne, logs.ParseRule{
+	infoRule, err := repository.SaveRule(ctx, userOne, logservice.ParseRule{
 		Name: "private info rule", Category: "system", Keyword: "private-info-keyword",
 		Level: "info", Enabled: true,
 	})
@@ -154,7 +154,7 @@ func TestUserUploadAndRuleIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var systemRule *logs.ParseRule
+	var systemRule *logservice.ParseRule
 	for index := range rules {
 		if rules[index].ID != created.ID && rules[index].ID != infoRule.ID && rules[index].Level == "info" {
 			systemRule = &rules[index]
@@ -187,7 +187,7 @@ func testUUID(t *testing.T) string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", value[:4], value[4:6], value[6:8], value[8:10], value[10:])
 }
 
-func containsRule(t *testing.T, repository *logs.Repository, ctx context.Context, user string, ruleID int64) bool {
+func containsRule(t *testing.T, repository *logservice.Repository, ctx context.Context, user string, ruleID int64) bool {
 	t.Helper()
 	rules, err := repository.ListRules(ctx, user)
 	if err != nil {
@@ -201,7 +201,7 @@ func containsRule(t *testing.T, repository *logs.Repository, ctx context.Context
 	return false
 }
 
-func ruleEnabled(t *testing.T, repository *logs.Repository, ctx context.Context, user string, ruleID int64) bool {
+func ruleEnabled(t *testing.T, repository *logservice.Repository, ctx context.Context, user string, ruleID int64) bool {
 	t.Helper()
 	rules, err := repository.ListRules(ctx, user)
 	if err != nil {

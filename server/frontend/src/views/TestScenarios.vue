@@ -20,13 +20,14 @@ import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Check, Close, Delete, Plus } from '@element-plus/icons-vue'
 import { createScenario, deleteScenario, getScenarios, updateScenario } from '@/api/scenarios'
+import { uuid } from '@/utils/uuid'
 
 const scenarios=ref([]);const selectedId=ref('');const active=computed(()=>scenarios.value.find(item=>item.id===selectedId.value))
 const fromAPI=(item)=>({...item,checks:(item.checks||[]).map(check=>({...check,keywordsText:(check.keywords||[]).join('\n')}))})
 const toAPI=(item)=>({...item,checks:item.checks.map(({keywordsText,...check})=>({...check,keywords:keywordsText.split('\n').map(v=>v.trim()).filter(Boolean)}))})
 async function load(){scenarios.value=(await getScenarios()).map(fromAPI);if(!scenarios.value.some(item=>item.id===selectedId.value))selectedId.value=scenarios.value[0]?.id||''}
-async function create(){const id=crypto.randomUUID();const item={id,name:'新测试场景',description:'',color:'blue',judgement:'any-error',checks:[]};await createScenario(item);selectedId.value=id;await load()}
-function addCheck(){active.value.checks.push({id:crypto.randomUUID(),name:'',description:'',severity:'warning',enabled:true,keywordsText:''})}
+async function create(){const id=uuid();const item={id,name:'新测试场景',description:'',color:'blue',judgement:'any-error',checks:[]};await createScenario(item);selectedId.value=id;await load()}
+function addCheck(){active.value.checks.push({id:uuid(),name:'',description:'',severity:'warning',enabled:true,keywordsText:''})}
 async function save(){if(!active.value.name.trim()){ElMessage.warning('请填写场景名称');return}await updateScenario(active.value.id,toAPI(active.value));ElMessage.success('场景已保存');await load()}
 async function remove(){await ElMessageBox.confirm(`确定删除“${active.value.name}”吗？`,'删除场景',{type:'warning'});await deleteScenario(active.value.id);await load()}
 onMounted(load)

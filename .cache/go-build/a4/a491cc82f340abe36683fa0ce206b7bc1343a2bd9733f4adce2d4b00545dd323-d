@@ -1,0 +1,16 @@
+./app_settings.go
+./catalog.go
+./catalog_crud.go
+./catalog_embedded.go
+./close_guard.go
+./cloud_keywords.go
+./device_settings.go
+./history_api.go
+./keyword_api.go
+./logging.go
+./main.go
+./maintained_config.go
+./replace_windows.go
+./runtime_catalog.go
+./service.go
+./upload_api.go

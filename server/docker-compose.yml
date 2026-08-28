@@ -1,0 +1,65 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: logmaster
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: logmaster
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U logmaster -d logmaster"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://logmaster:${DB_PASSWORD}@postgres:5432/logmaster?sslmode=disable
+      FRONTEND_DIST_DIR: /opt/logmaster/frontend/dist
+      LOG_STORAGE_DIR: /var/lib/logmaster/logs
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      FEISHU_APP_ID: ${FEISHU_APP_ID}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET}
+      FEISHU_REDIRECT_URI: ${FEISHU_REDIRECT_URI}
+      FEISHU_SUPER_ADMIN_OPEN_IDS: ${FEISHU_SUPER_ADMIN_OPEN_IDS:-}
+      FEISHU_SUPER_ADMIN_NAMES: ${FEISHU_SUPER_ADMIN_NAMES}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-2147483648}
+      MAX_FILES_PER_UPLOAD: ${MAX_FILES_PER_UPLOAD:-100}
+      MAX_EXTRACT_BYTES: ${MAX_EXTRACT_BYTES:-8589934592}
+      MAX_PARSE_WORKERS: ${MAX_PARSE_WORKERS:-2}
+      MAX_AI_WORKERS: ${MAX_AI_WORKERS:-1}
+      MAX_PARSE_ATTEMPTS: ${MAX_PARSE_ATTEMPTS:-3}
+      MAX_PARSE_PER_USER: ${MAX_PARSE_PER_USER:-1}
+      MAX_PARSE_PER_PROJECT: ${MAX_PARSE_PER_PROJECT:-2}
+      MAX_FILES_PER_PARSE_TASK: ${MAX_FILES_PER_PARSE_TASK:-10000}
+      MAX_BYTES_PER_PARSE_TASK: ${MAX_BYTES_PER_PARSE_TASK:-8589934592}
+      HTTP_READ_HEADER_TIMEOUT_SECONDS: ${HTTP_READ_HEADER_TIMEOUT_SECONDS:-10}
+      HTTP_READ_TIMEOUT_SECONDS: ${HTTP_READ_TIMEOUT_SECONDS:-1800}
+      HTTP_WRITE_TIMEOUT_SECONDS: ${HTTP_WRITE_TIMEOUT_SECONDS:-600}
+      HTTP_IDLE_TIMEOUT_SECONDS: ${HTTP_IDLE_TIMEOUT_SECONDS:-120}
+      HTTP_SHUTDOWN_TIMEOUT_SECONDS: ${HTTP_SHUTDOWN_TIMEOUT_SECONDS:-30}
+      LLM_API_BASE_URL: ${LLM_API_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-qwen-plus}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-120}
+      LLM_MAX_MATCHES: ${LLM_MAX_MATCHES:-50}
+      LLM_MAX_INPUT_BYTES: ${LLM_MAX_INPUT_BYTES:-200000}
+      AI_MAX_TOKENS_PER_FILE: ${AI_MAX_TOKENS_PER_FILE:-20000}
+      AI_DAILY_TOKEN_QUOTA: ${AI_DAILY_TOKEN_QUOTA:-1000000}
+      LOGMASTER_UPLOAD_TOKEN: ${LOGMASTER_UPLOAD_TOKEN:-}
+      LOGMASTER_UPLOAD_OWNER_OPEN_ID: ${LOGMASTER_UPLOAD_OWNER_OPEN_ID:-}
+    ports:
+      - "8080:8080"
+    volumes:
+      - logs:/var/lib/logmaster/logs
+
+volumes:
+  pgdata:
+  logs:

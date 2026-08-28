@@ -20,12 +20,23 @@ const MaxSupportedDevices = 64
 
 type State string
 
+type DiskState string
+
+const (
+	DiskNormal   DiskState = "normal"
+	DiskWarning  DiskState = "warning"
+	DiskReadOnly DiskState = "read_only"
+	DiskFull     DiskState = "full"
+)
+
 const (
 	StateDisconnected State = "disconnected"
 	StateConnecting   State = "connecting"
 	StateCollecting   State = "collecting"
 	StateReconnecting State = "reconnecting"
 	StateDiskFull     State = "disk_full"
+	StateDiskWarning  State = "disk_warning"
+	StateDiskReadOnly State = "disk_read_only"
 	StateError        State = "error"
 )
 
@@ -63,6 +74,7 @@ type DeviceConfig struct {
 	TestTaskID       string
 	TestTaskName     string
 	UploaderName     string
+	UploaderEmail    string
 	Remark           string
 	ScenarioIDs      []string
 	CollectorVersion string
@@ -80,14 +92,15 @@ func (c DeviceConfig) persistEnabled() bool { return c.Persist || !c.PreviewOnly
 func (c DeviceConfig) uploadEnabled() bool { return c.UploadEnabled || !c.LocalOnly }
 
 type Config struct {
-	MaxDevices     int
-	EventCapacity  int
-	SpoolDirectory string
-	MaxDiskBytes   int64
-	ProjectName    string
-	Version        string
-	Reconnect      serialagent.ReconnectConfig
-	DiskCheckEvery time.Duration
+	MaxDevices            int
+	EventCapacity         int
+	SpoolDirectory        string
+	MaxDiskBytes          int64
+	StorageWarningPercent int
+	ProjectName           string
+	Version               string
+	Reconnect             serialagent.ReconnectConfig
+	DiskCheckEvery        time.Duration
 }
 
 type RuleHit struct {

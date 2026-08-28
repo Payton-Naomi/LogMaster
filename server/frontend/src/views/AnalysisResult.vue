@@ -1,8 +1,9 @@
 <template>
-  <div class="page analysis-page" v-loading="loading">
+  <div class="page analysis-page" :class="{ 'is-loading': loading }">
+    <div v-if="loading" class="loading-progress" aria-hidden="true" />
     <header class="page-heading">
-      <div class="title"><el-button text circle :icon="ArrowLeft" title="返回任务详情" @click="router.push(`/task/${taskId}`)" /><div><h1>解析结果</h1><p>{{ task.original_name || taskId }}</p></div></div>
-      <div class="heading-actions"><el-tag v-if="task.scenario_name" effect="plain">{{ task.scenario_name }}</el-tag><el-button :icon="Download" :disabled="!results.length" @click="exportResults">导出结果</el-button></div>
+      <div class="title"><el-button text circle :icon="ArrowLeft" title="返回任务详情" @click="router.push(`/task/${taskId}`)" /><div><h1>解析结果</h1><p>{{ selectedFilePath || task.original_name || taskId }}</p></div></div>
+      <div class="heading-actions"><el-tag v-if="task.scenario_name" effect="plain">{{ task.scenario_name }}</el-tag><template v-if="aiEnabled"><el-button :loading="agentActionLoading" @click="retryAgentAnalysis">重试 AI</el-button><el-button v-if="agentResults.length" :icon="Download" @click="downloadAgentResults">下载 AI 分析结果</el-button><el-button v-if="!aiRetryRequired && ['queued','running'].includes(task.ai_status)" type="warning" plain @click="cancelAgentAnalysis">取消 AI</el-button></template></div>
     </header>
     <el-alert v-if="loadError" class="page-error" :title="loadError" type="error" show-icon :closable="false" />
     <el-alert v-if="agentError" class="page-error" :title="agentError" type="warning" show-icon :closable="false" />
@@ -32,12 +33,30 @@
       </div>
     </section>
 
+    <section v-if="aiEnabled || agentReady || agentLoading" class="panel ai-summary-panel">
+      <div class="panel-heading"><div><h2>AI 总结</h2><p>基于日志命中行及前后文生成的分析结论</p></div><span v-if="!aiEnabled">AI 功能已关闭</span><span v-else-if="aiRetryRequired">等待提交 AI 分析</span><span v-else-if="agentLoading || ['queued','running'].includes(task.ai_status)">AI 正在分析，请稍候...</span><span v-else-if="agentResults.length">{{ agentResults.length }} 个文件 · {{ agentStatusText }}</span><span v-else>暂无 AI 结果</span></div>
+      <el-alert v-if="!aiEnabled" title="AI 分析功能已关闭。请点击右上角 AI 开关开启功能，再点击“重试 AI”开始分析。" type="warning" :closable="false" show-icon />
+      <el-alert v-else-if="aiRetryRequired" title="AI 分析尚未启动，请点击右上方“重试 AI”提交分析任务。" type="warning" :closable="false" show-icon />
+      <el-alert v-else-if="agentLoading || ['queued','running'].includes(task.ai_status)" title="AI 正在分析，通常需要几秒到几十秒，请耐心等待，页面会自动更新。" type="info" :closable="false" show-icon />
+      <el-alert v-else-if="!agentResults.length" title="AI 分析可能仍在后台处理中，请耐心等待后刷新页面；关键字分析结果不受影响。" type="info" :closable="false" show-icon />
+      <div v-for="item in agentResults" :key="`${item.log_file_id || item.file_path}-${item.updated_at || item.created_at || item.status}`" class="ai-file-result">
+        <div class="ai-file-heading"><strong>{{ item.file_path || '当前日志文件' }}</strong><div><el-button v-if="item.log_file_id && item.status === 'failed'" text size="small" @click="retryAgentFileResult(item)">重试</el-button><el-button text size="small" :icon="CopyDocument" @click="copyText(item.summary || item.error_message || '')">复制</el-button><el-tag :type="agentTagType(item.status)" effect="plain">{{ agentStatusLabel(item.status) }}</el-tag></div></div>
+        <p v-if="item.status === 'completed' && item.summary" class="ai-summary-copy">{{ item.summary }}</p>
+        <p v-else-if="item.status === 'failed'" class="ai-summary-error">{{ item.error_message || 'AI 分析失败，请稍后重试' }}</p>
+        <div v-if="item.findings?.length" class="ai-findings">
+          <article v-for="(finding, index) in item.findings" :key="`${finding.line_number || index}-${finding.category || 'finding'}`" class="ai-finding">
+            <div class="ai-finding-heading"><strong>{{ finding.root_cause || finding.category || '诊断结论' }}</strong><div><el-button text size="small" :icon="CopyDocument" @click="copyText(formatFinding(finding))">复制</el-button><el-tag v-if="finding.confidence != null" size="small" effect="plain">置信度 {{ Math.round(finding.confidence * 100) }}%</el-tag></div></div>
+            <dl><div v-if="finding.evidence"><dt>证据</dt><dd>{{ finding.evidence }}</dd></div><div v-if="finding.impact"><dt>影响</dt><dd>{{ finding.impact }}</dd></div><div v-if="finding.suggestion"><dt>建议</dt><dd>{{ finding.suggestion }}</dd></div></dl>
+          </article>
+        </div>
+      </div>
+    </section>
+
     <section class="panel result-panel">
       <div class="filters">
         <el-input v-model="search" :prefix-icon="Search" clearable placeholder="搜索规则、文件或日志内容" />
         <el-select v-model="level" clearable placeholder="全部级别"><el-option label="错误" value="error" /><el-option label="警告" value="warning" /><el-option label="信息" value="info" /></el-select>
-        <el-select v-model="category" clearable placeholder="全部场景"><el-option v-for="item in categories" :key="item" :label="item" :value="item" /></el-select>
-        <span>共 {{ filtered.length }} 条</span>
+        <el-select v-model="category" clearable placeholder="全部场景"><el-option v-for="item in categories" :key="item" :label="item" :value="item" /></el-select><el-select v-model="groupBy" placeholder="排序方式"><el-option label="按时间倒序（最新在前）" value="time_desc" /><el-option label="按时间正序（最早在前）" value="time_asc" /><el-option label="按分类分组" value="category" /><el-option label="按级别分组" value="level" /></el-select><span>共 {{ filtered.length }} 条</span>
       </div>
       <el-table :data="paged" @row-click="openResult">
         <el-table-column prop="level" label="级别" width="80"><template #default="scope"><el-tag :type="levelType(scope.row.level)" effect="plain">{{ levelLabel(scope.row.level) }}</el-tag></template></el-table-column>
@@ -47,10 +66,10 @@
         <el-table-column prop="file_path" label="文件" min-width="190" show-overflow-tooltip />
         <el-table-column prop="line_number" label="行号" width="75" />
         <el-table-column prop="content" label="日志内容" min-width="320" show-overflow-tooltip />
-        <el-table-column label="操作" width="100"><template #default="scope"><el-button type="primary" link @click.stop="openResult(scope.row)">看上下文</el-button></template></el-table-column>
+        <el-table-column label="备注" width="150"><template #default="scope"><el-button type="primary" link @click.stop="openResult(scope.row)">添加/查看备注</el-button></template></el-table-column>
         <template #empty><el-empty description="数据库中暂无解析结果" /></template>
       </el-table>
-      <footer><span>点击结果行查看关键字前后各 50 行日志和可能原因</span><el-pagination v-model:current-page="page" :page-size="pageSize" :total="filtered.length" layout="prev, pager, next" /></footer>
+      <footer><span>点击结果行查看关键字前后各 50 行日志和可能原因</span><el-pagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="[10, 20, 50, 100]" :total="filtered.length" layout="total, sizes, prev, pager, next, jumper" @size-change="onSizeChange" /></footer>
     </section>
 
     <el-drawer v-model="drawer" class="analysis-context-drawer" title="错误上下文" size="680px">
@@ -58,44 +77,84 @@
         <div class="detail-head"><div><el-tag :type="levelType(selected.level)" effect="plain">{{ levelLabel(selected.level) }}</el-tag><strong>{{ selected.rule_name || selected.matched_text }}</strong></div><span>{{ formatTime(selected.event_time) }}</span></div>
         <dl class="detail-meta"><div><dt>文件</dt><dd>{{ selected.file_path }}</dd></div><div><dt>错误行</dt><dd>{{ selected.line_number }}</dd></div><div><dt>分类</dt><dd>{{ selected.category || '未分类' }}</dd></div><div><dt>窗口</dt><dd>{{ formatTime(selected.context_start_time) }} 至 {{ formatTime(selected.context_end_time) }}</dd></div></dl>
 
-        <section class="drawer-section"><div class="section-title"><h3>可能原因</h3><span>{{ selected.related_causes?.length || 0 }} 项</span></div><el-alert v-if="!selected.related_causes?.length" title="当前时间窗口内未识别到其他关联原因" type="info" :closable="false" /><div v-for="cause in selected.related_causes" :key="`${cause.kind}-${cause.line_number}`" class="cause-row"><div><el-tag type="warning" effect="plain">{{ Math.round((cause.confidence || 0) * 100) }}%</el-tag><strong>{{ cause.label }}</strong><span>第 {{ cause.line_number }} 行 · {{ formatTime(cause.timestamp) }}</span></div><p>{{ cause.reason }}</p><code>{{ cause.content }}</code></div></section>
+        <section class="drawer-section ai-detail-section"><div class="section-title"><h3>AI 解读</h3><span v-if="selectedAiFinding?.confidence != null">置信度 {{ Math.round(selectedAiFinding.confidence * 100) }}%</span></div><el-alert v-if="!selectedAiFinding" title="当前异常暂无对应的 AI 解读" type="info" :closable="false" /><dl v-else class="agent-finding-detail"><div v-if="selectedAiFinding.root_cause"><dt>可能原因</dt><dd>{{ selectedAiFinding.root_cause }}</dd></div><div v-if="selectedAiFinding.evidence"><dt>证据</dt><dd>{{ selectedAiFinding.evidence }}</dd></div><div v-if="selectedAiFinding.impact"><dt>影响</dt><dd>{{ selectedAiFinding.impact }}</dd></div><div v-if="selectedAiFinding.suggestion"><dt>建议</dt><dd>{{ selectedAiFinding.suggestion }}</dd></div></dl></section>
 
-        <section class="drawer-section"><div class="section-title"><h3>关键字前后各 50 行</h3><span>{{ selected.context_lines?.length || 0 }} 行</span></div><div class="context-window"><div v-for="line in contextLines" :key="`${line.line_number}-${line.content}`" :class="['context-line', { hit: line.is_hit, cause: isCauseLine(line) }]" class="context-line"><span class="line-number">{{ line.line_number }}</span><span class="line-time">{{ shortTime(line.timestamp) }}</span><span class="line-content">{{ line.content }}</span></div><div v-if="!contextLines.length" class="fallback-line"><span class="line-number">{{ selected.line_number }}</span><span class="line-content">{{ selected.content }}</span></div></div></section>
+        <section class="drawer-section"><div class="section-title"><h3>关键字前后各 50 行</h3><span>{{ selected.context_lines?.length || 0 }} 行</span></div><div class="context-window"><div v-for="line in contextLines" :key="`${line.line_number}-${line.content}`" :class="['context-line', { hit: line.is_hit }]" class="context-line"><span class="line-number">{{ line.line_number }}</span><span class="line-time">{{ shortTime(line.timestamp) }}</span><span class="line-content">{{ line.content }}</span></div><div v-if="!contextLines.length" class="fallback-line"><span class="line-number">{{ selected.line_number }}</span><span class="line-content">{{ selected.content }}</span></div></div></section>
+        <section class="drawer-section result-actions"><div class="section-title"><h3>异常备注</h3><span>添加备注或 Jira 问题链接</span></div><el-input v-model="jiraKey" clearable maxlength="500" placeholder="Jira 问题链接（可选，如 https://jira.example.com/browse/BUG-123）" /><el-input v-model="commentText" type="textarea" :rows="3" maxlength="1000" placeholder="添加备注（可选）" /><el-button type="primary" :loading="commentSaving" :disabled="!commentText.trim() && !jiraKey.trim()" @click="saveComment">保存</el-button><div v-if="comments.length" class="comment-list"><p v-for="item in comments" :key="item.id"><strong>{{ item.author_name || '用户' }}</strong><el-link v-if="item.defect_id" :href="item.defect_id" target="_blank" rel="noopener noreferrer" type="primary" class="jira-link">Jira 问题</el-link><span v-if="item.defect_id" class="jira-url">{{ item.defect_id }}</span><span v-if="item.content">{{ item.content }}</span> <small>{{ formatTime(item.created_at) }}</small></p></div><el-empty v-else description="暂无备注或 Jira 链接" :image-size="54" /></section>
       </template>
     </el-drawer>
+
+    <el-dialog v-model="agentFindingDialog" class="agent-finding-dialog" title="AI 解读" width="560px">
+      <template v-if="selectedAgentFinding">
+        <div class="agent-finding-meta">
+          <el-tag :type="levelType(selectedAgentFinding.severity)" effect="plain">{{ levelLabel(selectedAgentFinding.severity) }}</el-tag>
+          <span v-if="selectedAgentFinding.file_path || selectedAgentFinding._filePath">{{ selectedAgentFinding.file_path || selectedAgentFinding._filePath }}</span>
+          <span v-if="selectedAgentFinding.line_number">第 {{ selectedAgentFinding.line_number }} 行</span>
+        </div>
+        <dl class="agent-finding-detail">
+          <div v-if="selectedAgentFinding.root_cause"><dt>可能原因</dt><dd>{{ selectedAgentFinding.root_cause }}</dd></div>
+          <div v-if="selectedAgentFinding.evidence"><dt>证据</dt><dd>{{ selectedAgentFinding.evidence }}</dd></div>
+          <div v-if="selectedAgentFinding.impact"><dt>影响</dt><dd>{{ selectedAgentFinding.impact }}</dd></div>
+          <div v-if="selectedAgentFinding.suggestion"><dt>建议</dt><dd>{{ selectedAgentFinding.suggestion }}</dd></div>
+        </dl>
+        <p v-if="selectedAgentFinding.confidence != null" class="agent-confidence">置信度 {{ Math.round(selectedAgentFinding.confidence * 100) }}%</p>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ArrowRight, Close, Download, Search } from '@element-plus/icons-vue'
+import { ArrowLeft, ArrowRight, Close, CopyDocument, Download, Search } from '@element-plus/icons-vue'
+import { ElMessage, ElNotification } from 'element-plus'
 import * as echarts from 'echarts'
-import { getAgentResults, getTaskDetail, getTaskResults } from '@/api/task'
+import { cancelAgent, getAgentResults, getTaskDetail, getTaskResults, retryAgent, retryAgentFile } from '@/api/task'
+import { getAIEnabled } from '@/utils/aiPreference'
 
 const route = useRoute()
 const router = useRouter()
 const taskId = route.params.taskId
+const selectedFileId = String(route.query.file_id || '')
+const selectedFilePath = String(route.query.file_path || '')
 const loading = ref(false)
 const loadError = ref('')
 const agentError = ref('')
+const agentLoading = ref(false)
+const agentReady = ref(false)
 const task = ref({})
 const results = ref([])
 const agentResults = ref([])
 const search = ref('')
 const level = ref('')
 const category = ref('')
+const groupBy = ref('time_desc')
 const page = ref(1)
-const pageSize = 20
+const pageSize = ref(20)
 const drawer = ref(false)
 const selected = ref(null)
+const selectedAgentFinding = ref(null)
+const agentFindingDialog = ref(false)
+const agentActionLoading = ref(false)
+const aiEnabled = ref(getAIEnabled())
+const aiRetrySubmitted = ref(false)
 const timelineRef = ref(null)
 const clusterEvents = ref([])
 const clusterTitle = ref('')
+const commentText = ref('')
+const jiraKey = ref('')
+const comments = ref([])
+const commentSaving = ref(false)
 let chart = null
+let agentRefreshTimer = null
+let agentRefreshActive = false
+let agentCompletionTimer = null
+let agentCompletionPolling = false
+function syncAIEnabled(event) { aiEnabled.value = Boolean(event?.detail); if (!aiEnabled.value) { aiRetrySubmitted.value = false; agentLoading.value = false; if (agentRefreshTimer) window.clearTimeout(agentRefreshTimer) } }
 
 const categories = computed(() => [...new Set(results.value.map(item => item.category).filter(Boolean))])
-const agentFindings = computed(() => agentResults.value.flatMap(item => item.findings || []))
+const aiRetryRequired = computed(() => aiEnabled.value && !agentResults.value.length && !aiRetrySubmitted.value && !['queued', 'running'].includes(task.value.ai_status))
+const agentFindings = computed(() => agentResults.value.flatMap(item => (item.findings || []).map(finding => ({ ...finding, _filePath: finding.file_path || item.file_path || '' }))))
 const relatedCauseCount = computed(() => results.value.reduce((sum, item) => sum + (item.related_causes?.length || 0), 0))
 const timelineResults = computed(() => results.value.filter(item => item.level === 'error' && item.event_time))
 const timelineGroups = computed(() => {
@@ -121,18 +180,60 @@ const timelineGroups = computed(() => {
     .sort((left, right) => left.time - right.time || left.category.localeCompare(right.category))
 })
 const contextLines = computed(() => selected.value?.context_lines || [])
+const selectedAiFinding = computed(() => findAgentFinding(selected.value))
 const filtered = computed(() => {
   const text = search.value.trim().toLowerCase()
-  return results.value.filter(item => (!level.value || item.level === level.value) && (!category.value || item.category === category.value) && (!text || `${item.rule_name}${item.matched_text}${item.file_path}${item.content}`.toLowerCase().includes(text)))
+  const items = results.value.filter(item => (!level.value || item.level === level.value) && (!category.value || item.category === category.value) && (!text || `${item.rule_name}${item.matched_text}${item.file_path}${item.content}`.toLowerCase().includes(text)))
+  return [...items].sort((a, b) => {
+    if (groupBy.value === 'category') return String(a.category || '').localeCompare(String(b.category || ''))
+    if (groupBy.value === 'level') return String(a.level || '').localeCompare(String(b.level || ''))
+    const difference = (Date.parse(a.event_time) || 0) - (Date.parse(b.event_time) || 0)
+    return groupBy.value === 'time_asc' ? difference : -difference
+  })
 })
-const paged = computed(() => filtered.value.slice((page.value - 1) * pageSize, page.value * pageSize))
+const paged = computed(() => filtered.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value))
 
-const levelLabel = value => ({ error: '错误', warning: '警告', info: '信息' }[value] || value || '未知')
-const levelType = value => ({ error: 'danger', warning: 'warning', info: 'info' }[value] || 'info')
+const levelLabel = value => ({ critical: '严重', error: '错误', warning: '警告', info: '信息' }[value] || value || '未知')
+const levelType = value => ({ critical: 'danger', error: 'danger', warning: 'warning', info: 'info' }[value] || 'info')
 const formatTime = value => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '-'
 const shortTime = value => value ? new Date(value).toLocaleTimeString('zh-CN', { hour12: false, fractionalSecondDigits: 3 }) : '--:--:--'
 const isCauseLine = line => selected.value?.related_causes?.some(item => item.line_number === line.line_number)
 const errorMessage = (error, fallback) => error?.response?.data?.message || error?.message || fallback
+const agentStatusText = computed(() => { const failed = agentResults.value.filter(item => item.status === 'failed').length; return failed ? `${failed} 个失败` : '全部完成' })
+const agentStatusLabel = value => ({ completed: '分析完成', failed: '分析失败', queued: '排队中', running: '分析中', cancelled: '已取消', partial_failed: '部分失败' }[value] || '处理中')
+const agentTagType = value => ({ completed: 'success', failed: 'danger', partial_failed: 'warning', running: 'primary', queued: 'warning', cancelled: 'info' }[value] || 'info')
+const formatFinding = finding => [finding.root_cause && `原因：${finding.root_cause}`, finding.evidence && `证据：${finding.evidence}`, finding.impact && `影响：${finding.impact}`, finding.suggestion && `建议：${finding.suggestion}`].filter(Boolean).join('\n')
+async function copyText(value) { if (!value) return ElMessage.info('暂无可复制内容'); try { await navigator.clipboard.writeText(String(value)); ElMessage.success('内容已复制') } catch { ElMessage.warning('复制失败，请检查浏览器剪贴板权限') } }
+function copyResult(item) { copyText([item.event_time, levelLabel(item.level), item.file_path && `${item.file_path}:${item.line_number}`, item.rule_name || item.matched_text, item.content].filter(Boolean).join(' | ')) }
+const normalizePath = value => String(value || '').replaceAll('\\', '/').replace(/^\.\//, '').toLowerCase()
+const matchesSelectedFile = item => {
+  if (!selectedFilePath) return true
+  const itemPath = normalizePath(item.file_path)
+  const targetPath = normalizePath(selectedFilePath)
+  return itemPath === targetPath || itemPath.endsWith(`/${targetPath}`)
+}
+const filterAgentResults = items => {
+  if (!selectedFileId && !selectedFilePath) return items
+  return items.filter(item => (selectedFileId && String(item.log_file_id || '') === selectedFileId) || (selectedFilePath && matchesSelectedFile(item)))
+}
+function findAgentFinding(result) {
+  if (!result || !agentFindings.value.length) return null
+  const lineNumber = Number(result.line_number)
+  if (!Number.isFinite(lineNumber)) return null
+  const resultPath = normalizePath(result.file_path)
+  return agentFindings.value.find(finding => Number(finding.line_number) === lineNumber
+    && normalizePath(finding.file_path || finding._filePath) === resultPath)
+    || (agentFindings.value.filter(finding => Number(finding.line_number) === lineNumber).length === 1
+      ? agentFindings.value.find(finding => Number(finding.line_number) === lineNumber)
+      : null)
+    || null
+}
+function openAgentFinding(result) {
+  const finding = findAgentFinding(result)
+  if (!finding) return
+  selectedAgentFinding.value = finding
+  agentFindingDialog.value = true
+}
 
 async function loadAllResults() {
   const items = []
@@ -157,12 +258,18 @@ async function load() {
     if (detailResult.status === 'rejected') throw detailResult.reason
     if (parsedResult.status === 'rejected') throw parsedResult.reason
     task.value = detailResult.value.task
-    results.value = parsedResult.value
+    results.value = parsedResult.value.filter(matchesSelectedFile)
+    loading.value = false
     if (agentsResult.status === 'fulfilled') {
-      agentResults.value = agentsResult.value || []
+      agentResults.value = filterAgentResults(agentsResult.value || [])
+      if (aiEnabled.value && !aiRetryRequired.value && !agentResults.value.length && task.value.status === 'completed') {
+        refreshAgentResults()
+      }
+      agentReady.value = true
     } else {
       agentResults.value = []
       agentError.value = `Agent 诊断结果加载失败：${errorMessage(agentsResult.reason, '请检查 agent-results 接口')}`
+      agentReady.value = true
     }
     await nextTick()
     drawTimeline()
@@ -171,6 +278,8 @@ async function load() {
     task.value = {}
     results.value = []
     agentResults.value = []
+    agentLoading.value = false
+    agentReady.value = false
   } finally {
     loading.value = false
   }
@@ -229,23 +338,111 @@ function drawTimeline() {
   })
 }
 
-function openResult(item) { selected.value = item; drawer.value = true }
+async function openResult(item) { selected.value = item; comments.value = []; commentText.value = ''; jiraKey.value = ''; drawer.value = true; try { const { getResultComments } = await import('@/api/result'); comments.value = await getResultComments(item.id) || [] } catch { /* comments are optional */ } }
 
-function exportResults() {
-  const header = 'event_time,level,rule_name,category,file_path,line_number,content,related_causes'
-  const rows = results.value.map(item => [item.event_time || '', item.level, item.rule_name || item.matched_text, item.category || '', item.file_path, item.line_number, item.content, (item.related_causes || []).map(cause => cause.label).join('|')].map(value => `"${String(value).replaceAll('"', '""')}"`).join(','))
-  const url = URL.createObjectURL(new Blob([`\uFEFF${[header, ...rows].join('\n')}`], { type: 'text/csv;charset=utf-8' }))
-  const link = document.createElement('a'); link.href = url; link.download = `${taskId}-analysis.csv`; link.click(); URL.revokeObjectURL(url)
+function downloadAgentResults() {
+  const lines = [`# AI 分析结果`, ``, `- 任务：${task.value.original_name || taskId}`, `- 导出时间：${formatTime(new Date().toISOString())}`, ``]
+  agentResults.value.forEach((item, index) => {
+    lines.push(`## ${index + 1}. ${item.file_path || '当前日志文件'}`, ``, `- 状态：${agentStatusLabel(item.status)}`)
+    if (item.status === 'completed' && item.summary) lines.push(``, `### 总结`, ``, item.summary)
+    if (item.status === 'failed') lines.push(``, `> 分析失败：${item.error_message || '未知错误'}`)
+    ;(item.findings || []).forEach((finding, findingIndex) => {
+      lines.push(``, `### 诊断结论 ${findingIndex + 1}`, ``, formatFinding(finding) || '暂无详细结论')
+    })
+    lines.push(``)
+  })
+  const blob = new Blob([`\uFEFF${lines.join('\r\n')}`], { type: 'text/markdown;charset=utf-8' })
+  const link = document.createElement('a')
+  link.href = URL.createObjectURL(blob)
+  link.download = `${taskId}-AI分析结果.md`
+  link.click()
+  URL.revokeObjectURL(link.href)
+  ElMessage.success('AI 分析结果已下载')
 }
 
-watch([search, level, category], () => { page.value = 1 })
+async function refreshAgentResults() {
+  if (agentRefreshActive) return
+  agentRefreshActive = true
+  agentLoading.value = true
+  agentError.value = ''
+  try {
+    for (let attempt = 0; attempt < 3 && !agentResults.value.length; attempt += 1) {
+      if (attempt) await new Promise(resolve => { agentRefreshTimer = window.setTimeout(resolve, attempt === 1 ? 3000 : 5000) })
+      const items = filterAgentResults(await getAgentResults(taskId) || [])
+      agentResults.value = items
+      if (items.length) break
+    }
+  } catch (error) {
+    agentError.value = `Agent 诊断结果加载失败：${errorMessage(error, '请稍后重试')}`
+  } finally {
+    agentLoading.value = false
+    agentRefreshActive = false
+    agentRefreshTimer = null
+  }
+}
+
+function stopAgentCompletionPolling() { if (agentCompletionTimer) window.clearTimeout(agentCompletionTimer); agentCompletionTimer = null; agentCompletionPolling = false }
+function emitAICompletionNotification(status) {
+  const completed = status === 'completed'
+  window.dispatchEvent(new CustomEvent('logmaster-ai-notification', { detail: {
+    id: `local-ai-${taskId}-${status}-${Date.now()}`,
+    type: completed ? 'ai_completed' : 'ai_failed',
+    notification_type: completed ? 'ai_completed' : 'ai_failed',
+    task_id: taskId,
+    title: completed ? 'AI 分析完成' : 'AI 分析存在失败',
+    message: completed ? 'AI 分析已完成，可查看分析结果' : 'AI 分析未全部成功，请打开任务查看失败原因',
+    is_read: false,
+    local: true
+  } }))
+}
+async function monitorAgentCompletion() {
+  if (agentCompletionPolling || !aiEnabled.value) return
+  agentCompletionPolling = true
+  const check = async (attempt = 0) => {
+    if (!aiEnabled.value || attempt >= 40) { stopAgentCompletionPolling(); return }
+    try {
+      const detail = await getTaskDetail(taskId)
+      const currentTask = detail?.task || detail || {}
+      task.value = currentTask
+      const status = currentTask.ai_status
+      if (['completed', 'partial_failed', 'failed', 'cancelled'].includes(status)) {
+        await load()
+        emitAICompletionNotification(status)
+        stopAgentCompletionPolling()
+        return
+      }
+    } catch { /* Next poll retries transient errors. */ }
+    agentCompletionTimer = window.setTimeout(() => check(attempt + 1), 3000)
+  }
+  await check()
+}
+async function retryAgentAnalysis() { agentActionLoading.value = true; try { if (selectedFileId) await retryAgentFile(taskId, selectedFileId); else await retryAgent(taskId); aiRetrySubmitted.value = true; await load(); monitorAgentCompletion() } catch (error) { ElNotification({ title: 'AI 重试失败', message: errorMessage(error, '请稍后重试'), type: 'error', duration: 5000, position: 'top-right' }) } finally { agentActionLoading.value = false } }
+async function retryAgentFileResult(item) { agentActionLoading.value = true; try { await retryAgentFile(taskId, item.log_file_id); ElMessage.success('文件 AI 重试已提交'); await load() } catch (error) { ElMessage.error(errorMessage(error, '文件 AI 重试失败')) } finally { agentActionLoading.value = false } }
+async function cancelAgentAnalysis() { try { await cancelAgent(taskId); ElMessage.success('AI 取消请求已提交'); await load() } catch (error) { ElMessage.error(errorMessage(error, '取消 AI 失败')) } }
+async function saveComment() { const content = commentText.value.trim(); const defectId = jiraKey.value.trim(); if (!selected.value || (!content && !defectId)) return; commentSaving.value = true; try { const { addResultComment, getResultComments } = await import('@/api/result'); await addResultComment(selected.value.id, { content: content || '关联 Jira 问题', ...(defectId ? { defect_id: defectId } : {}) }); commentText.value = ''; jiraKey.value = ''; comments.value = await getResultComments(selected.value.id) || []; ElMessage.success('已保存') } catch (error) { ElMessage.error(errorMessage(error, '保存失败')) } finally { commentSaving.value = false } }
+
+function onSizeChange(size) {
+  localStorage.setItem('analysisResultPageSize', String(size))
+  page.value = 1
+}
+watch([search, level, category, groupBy], () => { page.value = 1 })
+watch(pageSize, () => { page.value = 1 })
 function resizeTimeline() { chart?.resize() }
-onMounted(() => { window.addEventListener('resize', resizeTimeline); load() })
-onBeforeUnmount(() => { window.removeEventListener('resize', resizeTimeline); chart?.dispose() })
+onMounted(() => {
+  const saved = Number(localStorage.getItem('analysisResultPageSize'))
+  if ([10, 20, 50, 100].includes(saved)) pageSize.value = saved
+  window.addEventListener('resize', resizeTimeline)
+  window.addEventListener('logmaster-ai-preference', syncAIEnabled)
+  load()
+})
+onBeforeUnmount(() => { window.removeEventListener('resize', resizeTimeline); window.removeEventListener('logmaster-ai-preference', syncAIEnabled); if (agentRefreshTimer) window.clearTimeout(agentRefreshTimer); stopAgentCompletionPolling(); chart?.dispose() })
 </script>
 
 <style scoped>
-.page { height: 100%; overflow: auto; color: #1f2937; }
+.analysis-page { position: relative; min-width: 0; overflow-x: hidden; }
+.loading-progress { position: absolute; z-index: 20; top: 0; left: 0; width: 35%; height: 3px; border-radius: 0 3px 3px 0; background: linear-gradient(90deg, #06b6d4, #67e8f9); box-shadow: 0 0 12px rgba(34, 211, 238, .7); animation: loading-progress 1.4s ease-in-out infinite; }
+@keyframes loading-progress { 0% { transform: translateX(-100%); opacity: .35; } 50% { opacity: 1; } 100% { transform: translateX(285%); opacity: .35; } }
+.page { height: 100%; overflow: auto; color: #1f2937; }.result-actions{display:grid;gap:10px}.result-actions .el-textarea{width:100%}.comment-list{display:grid;gap:7px}.comment-list p{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:0;padding:8px 10px;border-radius:5px;background:#f5f7fa;color:#536174;font-size:11px;line-height:1.5}.comment-list small{color:#8a94a3}.jira-link{font-size:11px}.jira-url{overflow:hidden;max-width:100%;color:#3478dc;text-overflow:ellipsis;white-space:nowrap}
 .page-heading, .title, .heading-actions, .filters, .panel-heading, .detail-head, .section-title { display: flex; align-items: center; }
 .page-heading { justify-content: space-between; margin-bottom: 18px; }.title { gap: 8px; }.title h1 { margin: 0; font-size: 21px; }.title p { margin: 4px 0 0; color: #8a94a3; font: 11px Consolas, monospace; }.heading-actions { gap: 10px; }
 .summary { display: grid; grid-template-columns: repeat(4, 1fr); margin-bottom: 16px; border: 1px solid #dfe3e8; border-radius: 6px; background: #fff; }.summary div { display: flex; align-items: center; flex-direction: column; gap: 6px; padding: 18px; border-right: 1px solid #edf0f3; }.summary div:last-child { border-right: 0; }.summary span { color: #8a94a3; font-size: 11px; }.summary strong { font-size: 22px; }.summary .error { color: #d95858; }.summary .warning { color: #c9861b; }
@@ -255,6 +452,18 @@ onBeforeUnmount(() => { window.removeEventListener('resize', resizeTimeline); ch
 .detail-head { justify-content: space-between; padding-bottom: 15px; border-bottom: 1px solid #edf0f3; }.detail-head > div { display: flex; align-items: center; gap: 9px; }.detail-head > span { color: #8a94a3; font-size: 11px; }.detail-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 13px 18px; margin: 16px 0 22px; }.detail-meta div { min-width: 0; }.detail-meta dt { color: #8a94a3; font-size: 11px; }.detail-meta dd { overflow: hidden; margin: 4px 0 0; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }.drawer-section { margin-top: 22px; }.section-title { justify-content: space-between; margin-bottom: 10px; }.section-title h3 { margin: 0; font-size: 14px; }.section-title span { color: #8a94a3; font-size: 11px; }.cause-row { padding: 11px 0; border-bottom: 1px solid #edf0f3; }.cause-row > div { display: flex; align-items: center; gap: 8px; }.cause-row > div span { color: #8a94a3; font-size: 10px; }.cause-row p { margin: 7px 0; color: #4a5568; font-size: 12px; }.cause-row code { display: block; overflow: hidden; color: #536174; font: 11px/1.45 Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
 .context-window { overflow: auto; max-height: 430px; padding: 7px 0; border: 1px solid #dfe3e8; border-radius: 4px; background: #101827; }.context-line { display: grid; grid-template-columns: 58px 102px minmax(0, 1fr); gap: 8px; padding: 4px 10px; color: #cbd5e1; font: 11px/1.45 Consolas, monospace; }.context-line.hit { background: rgb(207 69 69 / 28%); color: #fff; }.context-line.cause { background: rgb(201 134 27 / 16%); }.line-number { color: #7f8ea5; text-align: right; }.line-time { color: #91a8c7; }.line-content { overflow-wrap: anywhere; }.fallback-line { padding: 12px; color: #fff; font: 11px/1.5 Consolas, monospace; }
 @media (max-width: 900px) { .summary { grid-template-columns: repeat(2, 1fr); }.filters { flex-wrap: wrap; }.filters .el-input, .filters .el-select { width: 100%; }.filters > span { margin-left: 0; }.cluster-list { grid-template-columns: 1fr; }.cluster-heading > div { align-items: flex-start; flex-direction: column; gap: 3px; } }
+.ai-summary-panel { margin-bottom: 16px; }.ai-summary-panel .el-alert { margin-bottom: 12px; }.ai-file-result { padding: 14px 0; border-bottom: 1px solid #edf0f3; }.ai-file-result:last-child { border-bottom: 0; padding-bottom: 0; }.ai-file-heading,.ai-finding-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }.ai-file-heading strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }.ai-summary-copy,.ai-summary-error { margin:10px 0 0; color:#4a5568; font-size:13px; line-height:1.7; }.ai-summary-error { color:#c43e3e; }.ai-findings { display:grid; gap:9px; margin-top:12px; }.ai-finding { padding:11px 12px; border:1px solid #e5e9ef; border-radius:6px; background:#fafbfd; }.ai-finding-heading strong { font-size:12px; }.ai-finding dl { display:grid; gap:6px; margin:9px 0 0; }.ai-finding dl div { display:grid; grid-template-columns:42px minmax(0,1fr); gap:8px; }.ai-finding dt { color:#8a94a3; font-size:11px; }.ai-finding dd { margin:0; color:#536174; font-size:11px; line-height:1.55; }
+</style>
+
+<style scoped>
+.ai-summary-panel { border:1px solid rgba(255,255,255,.16)!important; background:rgba(255,255,255,.085)!important; box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 18px 52px rgba(0,0,0,.28)!important; }
+.ai-summary-panel .panel-heading p,.ai-summary-panel .panel-heading>span { color:#b7bec8; }
+.ai-summary-panel .ai-file-result { border-bottom-color:rgba(255,255,255,.12); }
+.ai-summary-panel .ai-summary-copy { color:#d5dde5; }
+.ai-summary-panel .ai-summary-error { color:#fda4af; }
+.ai-summary-panel .ai-finding { border-color:rgba(255,255,255,.13); background:rgba(0,0,0,.16); }
+.ai-summary-panel .ai-finding dt { color:#9da9b6; }
+.ai-summary-panel .ai-finding dd { color:#c9d2dc; }
 </style>
 
 <style scoped>

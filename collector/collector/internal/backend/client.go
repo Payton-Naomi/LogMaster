@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
@@ -63,6 +64,7 @@ type Config struct {
 const BuiltinUploadToken = "logmaster-internal-collector-v1"
 
 type Client struct {
+	mu            sync.RWMutex
 	baseURL       string
 	healthPath    string
 	inspectPath   string
@@ -70,6 +72,38 @@ type Client struct {
 	authorization string
 	gzip          bool
 	http          *http.Client
+}
+
+// ApplyConfig updates connection settings for subsequent requests. Existing
+// requests keep their own context and are not interrupted.
+func (c *Client) ApplyConfig(cfg Config) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.baseURL = strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
+	if cfg.HealthPath != "" {
+		c.healthPath = cfg.HealthPath
+	}
+	if cfg.InspectPath != "" {
+		c.inspectPath = cfg.InspectPath
+	}
+	if cfg.UploadPath != "" {
+		c.uploadPath = cfg.UploadPath
+	}
+	if strings.TrimSpace(cfg.Authorization) != "" {
+		c.authorization = strings.TrimSpace(cfg.Authorization)
+	}
+	c.gzip = cfg.Gzip
+	timeout := c.http.Timeout
+	if cfg.Timeout > 0 {
+		timeout = cfg.Timeout
+	}
+	c.http = &http.Client{Timeout: timeout}
+}
+
+func (c *Client) snapshot() (string, string, string, string, bool, *http.Client) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.baseURL, c.healthPath, c.inspectPath, c.uploadPath, c.gzip, c.http
 }
 
 type APIResponse[T any] struct {
@@ -105,6 +139,7 @@ type UploadSessionRequest struct {
 	TestTaskID          string   `json:"test_task_id"`
 	TestTaskName        string   `json:"test_task_name"`
 	UploaderName        string   `json:"uploader_name"`
+	UploaderEmail       string   `json:"uploader_email"`
 	Remark              string   `json:"remark"`
 	ScenarioIDs         []string `json:"scenario_ids"`
 	KeywordProfileID    string   `json:"keyword_profile_id"`
@@ -122,10 +157,65 @@ type UploadSessionRequest struct {
 }
 
 type UploadSessionAccepted struct {
-	UploadSessionID string `json:"upload_session_id"`
-	QueryCode       string `json:"query_code"`
-	ClientRequestID string `json:"client_request_id"`
-	Status          string `json:"status"`
+	UploadSessionID string          `json:"upload_session_id"`
+	QueryCode       string          `json:"query_code"`
+	ClientRequestID string          `json:"client_request_id"`
+	Status          string          `json:"status"`
+	UploaderName    string          `json:"uploader_name"`
+	UploaderEmail   string          `json:"uploader_email"`
+	ConfigSnapshot  json.RawMessage `json:"config_snapshot"`
+}
+
+type StandardKeyword struct {
+	ID          int64     `json:"id"`
+	Name        string    `json:"name"`
+	Category    string    `json:"category"`
+	Keyword     string    `json:"keyword"`
+	Scope       string    `json:"scope"`
+	Level       string    `json:"level"`
+	Description string    `json:"description"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type CollectorProject struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type CollectorScenario struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Enabled     bool     `json:"enabled"`
+	AllProjects bool     `json:"all_projects"`
+	Projects    []string `json:"projects"`
+	Keywords    []string `json:"keywords"`
+}
+
+type CollectorConfigSnapshot struct {
+	Projects  []CollectorProject  `json:"projects"`
+	Scenarios []CollectorScenario `json:"scenarios"`
+	Keywords  []StandardKeyword   `json:"keywords"`
+	SyncedAt  time.Time           `json:"synced_at"`
+}
+
+type PublicUploadBatch struct {
+	UploadID        string    `json:"upload_id"`
+	TaskID          string    `json:"task_id"`
+	ClientRequestID string    `json:"client_request_id"`
+	QueryCode       string    `json:"query_code"`
+	Status          string    `json:"status"`
+	OriginalName    string    `json:"original_name"`
+	ErrorType       string    `json:"error_type"`
+	ErrorMessage    string    `json:"error_message"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+type PublicUploadSession struct {
+	UploadSessionID string              `json:"upload_session_id"`
+	QueryCode       string              `json:"query_code"`
+	Status          string              `json:"status"`
+	Batches         []PublicUploadBatch `json:"batches"`
 }
 
 func New(cfg Config) *Client {
@@ -143,12 +233,13 @@ func New(cfg Config) *Client {
 }
 
 func (c *Client) Health(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+c.healthPath, nil)
+	baseURL, healthPath, _, _, _, client := c.snapshot()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+healthPath, nil)
 	if err != nil {
 		return err
 	}
 	c.authorize(req)
-	resp, err := c.http.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -166,17 +257,18 @@ func (c *Client) Health(ctx context.Context) error {
 }
 
 func (c *Client) CreateUploadSession(ctx context.Context, input UploadSessionRequest) (UploadSessionAccepted, error) {
+	baseURL, _, _, _, _, client := c.snapshot()
 	body, err := json.Marshal(input)
 	if err != nil {
 		return UploadSessionAccepted{}, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/upload-sessions", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/upload-sessions", bytes.NewReader(body))
 	if err != nil {
 		return UploadSessionAccepted{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	c.authorize(req)
-	resp, err := c.http.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return UploadSessionAccepted{}, err
 	}
@@ -196,12 +288,13 @@ func (c *Client) CreateUploadSession(ctx context.Context, input UploadSessionReq
 }
 
 func (c *Client) CompleteUploadSession(ctx context.Context, uploadSessionID string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/upload-sessions/"+uploadSessionID+"/complete", nil)
+	baseURL, _, _, _, _, client := c.snapshot()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/upload-sessions/"+uploadSessionID+"/complete", nil)
 	if err != nil {
 		return err
 	}
 	c.authorize(req)
-	resp, err := c.http.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -216,19 +309,102 @@ func (c *Client) CompleteUploadSession(ctx context.Context, uploadSessionID stri
 	return nil
 }
 
+func (c *Client) SyncKeywords(ctx context.Context) ([]StandardKeyword, error) {
+	baseURL, _, _, _, _, client := c.snapshot()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/keywords/sync", nil)
+	if err != nil {
+		return nil, err
+	}
+	c.authorize(req)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var envelope APIResponse[[]StandardKeyword]
+	if err := decodeJSON(resp.Body, &envelope); err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK || envelope.Code != 0 {
+		return nil, fmt.Errorf("sync keywords rejected: HTTP %d code=%d: %s", resp.StatusCode, envelope.Code, envelope.Message)
+	}
+	if envelope.Data == nil {
+		envelope.Data = []StandardKeyword{}
+	}
+	return envelope.Data, nil
+}
+
+func (c *Client) SyncCollectorConfig(ctx context.Context) (CollectorConfigSnapshot, error) {
+	baseURL, _, _, _, _, client := c.snapshot()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/collector/sync", nil)
+	if err != nil {
+		return CollectorConfigSnapshot{}, err
+	}
+	c.authorize(req)
+	resp, err := client.Do(req)
+	if err != nil {
+		return CollectorConfigSnapshot{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return CollectorConfigSnapshot{}, errors.New("当前后端不支持聚合配置同步")
+	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return CollectorConfigSnapshot{}, fmt.Errorf("同步鉴权失败（HTTP %d）", resp.StatusCode)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return CollectorConfigSnapshot{}, fmt.Errorf("聚合配置同步失败（HTTP %d）", resp.StatusCode)
+	}
+	// Some older Go services omit application/json even for JSON bodies. Reject
+	// known HTML error pages, then let strict JSON decoding validate the body.
+	if contentType := resp.Header.Get("Content-Type"); strings.Contains(strings.ToLower(contentType), "text/html") {
+		return CollectorConfigSnapshot{}, fmt.Errorf("聚合配置同步返回了非 JSON 内容（%s）", contentType)
+	}
+	var envelope APIResponse[CollectorConfigSnapshot]
+	if err := decodeJSON(resp.Body, &envelope); err != nil {
+		return CollectorConfigSnapshot{}, fmt.Errorf("聚合配置同步响应格式不正确: %w", err)
+	}
+	if envelope.Code != 0 {
+		return CollectorConfigSnapshot{}, fmt.Errorf("聚合配置同步被后端拒绝（%s）", envelope.Message)
+	}
+	return envelope.Data, nil
+}
+
+func (c *Client) QueryUploadSession(ctx context.Context, queryCode string) (PublicUploadSession, error) {
+	baseURL, _, _, _, _, client := c.snapshot()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/query/"+strings.TrimSpace(queryCode), nil)
+	if err != nil {
+		return PublicUploadSession{}, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return PublicUploadSession{}, err
+	}
+	defer resp.Body.Close()
+	var envelope APIResponse[PublicUploadSession]
+	if err := decodeJSON(resp.Body, &envelope); err != nil {
+		return PublicUploadSession{}, err
+	}
+	if resp.StatusCode != http.StatusOK || envelope.Code != 0 {
+		return PublicUploadSession{}, fmt.Errorf("query upload session rejected: HTTP %d code=%d: %s", resp.StatusCode, envelope.Code, envelope.Message)
+	}
+	return envelope.Data, nil
+}
+
 func (c *Client) Inspect(ctx context.Context, file spool.File) error {
+	baseURL, _, inspectPath, _, gzipEnabled, client := c.snapshot()
 	batch := spool.Batch{Files: []spool.File{file}}
-	reader, contentType, sent, _, writeDone := multipartBody(batch, false, c.gzip)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+c.inspectPath, reader)
+	reader, contentType, sent, _, writeDone := multipartBody(batch, false, gzipEnabled)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+inspectPath, reader)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", contentType)
-	if c.gzip {
+	if gzipEnabled {
 		req.Header.Set("Content-Encoding", "gzip")
 	}
 	c.authorize(req)
-	resp, err := c.http.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return transportFailure(err, sent.Load())
 	}
@@ -253,13 +429,14 @@ func (c *Client) Upload(ctx context.Context, batch spool.Batch) (UploadAccepted,
 type ProgressCallback func(sentBytes, totalBytes int64)
 
 func (c *Client) UploadWithProgress(ctx context.Context, batch spool.Batch, progress ProgressCallback) (UploadAccepted, error) {
+	baseURL, _, _, uploadPath, gzipEnabled, client := c.snapshot()
 	if strings.TrimSpace(batch.ClientRequestID) == "" {
 		batch.ClientRequestID = batch.ID
 	}
 	if err := validateUploadBatch(batch); err != nil {
 		return UploadAccepted{}, &Failure{Kind: Rejected, Message: err.Error(), Err: err}
 	}
-	reader, contentType, sent, fileSent, writeDone := multipartBody(batch, true, c.gzip)
+	reader, contentType, sent, fileSent, writeDone := multipartBody(batch, true, gzipEnabled)
 	var total int64
 	for _, file := range batch.Files {
 		total += file.SizeBytes
@@ -286,7 +463,7 @@ func (c *Client) UploadWithProgress(ctx context.Context, batch spool.Batch, prog
 			progress(fileSent.Load(), total)
 		}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+c.uploadPath, reader)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+uploadPath, reader)
 	if err != nil {
 		return UploadAccepted{}, err
 	}
@@ -294,11 +471,11 @@ func (c *Client) UploadWithProgress(ctx context.Context, batch spool.Batch, prog
 	if batch.ClientRequestID != "" {
 		req.Header.Set("Idempotency-Key", batch.ClientRequestID)
 	}
-	if c.gzip {
+	if gzipEnabled {
 		req.Header.Set("Content-Encoding", "gzip")
 	}
 	c.authorize(req)
-	resp, err := c.http.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		stopProgress()
 		return UploadAccepted{}, transportFailure(err, sent.Load())
@@ -342,8 +519,11 @@ func (c *Client) UploadWithProgress(ctx context.Context, batch spool.Batch, prog
 }
 
 func (c *Client) authorize(req *http.Request) {
-	if c.authorization != "" {
-		req.Header.Set("Authorization", "Bearer "+c.authorization)
+	c.mu.RLock()
+	authorization := c.authorization
+	c.mu.RUnlock()
+	if authorization != "" {
+		req.Header.Set("Authorization", "Bearer "+authorization)
 	}
 }
 
@@ -394,7 +574,7 @@ func multipartBody(batch spool.Batch, includeFields, gzipEnabled bool) (io.Reade
 				{"upload_session_id", batch.UploadSessionID}, {"query_code", batch.QueryCode},
 				{"project_id", platformProjectID(batch.ProjectID)}, {"project_name", batch.ProjectName}, {"version", batch.Version},
 				{"test_task_id", batch.TestTaskID}, {"test_task_name", batch.TestTaskName},
-				{"uploader_name", batch.UploaderName}, {"remark", batch.Remark},
+				{"uploader_name", batch.UploaderName}, {"uploader_email", batch.UploaderEmail}, {"remark", batch.Remark},
 				{"client_request_id", batch.ClientRequestID}, {"collector_version", batch.CollectorVersion}, {"timezone", batch.Timezone},
 				{"created_at", formatOptionalTime(batch.SourceCreatedAt)}, {"started_at", formatOptionalTime(batch.SourceStartedAt)}, {"ended_at", formatOptionalTime(batch.SourceEndedAt)},
 				{"config_snapshot", firstNonEmpty(batch.ConfigSnapshot, "{}")},
@@ -454,7 +634,7 @@ func platformProjectID(value string) string {
 }
 
 func validateUploadBatch(batch spool.Batch) error {
-	required := []struct{ name, value string }{{"project_name", batch.ProjectName}, {"version", batch.Version}, {"uploader_name", batch.UploaderName}}
+	required := []struct{ name, value string }{{"project_name", batch.ProjectName}, {"version", batch.Version}, {"uploader_email", batch.UploaderEmail}}
 	for _, field := range required {
 		if strings.TrimSpace(field.value) == "" {
 			return fmt.Errorf("%s is required", field.name)

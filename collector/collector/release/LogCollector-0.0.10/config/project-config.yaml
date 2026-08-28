@@ -1,0 +1,47 @@
+schema_version: 1
+
+# 一行一个项目。id 用于保存配置，发布后不要随意修改；name 是界面显示名称。
+projects:
+  - { id: dr0008, name: DR0008 }
+  - { id: dr1200, name: DR1200 }
+  - { id: dr1210, name: DR1210 }
+  - { id: dr1400, name: DR1400 }
+  - { id: dr1500, name: DR1500 }
+  - { id: dr1800, name: DR1800 }
+  - { id: dr1810, name: DR1810 }
+  - { id: dr2200, name: DR2200 }
+  - { id: dr2210, name: DR2210 }
+  - { id: dr2211, name: DR2211 }
+  - { id: dr2411, name: DR2411 }
+  - { id: dr2412, name: DR2412 }
+  - { id: dr2420, name: DR2420 }
+  - { id: dr2421, name: DR2421 }
+  - { id: dr2500, name: DR2500 }
+  - { id: dr2510, name: DR2510 }
+  - { id: dr2800, name: DR2800 }
+  - { id: dr2810, name: DR2810 }
+  - { id: dr2820, name: DR2820 }
+  - { id: dr2821, name: DR2821 }
+  - { id: dr2822, name: DR2822 }
+  - { id: dr2830, name: DR2830 }
+  - { id: dr2840, name: DR2840 }
+  - { id: dr2841, name: DR2841 }
+  - { id: dr2850, name: DR2850 }
+  - { id: dr2852, name: DR2852 }
+  - { id: dr2860, name: DR2860 }
+  - { id: dr2861, name: DR2861 }
+  - { id: dr2863, name: DR2863 }
+  - { id: dr2882, name: DR2882 }
+  - { id: dr3400, name: DR3400 }
+  - { id: dr3500, name: DR3500 }
+  - { id: dr4800, name: DR4800 }
+  - { id: dr5400, name: DR5400 }
+  - { id: dr5401, name: DR5401 }
+  - { id: dr5800, name: DR5800 }
+  - { id: dr6500, name: DR6500 }
+  - { id: dr7800, name: DR7800 }
+  - { id: pp0801, name: PP0801 }
+  - { id: up04, name: UP04 }
+  - { id: up05, name: UP05 }
+  - { id: up11, name: UP11 }
+  - { id: up12, name: UP12 }

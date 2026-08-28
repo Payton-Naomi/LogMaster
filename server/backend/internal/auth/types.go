@@ -9,6 +9,8 @@ type UserInfo struct {
 	Role         string `json:"role"`
 	RoleSource   string `json:"role_source"`
 	JobTitle     string `json:"job_title"`
+	IdentityType string `json:"identity_type"`
+	Company      string `json:"company"`
 }
 
 type feishuTokenResponse struct {

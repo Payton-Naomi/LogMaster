@@ -19,6 +19,7 @@ type adminUser struct {
 	Email        string    `json:"email"`
 	Role         string    `json:"role"`
 	RoleSource   string    `json:"role_source"`
+	IdentityType string    `json:"identity_type"`
 	JobTitle     string    `json:"job_title"`
 	IsCurrent    bool      `json:"is_current"`
 	CreatedAt    time.Time `json:"created_at"`
@@ -38,7 +39,7 @@ func (s *Service) usersHandler(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	rows, err := s.db.QueryContext(r.Context(), `SELECT id, feishu_open_id, name, email, role, role_source, job_title,
+	rows, err := s.db.QueryContext(r.Context(), `SELECT id, feishu_open_id, name, email, role, role_source, identity_type, job_title,
 		feishu_open_id = $1, created_at, updated_at
 		FROM logmaster_api.users
 		ORDER BY CASE role WHEN 'super_admin' THEN 1 WHEN 'admin' THEN 2 WHEN 'developer' THEN 3 ELSE 4 END,
@@ -51,7 +52,7 @@ func (s *Service) usersHandler(w http.ResponseWriter, r *http.Request) {
 	users := make([]adminUser, 0)
 	for rows.Next() {
 		var user adminUser
-		if err := rows.Scan(&user.ID, &user.FeishuOpenID, &user.Name, &user.Email, &user.Role, &user.RoleSource, &user.JobTitle,
+		if err := rows.Scan(&user.ID, &user.FeishuOpenID, &user.Name, &user.Email, &user.Role, &user.RoleSource, &user.IdentityType, &user.JobTitle,
 			&user.IsCurrent, &user.CreatedAt, &user.UpdatedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "query users failed")
 			return
@@ -128,16 +129,9 @@ func (s *Service) restoreUserRoleHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var user adminUser
-	err = s.db.QueryRowContext(r.Context(), `UPDATE logmaster_api.users
-		SET role = 'user', role_source = 'feishu', updated_at = NOW()
-		WHERE id = $1
-		RETURNING id, feishu_open_id, name, email, role, role_source, job_title, created_at, updated_at`, userID).
-		Scan(&user.ID, &user.FeishuOpenID, &user.Name, &user.Email, &user.Role, &user.RoleSource, &user.JobTitle, &user.CreatedAt, &user.UpdatedAt)
-	role := s.automaticRole(user.FeishuOpenID, user.JobTitle)
-	if err := s.db.QueryRowContext(r.Context(), `UPDATE logmaster_api.users SET role = $2, updated_at = NOW() WHERE id = $1 RETURNING role, updated_at`, user.ID, role).Scan(&user.Role, &user.UpdatedAt); err != nil {
-		writeError(w, http.StatusInternalServerError, "restore user role failed")
-		return
-	}
+	err = s.db.QueryRowContext(r.Context(), `SELECT id, feishu_open_id, name, email, role, role_source, identity_type, job_title, created_at, updated_at
+		FROM logmaster_api.users WHERE id = $1`, userID).Scan(
+		&user.ID, &user.FeishuOpenID, &user.Name, &user.Email, &user.Role, &user.RoleSource, &user.IdentityType, &user.JobTitle, &user.CreatedAt, &user.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -146,8 +140,32 @@ func (s *Service) restoreUserRoleHandler(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "restore user role failed")
 		return
 	}
+	oldRole := user.Role
+	role, roleSource := roleUser, "external"
+	if user.IdentityType != "external" {
+		role = s.automaticRole(user.FeishuOpenID, user.JobTitle)
+		roleSource = "feishu"
+	}
+	if user.Role == roleSuperAdmin && role != roleSuperAdmin {
+		var superAdminCount int
+		if err := s.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM logmaster_api.users WHERE role = $1`, roleSuperAdmin).Scan(&superAdminCount); err != nil {
+			writeError(w, http.StatusInternalServerError, "restore user role failed")
+			return
+		}
+		if superAdminCount <= 1 {
+			writeError(w, http.StatusConflict, "系统至少需要保留一名超级管理员")
+			return
+		}
+	}
+	if err := s.db.QueryRowContext(r.Context(), `UPDATE logmaster_api.users
+		SET role = $2, role_source = $3, updated_at = NOW()
+		WHERE id = $1 RETURNING role, role_source, updated_at`, user.ID, role, roleSource).
+		Scan(&user.Role, &user.RoleSource, &user.UpdatedAt); err != nil {
+		writeError(w, http.StatusInternalServerError, "restore user role failed")
+		return
+	}
 	if _, err := s.db.ExecContext(r.Context(), `INSERT INTO logmaster_api.user_role_audit_logs
-		(target_user_id, target_open_id, old_role, new_role, changed_by_open_id) VALUES ($1, $2, 'manual', $3, $4)`, user.ID, user.FeishuOpenID, user.Role, changedBy); err != nil {
+		(target_user_id, target_open_id, old_role, new_role, changed_by_open_id) VALUES ($1, $2, $3, $4, $5)`, user.ID, user.FeishuOpenID, oldRole, user.Role, changedBy); err != nil {
 		writeError(w, http.StatusInternalServerError, "record role audit failed")
 		return
 	}
@@ -163,9 +181,9 @@ func (s *Service) updateUserRole(r *http.Request, userID int64, newRole, changed
 	}
 	defer tx.Rollback()
 	var user adminUser
-	err = tx.QueryRowContext(r.Context(), `SELECT id, feishu_open_id, name, email, role, role_source, job_title, created_at, updated_at
+	err = tx.QueryRowContext(r.Context(), `SELECT id, feishu_open_id, name, email, role, role_source, identity_type, job_title, created_at, updated_at
 		FROM logmaster_api.users WHERE id = $1 FOR UPDATE`, userID).Scan(
-		&user.ID, &user.FeishuOpenID, &user.Name, &user.Email, &user.Role, &user.RoleSource, &user.JobTitle, &user.CreatedAt, &user.UpdatedAt)
+		&user.ID, &user.FeishuOpenID, &user.Name, &user.Email, &user.Role, &user.RoleSource, &user.IdentityType, &user.JobTitle, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		return adminUser{}, err
 	}

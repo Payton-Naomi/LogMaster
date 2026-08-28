@@ -23,14 +23,26 @@ func (line DecodedLine) Bytes() []byte {
 type Decoder struct {
 	encoding     Encoding
 	pending      []byte
+	maxPending   int
 	skipLF       bool
 	invalidBytes uint64
 }
 
 func NewDecoder(encoding Encoding) (*Decoder, error) {
+	return NewDecoderWithLimit(encoding, 1<<20)
+}
+
+// NewDecoderWithLimit creates a decoder with a hard upper bound for a record
+// that never emits CR/LF. Reaching the limit flushes the current bytes as a
+// truncated record, preventing an unplugged or malformed device from growing
+// the process indefinitely.
+func NewDecoderWithLimit(encoding Encoding, maxPending int) (*Decoder, error) {
 	switch encoding {
 	case EncodingUTF8, EncodingGB18030, EncodingASCII:
-		return &Decoder{encoding: encoding}, nil
+		if maxPending < 1 {
+			return nil, fmt.Errorf("decoder max pending bytes must be positive")
+		}
+		return &Decoder{encoding: encoding, maxPending: maxPending}, nil
 	default:
 		return nil, fmt.Errorf("unsupported serial encoding %q", encoding)
 	}
@@ -53,6 +65,9 @@ func (d *Decoder) Push(frame []byte, capturedAt time.Time) []DecodedLine {
 			lines = append(lines, d.emit(capturedAt))
 		default:
 			d.pending = append(d.pending, current)
+			if d.maxPending > 0 && len(d.pending) >= d.maxPending {
+				lines = append(lines, d.emit(capturedAt))
+			}
 		}
 	}
 	return lines

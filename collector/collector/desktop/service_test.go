@@ -5,11 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"logmaster-agent/agent/internal/backend"
 	"logmaster-agent/agent/internal/spool"
 )
 
@@ -21,6 +24,43 @@ func TestDesktopDefaultsDoNotInventCOMPorts(t *testing.T) {
 	defer service.shutdown()
 	if len(service.configs) != 0 {
 		t.Fatalf("desktop created fixed channels: %+v", service.configs)
+	}
+}
+
+func TestCheckUncertainMatchesStableClientRequestID(t *testing.T) {
+	service, err := newServiceAt(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.shutdown()
+	path := filepath.Join(t.TempDir(), "DUT-02.log")
+	content := []byte("line\n")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(content)
+	id, err := service.store.EnqueueFileWithMetadata(context.Background(), spool.UploadMetadata{ProjectName: "p", Version: "v", QueryCode: "Q123"}, spool.File{Path: path, SHA256: hex.EncodeToString(digest[:]), SizeBytes: int64(len(content)), DeviceSN: "DUT-02", FirstSequence: 1, LastSequence: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := service.store.ClaimReady(context.Background(), 1)
+	if err != nil || batch == nil {
+		t.Fatalf("claim=%+v err=%v", batch, err)
+	}
+	if err := service.store.MarkUncertain(context.Background(), id, "response lost"); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"code": 0, "data": map[string]any{"query_code": "Q123", "status": "completed", "batches": []map[string]any{{"upload_id": "upload-2", "task_id": "task-2", "client_request_id": batch.ClientRequestID, "status": "completed"}}}})
+	}))
+	defer server.Close()
+	service.backendClient = backend.New(backend.Config{BaseURL: server.URL, Timeout: time.Second})
+	checked, err := service.CheckUncertain(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !checked.Matched || checked.UploadID != "upload-2" || checked.TaskID != "task-2" {
+		t.Fatalf("unexpected check: %+v", checked)
 	}
 }
 
@@ -43,7 +83,7 @@ func TestNormalizeDeviceConfigMigratesLegacyChannelName(t *testing.T) {
 	}
 }
 
-func TestDesktopIgnoresLegacyChannelHistory(t *testing.T) {
+func TestDesktopMigratesLegacyChannelToSerialOnly(t *testing.T) {
 	root := t.TempDir()
 	settings := desktopSettings{Devices: []DeviceConfigDTO{
 		{DeviceID: "COM24", Name: "旧设备", PortName: "COM24", UploadEnabled: true, ProjectName: "旧项目", UploaderName: "旧上传人"},
@@ -62,21 +102,25 @@ func TestDesktopIgnoresLegacyChannelHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer service.shutdown()
-	if len(service.configs) != 0 {
-		t.Fatalf("legacy channel history was restored: %+v", service.configs)
+	if len(service.configs) != 1 {
+		t.Fatalf("legacy serial settings were not retained: %+v", service.configs)
 	}
-	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("legacy desktop-config.json was not removed: %v", err)
+	channel := service.configs["COM24"]
+	if channel.UploadEnabled || channel.ProjectName != "" || channel.UploaderName != "" {
+		t.Fatalf("legacy upload identity must be stripped without USB serial: %+v", channel)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("migrated desktop-config.json should remain available: %v", err)
 	}
 }
 
-func TestDesktopSettingsDoNotPersistAcrossRestart(t *testing.T) {
+func TestDesktopSerialSettingsPersistWithoutCloudIdentity(t *testing.T) {
 	root := t.TempDir()
 	service, err := newServiceAt(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	dto := normalizeDeviceConfig(DeviceConfigDTO{Name: "主设备", PortName: "COM88", UploaderName: "张三", Remark: "高温回归", UploadEnabled: true})
+	dto := normalizeDeviceConfig(DeviceConfigDTO{Name: "主设备", PortName: "COM88", BaudRate: 921600, UploaderName: "张三", UploaderEmail: "zhangsan@company.com", Remark: "高温回归", UploadEnabled: true})
 	service.mu.Lock()
 	service.configs[dto.DeviceID] = dto
 	service.mu.Unlock()
@@ -90,8 +134,25 @@ func TestDesktopSettingsDoNotPersistAcrossRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer restarted.shutdown()
-	if len(restarted.configs) != 0 {
-		t.Fatalf("channel configuration should not persist across restart: %+v", restarted.configs)
+	if len(restarted.configs) != 1 || restarted.configs["COM88"].BaudRate != 921600 {
+		t.Fatalf("serial configuration should persist across restart: %+v", restarted.configs)
+	}
+	if restarted.configs["COM88"].UploadEnabled || restarted.configs["COM88"].UploaderEmail != "" || restarted.configs["COM88"].Remark != "" {
+		t.Fatalf("cloud identity must not persist without USB serial: %+v", restarted.configs["COM88"])
+	}
+}
+
+func TestDesktopRestoresBusinessConfigWhenHardwareIdentityMatches(t *testing.T) {
+	service, err := newServiceAt(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.shutdown()
+	saved := normalizeDeviceConfig(DeviceConfigDTO{DeviceID: "COM24", Name: "串口 COM24", PortName: "COM24", BaudRate: 921600, Configured: true, ProjectID: "project-1", ProjectName: "项目一", Version: "1.0", TestTaskID: "task-1", TestTaskName: "任务一", UploaderEmail: "user@example.com", Remark: "回归", VID: "1A86", PID: "7523", Location: "USB-LOCATION"})
+	service.configs[saved.DeviceID] = saved
+	restored := service.configForPortLocked(PortInfo{Name: "COM24", VID: "1A86", PID: "7523", Location: "USB-LOCATION"}, 0)
+	if restored.ProjectName != saved.ProjectName || restored.TestTaskName != saved.TestTaskName || restored.UploaderEmail != saved.UploaderEmail || restored.Remark != saved.Remark {
+		t.Fatalf("matching hardware should restore business configuration: %+v", restored)
 	}
 }
 
